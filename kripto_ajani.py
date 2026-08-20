@@ -262,12 +262,16 @@ def piyasayi_tara_ve_takip_et():
 if __name__ == "__main__":
     print("🚀 Komisyonlu Kripto Ajanı başlatılıyor...")
     
-    # 1. Web Sunucusunu ayrı işçi olarak başlat (Bloke etmemesi için)
-    t_web = threading.Thread(target=run_web, daemon=True)
+    # 1. Web Sunucusunu ayrı bir thread olarak başlat (Flask burada çalışacak)
+    def web_sunucusunu_baslat():
+        port = int(os.environ.get("PORT", 5000))
+        app.run(host='0.0.0.0', port=port)
+        
+    t_web = threading.Thread(target=web_sunucusunu_baslat, daemon=True)
     t_web.start()
     print("🌐 Web sunucusu işçisi başlatıldı.")
     
-    # 2. Telegram Komut Dinleyicisini ayrı işçi olarak başlat
+    # 2. Telegram Komut Dinleyicisini başlat
     t_komut = threading.Thread(target=telegram_komutlari_dinle, daemon=True)
     t_komut.start()
     print("📥 Telegram dinleyici işçisi başlatıldı.")
@@ -275,7 +279,8 @@ if __name__ == "__main__":
     # 3. Botun açılış mesajını gönder
     telegram_mesaj_gonder("🟢 Komisyon Kesintili Kripto Ajanı Devrede ve Taramaya Başladı!")
     
-    # 4. Piyasa Tarama Döngüsünü ana akışta başlat
+    # 4. Piyasa Tarama Döngüsünü ana akışta başlat (Burası ana thread olduğu için burayı bloklamalı)
     print("📊 Piyasa tarayıcı işçisi başlatılıyor...")
     piyasayi_tara_ve_takip_et()
+    
                     
