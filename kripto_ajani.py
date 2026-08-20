@@ -72,7 +72,7 @@ def telegram_mesaj_gonder(mesaj):
 def telegram_komutlari_dinle():
     global KASA
     son_guncelleme_id = 0
-    print("🤖 Telegram komut dinleyicisi aktif ve dinliyor...") # Bunu ekledik
+    print("🤖 Telegram komut dinleyicisi aktif ve dinliyor...")
     while True:
         try:
             if not TELEGRAM_TOKEN:
@@ -83,14 +83,13 @@ def telegram_komutlari_dinle():
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={son_guncelleme_id + 1}&timeout=20"
             response = requests.get(url, timeout=25).json()
             
-            # API'den gelen yanıtı görmek için ekledik
             if "ok" in response and response["ok"] == False:
                 print(f"❌ Telegram API Hatası: {response}")
 
             if "result" in response:
                 for veri in response["result"]:
                     son_guncelleme_id = veri["update_id"]
-                    print(f"📩 Telegram'dan mesaj yakalandı: {veri}") # Mesaj gelirse bu yazacak
+                    print(f"📩 Telegram'dan mesaj yakalandı: {veri}")
                     
                     if "message" in veri and "text" in veri["message"]:
                         mesaj_metni = veri["message"]["text"].strip()
@@ -264,11 +263,7 @@ if __name__ == "__main__":
     print("🚀 Komisyonlu Kripto Ajanı başlatılıyor...")
     
     # 1. Web Sunucusunu ayrı işçi olarak başlat (Bloke etmemesi için)
-    def web_sunucusunu_baslat():
-        port = int(os.environ.get("PORT", 5000))
-        app.run(host='0.0.0.0', port=port)
-        
-    t_web = threading.Thread(target=web_sunucusunu_baslat, daemon=True)
+    t_web = threading.Thread(target=run_web, daemon=True)
     t_web.start()
     print("🌐 Web sunucusu işçisi başlatıldı.")
     
@@ -283,5 +278,4 @@ if __name__ == "__main__":
     # 4. Piyasa Tarama Döngüsünü ana akışta başlat
     print("📊 Piyasa tarayıcı işçisi başlatılıyor...")
     piyasayi_tara_ve_takip_et()
-    
-    
+                    
