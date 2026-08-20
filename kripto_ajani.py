@@ -67,7 +67,7 @@ def telegram_mesaj_gonder(mesaj):
         print(f"Telegram Gönderme Hatası: {e}")
 
 # ==========================================
-# 📥 TELEGRAM KOMUTLARI DİNLEYİCİSİ
+# 📥 TELEGRAM KOMUTLARI DİNLEYİCİSİ (İŞÇİ 1)
 # ==========================================
 def telegram_komutlari_dinle():
     global KASA
@@ -78,8 +78,8 @@ def telegram_komutlari_dinle():
                 time.sleep(5)
                 continue
                 
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={son_guncelleme_id + 1}&timeout=30"
-            response = requests.get(url, timeout=35).json()
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={son_guncelleme_id + 1}&timeout=20"
+            response = requests.get(url, timeout=25).json()
             
             if "result" in response:
                 for veri in response["result"]:
@@ -117,7 +117,7 @@ def telegram_komutlari_dinle():
         time.sleep(2)
 
 # ==========================================
-# 🧠 PİYASA TARAMA VE KOMİSYONLU HESAPLAMA
+# 🧠 PİYASA TARAMA VE KOMİSYONLU HESAPLAMA (İŞÇİ 2)
 # ==========================================
 def piyasayi_tara_ve_takip_et():
     global KASA
@@ -170,46 +170,38 @@ def piyasayi_tara_ve_takip_et():
                     kapatilacak_mi = False
                     brut_kar_zarar = 0.0
                     durum_notu = ""
-                    sonuc_tipi = ""
 
                     if poz['yon'] == "LONG":
                         if guncel_fiyat >= poz['tp']:
                             brut_kar_zarar = islem_boyutu * HEDEF_YUZDESI * KALDIRAC
                             durum_notu = "🎯 HEDEFE ULAŞILDI (TP)"
-                            sonuc_tipi = "BASARILI"
                             kapatilacak_mi = True
                         elif guncel_fiyat <= poz['sl']:
                             brut_kar_zarar = - (islem_boyutu * STOP_YUZDESI * KALDIRAC)
                             durum_notu = "🛑 STOP OLDU (SL)"
-                            sonuc_tipi = "ZARARLI"
                             kapatilacak_mi = True
                         elif ana_trend == "SHORT":
                             fark_yuzdesi = (guncel_fiyat - poz['giris']) / poz['giris']
                             brut_kar_zarar = islem_boyutu * fark_yuzdesi * KALDIRAC
                             durum_notu = "⚠️ RÜZGAR DÖNDÜ"
-                            sonuc_tipi = "TREND_DONUS"
                             kapatilacak_mi = True
 
                     elif poz['yon'] == "SHORT":
                         if guncel_fiyat <= poz['tp']:
                             brut_kar_zarar = islem_boyutu * HEDEF_YUZDESI * KALDIRAC
                             durum_notu = "🎯 HEDEFE ULAŞILDI (TP)"
-                            sonuc_tipi = "BASARILI"
                             kapatilacak_mi = True
                         elif guncel_fiyat >= poz['sl']:
                             brut_kar_zarar = - (islem_boyutu * STOP_YUZDESI * KALDIRAC)
                             durum_notu = "🛑 STOP OLDU (SL)"
-                            sonuc_tipi = "ZARARLI"
                             kapatilacak_mi = True
                         elif ana_trend == "LONG":
                             fark_yuzdesi = (poz['giris'] - guncel_fiyat) / poz['giris']
                             brut_kar_zarar = islem_boyutu * fark_yuzdesi * KALDIRAC
                             durum_notu = "⚠️ RÜZGAR DÖNDÜ"
-                            sonuc_tipi = "TREND_DONUS"
                             kapatilacak_mi = True
 
                     if kapatilacak_mi:
-                        # 💸 KOMİSYON HESABI (Toplam pozisyon büyüklüğü üzerinden giriş + çıkış komisyonu)
                         islem_komisyonu = toplam_pozisyon_degeri * KOMISYON_ORANI
                         net_kar_zarar = brut_kar_zarar - islem_komisyonu
                         
@@ -262,25 +254,17 @@ def piyasayi_tara_ve_takip_et():
 if __name__ == "__main__":
     print("🚀 Komisyonlu Kripto Ajanı başlatılıyor...")
     
-    # 1. Web sunucusunu diğer botun gibi ayrı bir thread olarak başlat
+    # 1. Web Sunucusunu ayrı işçi olarak başlat
     t_web = threading.Thread(target=run_web, daemon=True)
     t_web.start()
     
-    # 2. Çalışan borsa botunun test edilmiş ana döngü mimarisi
+    # 2. Telegram Komut Dinleyicisini ayrı işçi olarak başlat (Artık asla kilitlenmeyecek)
+    t_komut = threading.Thread(target=telegram_komutlari_dinle, daemon=True)
+    t_komut.start()
+    
+    # 3. Botun açılış mesajını gönder
     telegram_mesaj_gonder("🟢 Komisyon Kesintili Kripto Ajanı Devrede ve Taramaya Başladı!")
     
-    while True:
-        try:
-            # Telegram komutlarını güvenli şekilde dinle (Çalışan botun aynısı)
-            telegram_komutlari_dinle()
-            
-            # Piyasaları tara ve işlemleri yönet
-            # (Burada kendi piyasa tarama fonksiyonunu çağırıyoruz)
-            piyasayi_tara_ve_takip_et_adim() # Veya mevcut döngü adımın
-            
-        except Exception as e:
-            print(f"❌ Ana döngü hatası: {e}")
-            time.sleep(10)
-        
-        time.sleep(2)
-        
+    # 4. Piyasa Tarama Döngüsünü ana akışta başlat
+    piyasayi_tara_ve_takip_et()
+    
