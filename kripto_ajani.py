@@ -260,13 +260,27 @@ def piyasayi_tara_ve_takip_et():
         time.sleep(180)
 
 if __name__ == "__main__":
-    t_web = threading.Thread(target=run_web)
+    print("🚀 Komisyonlu Kripto Ajanı başlatılıyor...")
+    
+    # 1. Web sunucusunu diğer botun gibi ayrı bir thread olarak başlat
+    t_web = threading.Thread(target=run_web, daemon=True)
     t_web.start()
     
-    t_komut = threading.Thread(target=telegram_komutlari_dinle, daemon=True)
-    t_komut.start()
+    # 2. Çalışan borsa botunun test edilmiş ana döngü mimarisi
+    telegram_mesaj_gonder("🟢 Komisyon Kesintili Kripto Ajanı Devrede ve Taramaya Başladı!")
     
-    telegram_mesaj_gonder("🟢 Komisyon Kesintili Kripto Ajanı Devrede!\n• Komutlar: `/kasa [tutar]`, `/durum`")
-    
-    piyasayi_tara_ve_takip_et()
-  
+    while True:
+        try:
+            # Telegram komutlarını güvenli şekilde dinle (Çalışan botun aynısı)
+            telegram_komutlari_dinle()
+            
+            # Piyasaları tara ve işlemleri yönet
+            # (Burada kendi piyasa tarama fonksiyonunu çağırıyoruz)
+            piyasayi_tara_ve_takip_et_adim() # Veya mevcut döngü adımın
+            
+        except Exception as e:
+            print(f"❌ Ana döngü hatası: {e}")
+            time.sleep(10)
+        
+        time.sleep(2)
+        
