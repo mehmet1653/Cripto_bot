@@ -72,18 +72,26 @@ def telegram_mesaj_gonder(mesaj):
 def telegram_komutlari_dinle():
     global KASA
     son_guncelleme_id = 0
+    print("🤖 Telegram komut dinleyicisi aktif ve dinliyor...") # Bunu ekledik
     while True:
         try:
             if not TELEGRAM_TOKEN:
+                print("⚠️ TELEGRAM_TOKEN bulunamadı!")
                 time.sleep(5)
                 continue
                 
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={son_guncelleme_id + 1}&timeout=20"
             response = requests.get(url, timeout=25).json()
             
+            # API'den gelen yanıtı görmek için ekledik
+            if "ok" in response and response["ok"] == False:
+                print(f"❌ Telegram API Hatası: {response}")
+
             if "result" in response:
                 for veri in response["result"]:
                     son_guncelleme_id = veri["update_id"]
+                    print(f"📩 Telegram'dan mesaj yakalandı: {veri}") # Mesaj gelirse bu yazacak
+                    
                     if "message" in veri and "text" in veri["message"]:
                         mesaj_metni = veri["message"]["text"].strip()
                         
@@ -113,8 +121,9 @@ def telegram_komutlari_dinle():
                             )
                             telegram_mesaj_gonder(durum_mesaj)
         except Exception as e:
-            print(f"Komut dinleme hatası: {e}")
+            print(f"❌ Komut dinleme hatası (Exception): {e}")
         time.sleep(2)
+        
 
 # ==========================================
 # 🧠 PİYASA TARAMA VE KOMİSYONLU HESAPLAMA (İŞÇİ 2)
