@@ -72,24 +72,18 @@ def telegram_mesaj_gonder(mesaj):
 def telegram_komutlari_dinle():
     global KASA
     son_guncelleme_id = 0
-    print("🤖 Telegram komut dinleyicisi aktif ve dinliyor...")
     while True:
         try:
             if not TELEGRAM_TOKEN:
-                print("⚠️ TELEGRAM_TOKEN bulunamadı!")
                 time.sleep(5)
                 continue
                 
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={son_guncelleme_id + 1}&timeout=20"
             response = requests.get(url, timeout=25).json()
-            
-            if "ok" in response and response["ok"] == False:
-                print(f"❌ Telegram API Hatası: {response}")
 
             if "result" in response:
                 for veri in response["result"]:
                     son_guncelleme_id = veri["update_id"]
-                    print(f"📩 Telegram'dan mesaj yakalandı: {veri}")
                     
                     if "message" in veri and "text" in veri["message"]:
                         mesaj_metni = veri["message"]["text"].strip()
@@ -120,9 +114,8 @@ def telegram_komutlari_dinle():
                             )
                             telegram_mesaj_gonder(durum_mesaj)
         except Exception as e:
-            print(f"❌ Komut dinleme hatası (Exception): {e}")
+            pass
         time.sleep(2)
-        
 
 # ==========================================
 # 🧠 PİYASA TARAMA VE KOMİSYONLU HESAPLAMA (İŞÇİ 2)
@@ -153,8 +146,6 @@ def piyasayi_tara_ve_takip_et():
         else:
             gunsonu_raporu_gonderildi = False
 
-        print(f"[{simdiki_zaman.strftime('%H:%M:%S')}] 🔍 Piyasalar ve Komisyonlar Taranıyor...")
-        
         for symbol in TAKIP_EDILENLER:
             try:
                 ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=50)
@@ -236,24 +227,24 @@ def piyasayi_tara_ve_takip_et():
                         del ACIK_POZISYONLAR[symbol]
                     continue
 
-                # YENİ SİNYAL ÜRETİMİ
+                # YENİ SİNYAL ÜRETİMİ (RSI Aralıkları Genişletildi: LONG < 45, SHORT > 55)
                 if len(ACIK_POZISYONLAR) < 4:
                     islem_butcesi = KASA["guncel"] * RISK_ORANI
                     
-                    if ana_trend == "LONG" and 30 < rsi_15m < 40:
+                    if ana_trend == "LONG" and rsi_15m < 45:
                         tp = guncel_fiyat * (1 + HEDEF_YUZDESI)
                         sl = guncel_fiyat * (1 - STOP_YUZDESI)
                         ACIK_POZISYONLAR[symbol] = {"yon": "LONG", "giris": guncel_fiyat, "tp": tp, "sl": sl, "boyut": islem_butcesi, "giris_rsi": rsi_15m}
-                        telegram_mesaj_gonder(f"🚀 *YENİ LONG SİNYALİ*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)")
+                        telegram_mesaj_gonder(f"🚀 *YENİ LONG SİNYALİ*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• RSI: `{rsi_15m:.1f}`")
                     
-                    elif ana_trend == "SHORT" and 60 < rsi_15m < 70:
+                    elif ana_trend == "SHORT" and rsi_15m > 55:
                         tp = guncel_fiyat * (1 - HEDEF_YUZDESI)
                         sl = guncel_fiyat * (1 + STOP_YUZDESI)
                         ACIK_POZISYONLAR[symbol] = {"yon": "SHORT", "giris": guncel_fiyat, "tp": tp, "sl": sl, "boyut": islem_butcesi, "giris_rsi": rsi_15m}
-                        telegram_mesaj_gonder(f"🩸 *YENİ SHORT SİNYALİ*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)")
+                        telegram_mesaj_gonder(f"🩸 *YENİ SHORT SİNYALİ*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• RSI: `{rsi_15m:.1f}`")
 
             except Exception as e:
-                print(f"Hata ({symbol}): {e}")
+                pass
             
             time.sleep(2)
             
@@ -262,25 +253,17 @@ def piyasayi_tara_ve_takip_et():
 if __name__ == "__main__":
     print("🚀 Komisyonlu Kripto Ajanı başlatılıyor...")
     
-    # 1. Web Sunucusunu ayrı bir thread olarak başlat (Flask burada çalışacak)
     def web_sunucusunu_baslat():
         port = int(os.environ.get("PORT", 5000))
         app.run(host='0.0.0.0', port=port)
         
     t_web = threading.Thread(target=web_sunucusunu_baslat, daemon=True)
     t_web.start()
-    print("🌐 Web sunucusu işçisi başlatıldı.")
     
-    # 2. Telegram Komut Dinleyicisini başlat
     t_komut = threading.Thread(target=telegram_komutlari_dinle, daemon=True)
     t_komut.start()
-    print("📥 Telegram dinleyici işçisi başlatıldı.")
     
-    # 3. Botun açılış mesajını gönder
-    telegram_mesaj_gonder("🟢 Komisyon Kesintili Kripto Ajanı Devrede ve Taramaya Başladı!")
+    telegram_mesaj_gonder("🟢 Komisyon Kesintili Kripto Ajanı Devrede ve Genişletilmiş Filtrelerle Taramaya Başladı!")
     
-    # 4. Piyasa Tarama Döngüsünü ana akışta başlat (Burası ana thread olduğu için burayı bloklamalı)
-    print("📊 Piyasa tarayıcı işçisi başlatılıyor...")
     piyasayi_tara_ve_takip_et()
     
-                    
