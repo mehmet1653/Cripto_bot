@@ -13,7 +13,7 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Binance yerine Gate.io entegrasyonu (Render IP kısıtlamalarına takılmaz)
+# Gate.io entegrasyonu
 exchange = ccxt.gate({
     'enableRateLimit': True,
     'options': {'defaultType': 'spot'}
@@ -48,7 +48,7 @@ def telegram_mesaj_gonder(mesaj):
     payload = {"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}
     try:
         requests.post(url, json=payload, timeout=10)
-    except Exception as.e:
+    except Exception as e:
         print(f"Telegram Gönderme Hatası: {e}")
 
 # ==========================================
