@@ -56,7 +56,7 @@ def telegram_mesaj_gonder(mesaj):
 # ==========================================
 @app.route('/')
 def home():
-    return "🟢 Pozisyon Takip Özellikli Gate.io Kripto Ajanı Aktif!"
+    return "🟢 Esnetilmiş Hedefli Gate.io Kripto Ajanı Aktif!"
 
 @app.route('/tara')
 def disaridan_tarama_tetikle():
@@ -101,6 +101,7 @@ def disaridan_tarama_tetikle_internal():
                 durum_notu = ""
 
                 if poz['yon'] == "LONG":
+                    # Esnetilmiş kontrol: Hedefe ulaşıldıysa veya geçtiyse ya da stoplandıysa
                     if guncel_fiyat >= poz['tp']:
                         brut_kar_zarar = marjin * HEDEF_YUZDESI * KALDIRAC
                         durum_notu = "🎯 HEDEFE ULAŞILDI (TP)"
@@ -220,7 +221,7 @@ def telegram_komutlari_dinle():
                                 f"📊 *ANLIK İZOLE MARJİN RAPORU*\n"
                                 f"• Cüzdan Nakit Kasa: `{KASA['guncel']:.2f} USD`\n"
                                 f"• Açık Pozisyon: `{len(ACIK_POZISYONLAR)}`\n"
-                                f"• Ödenen Komisyon: `{KASA['toplam_ odenen_komisyon']:.2f} USD`\n"
+                                f"• Ödenen Komisyon: `{KASA['toplaşm_ odenen_komisyon'] if 'toplaşm_ odenen_komisyon' in KASA else KASA['toplam_ odenen_komisyon']:.2f} USD`\n"
                                 f"• Günlük Net K/Z: `{KASA['gunluk_kar_zarar']:+.2f} USD`\n\n"
                                 f"🧠 *Son Öğrenilenler:*\n{dersler_str}"
                             )
@@ -233,7 +234,6 @@ def telegram_komutlari_dinle():
                                 poz_mesaji = "📈 *ANLIK AÇIK POZİSYONLAR TAKİBİ*\n\n"
                                 for sym, poz in ACIK_POZISYONLAR.items():
                                     try:
-                                        # Anlık fiyatı borsadan çekelim
                                         ticker = exchange.fetch_ticker(sym)
                                         anlik_fiyat = ticker['last']
                                         
@@ -267,7 +267,7 @@ def telegram_komutlari_dinle():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print("🚀 Pozisyon Takip Özellikli Kripto Ajanı Başlatılıyor...")
+    print("🚀 Esnetilmiş Kripto Ajanı Başlatılıyor...")
     
     t_komut = threading.Thread(target=telegram_komutlari_dinle, daemon=True)
     t_komut.start()
@@ -275,7 +275,7 @@ if __name__ == "__main__":
     t_tarama = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
     t_tarama.start()
     
-    telegram_mesaj_gonder("🟢 Bot Aktif! Artık Telegram'dan `/pozisyonlar` yazarak açık işlemlerin anlık kâr/zarar durumunu görebilirsin.")
+    telegram_mesaj_gonder("🟢 Bot Güncellendi! Hedef fiyatlarda takılma olmaksızın otomatik kapanma hassasiyeti artırıldı.")
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
