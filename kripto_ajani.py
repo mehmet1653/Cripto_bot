@@ -113,8 +113,8 @@ def telegram_komutlari_dinle():
                                 f"🧠 *Son Öğrenilenler:*\n{dersler_str}"
                             )
                             telegram_mesaj_gonder(durum_mesaj)
-        except Exception as e:
-            pass
+                except Exception as e:
+            print(f"❌ TELEGRAM DİNLEME HATASI: {e}")
         time.sleep(2)
 
 # ==========================================
@@ -243,8 +243,9 @@ def piyasayi_tara_ve_takip_et():
                         ACIK_POZISYONLAR[symbol] = {"yon": "SHORT", "giris": guncel_fiyat, "tp": tp, "sl": sl, "boyut": islem_butcesi, "giris_rsi": rsi_15m}
                         telegram_mesaj_gonder(f"🩸 *YENİ SHORT SİNYALİ*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• RSI: `{rsi_15m:.1f}`")
 
-            except Exception as e:
-                pass
+                        except Exception as e:
+                print(f"❌ PİYASA TARAMA HATASI ({symbol}): {e}")
+    
             
             time.sleep(2)
             
