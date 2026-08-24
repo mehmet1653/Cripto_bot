@@ -57,7 +57,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Gate.io Çoklu Kademe Grid Bot | Durum: {durum_str}"
+    return f"Gate.io Anlık Scalping Grid Bot | Durum: {durum_str}"
 
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
@@ -169,12 +169,12 @@ def coklu_grid_yonetimi():
                     HAFIZA_KAYITLARI["zararli_islemler"].append({"symbol": symbol, "yon": yon, "zaman": su_an})
                     HAFIZA_KAYITLARI["yasakli_yonler"][symbol] = {
                         "yon": yon,
-                        "bitis_zamani": su_an + 3600 
+                        "bitis_zamani": su_an + 1800  # Kısa vadede yasak süresini 30 dakikaya indirdik
                     }
 
                     telegram_mesaj_gonder(
                         f"🛑 *KONTROLLÜ STOP & HAFIZAYA KAYIT* - `{symbol}`\n"
-                        f"• Hata Analizi: `{yon} yönü hatalı trend tespiti yaptı.`\n"
+                        f"• Hata Analizi: `{yon} yönü 15m trendde ters kaldı.`\n"
                         f"• Zarar (Komisyon Dahil): `{net_kz:+.2f} USD`\n"
                         f"• Kesilen Komisyon: `{komisyon:.4f} USD`"
                     )
@@ -183,30 +183,28 @@ def coklu_grid_yonetimi():
 
             islem_butcesi = KASA["guncel"] * RISK_ORANI
             if symbol not in AKTIF_GRID_SISTEMLERI and KASA["guncel"] >= islem_butcesi:
-                # 🛠️ GELİŞTİRİLMİŞ ANALİZ: Hem 4h Trend hem 1h/Kısa Vade RSI Teyidi
-                ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=30)
-                df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                # 🛠️ 15 DAKİKALIK ANLIK SCALPING ANALİZİ
+                ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=40)
+                df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 
-                ema50 = ta.trend.ema_indicator(df_4h['close'], window=20).iloc[-1]
-                ema200 = ta.trend.ema_indicator(df_4h['close'], window=min(len(df_4h), 28)).iloc[-1]
+                # Kısa vadeli hızlı ortalamalar (EMA 7 ve EMA 21)
+                ema7 = ta.trend.ema_indicator(df_15m['close'], window=7).iloc[-1]
+                ema21 = ta.trend.ema_indicator(df_15m['close'], window=21).iloc[-1]
+                rsi15m = ta.momentum.rsi(df_15m['close'], window=14).iloc[-1]
                 
-                # Kısa vadeli momentum teyidi için RSI ekliyoruz
-                rsi = ta.momentum.rsi(df_4h['close'], window=14).iloc[-1]
-                
-                # Çoklu Filtreli Yön Tayini (Garantiye Alma)
-                if ema50 >= ema200 and rsi > 45:
+                # Anlık 15m Yön Tayini
+                if ema7 >= ema21 and rsi15m >= 48:
                     grid_yonu = "LONG"
-                elif ema50 < ema200 and rsi < 55:
+                elif ema7 < ema21 and rsi15m <= 52:
                     grid_yonu = "SHORT"
                 else:
-                    # Kararsız / Testere piyasasıysa RSI yönüne tabiri caizse güven
-                    grid_yonu = "LONG" if rsi >= 50 else "SHORT"
+                    grid_yonu = "LONG" if rsi15m > 50 else "SHORT"
                 
                 if symbol in HAFIZA_KAYITLARI["yasakli_yonler"]:
                     yasakli_bilgi = HAFIZA_KAYITLARI["yasakli_yonler"][symbol]
                     if yasakli_bilgi["yon"] == grid_yonu:
                         grid_yonu = "SHORT" if grid_yonu == "LONG" else "LONG"
-                        telegram_mesaj_gonder(f"🧠 *HAFIZA & RİSK FİLTRESİ*: `{symbol}` yönü güvenli olması için `{grid_yonu}` olarak adapte edildi.")
+                        telegram_mesaj_gonder(f"🧠 *ANLIK HAFIZA FİLTRESİ*: `{symbol}` yönü 15m için `{grid_yonu}` olarak tersine çevrildi.")
 
                 KASA["guncel"] -= islem_butcesi
                 AKTIF_GRID_SISTEMLERI[symbol] = {
@@ -216,9 +214,9 @@ def coklu_grid_yonetimi():
                 }
                 
                 telegram_mesaj_gonder(
-                    f"⚡ *YENİ MİNİ GRID KURULDU (RSI & TREND TEYİTLİ)*\n"
+                    f"⚡ *15M ANLIK MİNİ GRID KURULDU*\n"
                     f"• Parite: `{symbol}` ({grid_yonu} 5x)\n"
-                    f"• Giriş Fiyatı: `{guncel_fiyat:.2f}` | RSI: `{rsi:.1f}`\n"
+                    f"• Giriş Fiyatı: `{guncel_fiyat:.2f}` | RSI(15m): `{rsi15m:.1f}`\n"
                     f"• Marjin: `{islem_butcesi:.2f} USD`"
                 )
 
@@ -245,7 +243,7 @@ def telegram_komutlari_dinle():
                         
                         if metin == "/baslat":
                             BOT_CALISIYOR_MU = True
-                            telegram_mesaj_gonder("🚀 *RSI ve Trend Teyitli Akıllı Bot Başlatıldı!*")
+                            telegram_mesaj_gonder("🚀 *15 Dakikalık Anlık Scalping Botu Başlatıldı!*")
 
                         elif metin == "/kapat":
                             BOT_CALISIYOR_MU = False
@@ -301,7 +299,7 @@ def telegram_komutlari_dinle():
                             durum_str = "Çalışıyor 🟢" if BOT_CALISIYOR_MU else "Beklemede ⏸️"
                             
                             durum = (
-                                f"📊 *GÜNCEL AKILLI GRID RAPORU*\n"
+                                f"📊 *GÜNCEL 15M SCALPING RAPORU*\n"
                                 f"• Durum: `{durum_str}`\n"
                                 f"• Nakit Kasa: `{KASA['guncel']:.2f} USD`\n"
                                 f"• Bağlı Marjin: `{bagli:.2f} USD`\n"
@@ -340,10 +338,10 @@ def telegram_komutlari_dinle():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print("🚀 RSI ve Trend Teyitli Bot Aktif...")
+    print("🚀 15M Scalping Botu Aktif...")
     threading.Thread(target=telegram_komutlari_dinle, daemon=True).start()
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    telegram_mesaj_gonder("⚡ Bot güncellendi! Yön tayini için EMA trend filtresinin yanına RSI momentum teyidi eklendi.")
+    telegram_mesaj_gonder("⚡ Bot güncellendi! Artık 4h yerine tamamen **15 dakikalık (15m)** anlık scalping mumlarına ve EMA 7/21 hızına göre yön tayin ediyor.")
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
