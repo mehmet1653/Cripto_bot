@@ -51,16 +51,29 @@ def telegram_mesaj_gonder(mesaj):
         print(f"Telegram Gönderme Hatası: {e}")
 
 # ==========================================
-# 🌐 WEB SUNUCUSU VE OTOMATİK TETİKLEME
+# 🌐 WEB SUNUCUSU (UptimeRobot Buraya Ping Atacak)
 # ==========================================
 @app.route('/')
 def home():
-    # UptimeRobot ping attığında ana sayfada taramayı da otomatik tetikler
-    disaridan_tarama_tetikle()
-    return "🟢 Komisyon Hesaplamalı Kripto Ajanı Aktif, Tarama Yapıldı ve İstek Bekliyor!"
+    return "🟢 Komisyon Hesaplamalı Kripto Ajanı Uykusuz ve Aktif!"
 
 @app.route('/tara')
 def disaridan_tarama_tetikle():
+    return "⚡ Manuel tetikleme noktası.", 200
+
+# ==========================================
+# 🔄 ARKA PLANDA SÜREKLİ DÖNEN TARAMA MOTORU
+# ==========================================
+def otomatik_arkaplan_tarayici():
+    print("🔄 Arka plan tarama döngüsü başlatıldı...")
+    while True:
+        try:
+            disaridan_tarama_tetikle_internal()
+        except Exception as e:
+            print(f"Arka plan tarama hatası: {e}")
+        time.sleep(180) # Her 3 dakikada bir tarar
+
+def disaridan_tarama_tetikle_internal():
     global KASA
     try:
         for symbol in TAKIP_EDILENLER:
@@ -159,9 +172,8 @@ def disaridan_tarama_tetikle():
                     ACIK_POZISYONLAR[symbol] = {"yon": "SHORT", "giris": guncel_fiyat, "tp": tp, "sl": sl, "boyut": islem_butcesi, "giris_rsi": rsi_15m}
                     telegram_mesaj_gonder(f"🩸 *YENİ SHORT SİNYALİ*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• RSI: `{rsi_15m:.1f}`")
 
-        return "⚡ Tarama Turu Başarıyla Tamamlandı!", 200
     except Exception as e:
-        return f"❌ Tarama Hatası: {e}", 500
+        print(f"❌ Tarama Hatası: {e}")
 
 # ==========================================
 # 📥 TELEGRAM KOMUTLARI DİNLEYİCİSİ
@@ -215,13 +227,18 @@ def telegram_komutlari_dinle():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print("🚀 Komisyonlu Kripto Ajanı Otomatik Tetikleme Modunda Başlatılıyor...")
+    print("🚀 Komisyonlu Kripto Ajanı Başlatılıyor...")
     
+    # 1. Telegram komut dinleyicisini başlat
     t_komut = threading.Thread(target=telegram_komutlari_dinle, daemon=True)
     t_komut.start()
     
-    telegram_mesaj_gonder("🟢 Kripto Ajanı UptimeRobot Entegreli Olarak Aktif!")
+    # 2. Arka plan periyodik piyasa tarayıcısını başlat
+    t_tarama = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
+    t_tarama.start()
+    
+    telegram_mesaj_gonder("🟢 Kripto Ajanı Tamamen Aktif ve Görevde!")
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
-    
+                                
