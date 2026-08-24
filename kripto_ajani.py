@@ -183,19 +183,30 @@ def coklu_grid_yonetimi():
 
             islem_butcesi = KASA["guncel"] * RISK_ORANI
             if symbol not in AKTIF_GRID_SISTEMLERI and KASA["guncel"] >= islem_butcesi:
+                # 🛠️ GELİŞTİRİLMİŞ ANALİZ: Hem 4h Trend hem 1h/Kısa Vade RSI Teyidi
                 ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=30)
                 df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 
                 ema50 = ta.trend.ema_indicator(df_4h['close'], window=20).iloc[-1]
                 ema200 = ta.trend.ema_indicator(df_4h['close'], window=min(len(df_4h), 28)).iloc[-1]
                 
-                grid_yonu = "LONG" if ema50 >= ema200 else "SHORT"
+                # Kısa vadeli momentum teyidi için RSI ekliyoruz
+                rsi = ta.momentum.rsi(df_4h['close'], window=14).iloc[-1]
+                
+                # Çoklu Filtreli Yön Tayini (Garantiye Alma)
+                if ema50 >= ema200 and rsi > 45:
+                    grid_yonu = "LONG"
+                elif ema50 < ema200 and rsi < 55:
+                    grid_yonu = "SHORT"
+                else:
+                    # Kararsız / Testere piyasasıysa RSI yönüne tabiri caizse güven
+                    grid_yonu = "LONG" if rsi >= 50 else "SHORT"
                 
                 if symbol in HAFIZA_KAYITLARI["yasakli_yonler"]:
                     yasakli_bilgi = HAFIZA_KAYITLARI["yasakli_yonler"][symbol]
                     if yasakli_bilgi["yon"] == grid_yonu:
                         grid_yonu = "SHORT" if grid_yonu == "LONG" else "LONG"
-                        telegram_mesaj_gonder(f"🧠 *HAFIZA DEVREDE*: `{symbol}` yönü `{grid_yonu}` olarak adapte edildi.")
+                        telegram_mesaj_gonder(f"🧠 *HAFIZA & RİSK FİLTRESİ*: `{symbol}` yönü güvenli olması için `{grid_yonu}` olarak adapte edildi.")
 
                 KASA["guncel"] -= islem_butcesi
                 AKTIF_GRID_SISTEMLERI[symbol] = {
@@ -205,9 +216,9 @@ def coklu_grid_yonetimi():
                 }
                 
                 telegram_mesaj_gonder(
-                    f"⚡ *YENİ MİNİ GRID KURULDU*\n"
+                    f"⚡ *YENİ MİNİ GRID KURULDU (RSI & TREND TEYİTLİ)*\n"
                     f"• Parite: `{symbol}` ({grid_yonu} 5x)\n"
-                    f"• Giriş Fiyatı: `{guncel_fiyat:.2f}`\n"
+                    f"• Giriş Fiyatı: `{guncel_fiyat:.2f}` | RSI: `{rsi:.1f}`\n"
                     f"• Marjin: `{islem_butcesi:.2f} USD`"
                 )
 
@@ -234,7 +245,7 @@ def telegram_komutlari_dinle():
                         
                         if metin == "/baslat":
                             BOT_CALISIYOR_MU = True
-                            telegram_mesaj_gonder("🚀 *Bot Başlatıldı!*")
+                            telegram_mesaj_gonder("🚀 *RSI ve Trend Teyitli Akıllı Bot Başlatıldı!*")
 
                         elif metin == "/kapat":
                             BOT_CALISIYOR_MU = False
@@ -290,7 +301,7 @@ def telegram_komutlari_dinle():
                             durum_str = "Çalışıyor 🟢" if BOT_CALISIYOR_MU else "Beklemede ⏸️"
                             
                             durum = (
-                                f"📊 *GÜNCEL GRID RAPORU*\n"
+                                f"📊 *GÜNCEL AKILLI GRID RAPORU*\n"
                                 f"• Durum: `{durum_str}`\n"
                                 f"• Nakit Kasa: `{KASA['guncel']:.2f} USD`\n"
                                 f"• Bağlı Marjin: `{bagli:.2f} USD`\n"
@@ -329,10 +340,10 @@ def telegram_komutlari_dinle():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print("🚀 Bot Aktif...")
+    print("🚀 RSI ve Trend Teyitli Bot Aktif...")
     threading.Thread(target=telegram_komutlari_dinle, daemon=True).start()
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    telegram_mesaj_gonder("⚡ Bot güncellendi! Artık `/durum` raporunda ödenen toplam komisyon miktarını da görebilirsin.")
+    telegram_mesaj_gonder("⚡ Bot güncellendi! Yön tayini için EMA trend filtresinin yanına RSI momentum teyidi eklendi.")
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
