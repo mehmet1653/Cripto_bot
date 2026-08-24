@@ -17,8 +17,8 @@ exchange = ccxt.gate({
     'options': {'defaultType': 'spot'}
 })
 
-TAKIP_EDILENLER = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT']
-ACIK_POZISYONLAR = {}
+TAKIP_EDILENLER = ['BTC/USDT', 'ETH/USDT']
+ACIK_GRID_POZISYONLARI = {}
 
 KASA = {
     "baslangic": 100.0,
@@ -31,10 +31,11 @@ KASA = {
     "ogrenilen_dersler": []
 }
 
-HEDEF_YUZDESI = 0.03    # %3.00 Kaldıraçlı Kâr Hedefi
-STOP_YUZDESI = 0.015    # %1.50 Kaldıraçlı Stop Sınırı
-RISK_ORANI = 0.25 
+# GRID STRATEJİ PARAMETRELERİ
 KALDIRAC = 5
+RISK_ORANI = 0.30       # Kasanın %30'u ile ızgara alanı açılır
+GRID_YUZDE_GENISLIK = 0.08  # Anlık fiyatın %8 altı ve üstü kanal aralığı
+GRID_SAYISI = 12        # Kademe sayısı
 KOMISYON_ORANI = 0.0008 
 
 def telegram_mesaj_gonder(mesaj):
@@ -51,284 +52,180 @@ def telegram_mesaj_gonder(mesaj):
 
 @app.route('/')
 def home():
-    return "🟢 Tam Senkronize Gate.io Kripto Ajanı Aktif!"
+    return "🟢 Gate.io 5x Grid & Kanal Stratejisi Aktif!"
 
 # ==========================================
-# 🔄 ARKA PLAN TARAMA VE HASSAS TAKİP MOTORU
+# 🔄 5X GRID ARKA PLAN TARAYICI VE KANAL YÖNETİMİ
 # ==========================================
 def otomatik_arkaplan_tarayici():
     while True:
         try:
-            disaridan_tarama_tetikle_internal()
+            grid_tarama_ve_yonetim()
         except Exception as e:
-            print(f"Arka plan tarama hatası: {e}")
-        time.sleep(30)
+            print(f"Grid Tarama Hatası: {e}")
+        time.sleep(25)
 
-def disaridan_tarama_tetikle_internal():
+def grid_tarama_ve_yonetim():
     global KASA
     try:
         for symbol in TAKIP_EDILENLER:
-            # 1. AÇIK POZİSYON KONTROLÜ
-            if symbol in ACIK_POZISYONLAR:
-                try:
-                    ticker = exchange.fetch_ticker(symbol)
-                    guncel_fiyat = ticker['last']
-                except:
-                    continue
+            ticker = exchange.fetch_ticker(symbol)
+            guncel_fiyat = ticker['last']
 
-                poz = ACIK_POZISYONLAR[symbol]
-                marjin = poz['marjin']
-                toplam_pozisyon_degeri = marjin * KALDIRAC
+            # 1. MEVCUT GRID KANALINI KONTROL ET (Zarar-Kes veya Kâr Al Sınırları)
+            if symbol in ACIK_GRID_POZISYONLARI:
+                grid_veri = ACIK_GRID_POZISYONLARI[symbol]
+                alt_sinir = grid_veri['alt_sinir']
+                ust_sinir = grid_veri['ust_sinir']
+                marjin = grid_veri['marjin']
+                yon = grid_veri['yon']
                 
-                kapatilacak_mi = False
-                brut_kar_zarar = 0.0
-                durum_notu = ""
+                kapat_nedeni = ""
+                brut_kar = 0.0
 
-                if poz['yon'] == "LONG":
-                    if guncel_fiyat >= poz['tp']:
-                        brut_kar_zarar = marjin * HEDEF_YUZDESI
-                        durum_notu = "🎯 HEDEFE ULAŞILDI (TP)"
-                        kapatilacak_mi = True
-                    elif guncel_fiyat <= poz['sl']:
-                        brut_kar_zarar = - (marjin * STOP_YUZDESI)
-                        durum_notu = "🛑 STOP OLDU (SL)"
-                        kapatilacak_mi = True
+                # Kanal dışına taşma kontrolü (Stop / Sınır aşımı)
+                if yon == "LONG_GRID":
+                    if guncel_fiyat <= alt_sinir:
+                        kapat_nedeni = "🛑 ALT KANAL K KIRILDI (STOP)"
+                        brut_kar = - (marjin * 0.04) # %4 max kanal zararı
+                    elif guncel_fiyat >= ust_sinir:
+                        kapat_nedeni = "🎯 ÜST KANAL HEDEFE ULAŞTI (TP)"
+                        brut_kar = marjin * 0.04
+                elif yon == "SHORT_GRID":
+                    if guncel_fiyat >= ust_sinir:
+                        kapat_nedeni = "🛑 ÜST KANAL KIRILDI (STOP)"
+                        brut_kar = - (marjin * 0.04)
+                    elif guncel_fiyat <= alt_sinir:
+                        kapat_nedeni = "🎯 ALT KANAL HEDEFE ULAŞTI (TP)"
+                        brut_kar = marjin * 0.04
 
-                elif poz['yon'] == "SHORT":
-                    if guncel_fiyat <= poz['tp']:
-                        brut_kar_zarar = marjin * HEDEF_YUZDESI
-                        durum_notu = "🎯 HEDEFE ULAŞILDI (TP)"
-                        kapatilacak_mi = True
-                    elif guncel_fiyat >= poz['sl']:
-                        brut_kar_zarar = - (marjin * STOP_YUZDESI)
-                        durum_notu = "🛑 STOP OLDU (SL)"
-                        kapatilacak_mi = True
-
-                if kapatilacak_mi:
-                    islem_komisyonu = toplam_pozisyon_degeri * KOMISYON_ORANI
-                    net_kar_zarar = brut_kar_zarar - islem_komisyonu
+                if kapat_nedeni:
+                    toplam_deger = marjin * KALDIRAC
+                    komisyon = toplam_deger * KOMISYON_ORANI
+                    net_kz = brut_kar - komisyon
                     
-                    KASA["guncel"] = KASA["guncel"] + marjin + net_kar_zarar
-                    KASA["gunluk_kar_zarar"] += net_kar_zarar
-                    KASA["toplam_odenen_komisyon"] += islem_komisyonu
+                    KASA["guncel"] = KASA["guncel"] + marjin + net_kz
+                    KASA["gunluk_kar_zarar"] += net_kz
+                    KASA["toplam_odenen_komisyon"] += komisyon
                     KASA["toplam_islem"] += 1
                     
-                    if net_kar_zarar > 0:
+                    if net_kz > 0:
                         KASA["basarili_islem"] += 1
                     else:
-                        yeni_ders = f"{symbol} paritesinde RSI {poz.get('giris_rsi', 0):.1f} ile açılan {poz['yon']} işlemde zarar yazıldı."
-                        if yeni_ders not in KASA["ogrenilen_dersler"]:
-                            KASA["ogrenilen_dersler"].append(yeni_ders)
                         KASA["zararli_islem"] += 1
+                        ders = f"{symbol} 5x Grid kanal dışına taştığı için kapandı. K/Z: {net_kz:+.2f}$"
+                        if ders not in KASA["ogrenilen_dersler"]:
+                            KASA["ogrenilen_dersler"].append(ders)
 
                     telegram_mesaj_gonder(
-                        f"{durum_notu} - *{symbol}*\n"
-                        f"• Brüt K/Z: `{brut_kar_zarar:+.2f} USD`\n"
-                        f"• Kesilen Komisyon: `-{islem_komisyonu:.2f} USD`\n"
-                        f"• *Net K/Z:* `{net_kar_zarar:+.2f} USD`\n"
-                        f"• Güncel Cüzdan Kasası: `{KASA['guncel']:.2f} USD`"
+                        f"{kapat_nedeni} - *{symbol} (5x Grid)*\n"
+                        f"• Net K/Z: `{net_kz:+.2f} USD`\n"
+                        f"• Güncel Kasa: `{KASA['guncel']:.2f} USD`"
                     )
-                    del ACIK_POZISYONLAR[symbol]
+                    del ACIK_GRID_POZISYONLARI[symbol]
                 continue
 
-            # 2. YENİ SİNYAL ÜRETİMİ
-            ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=50)
-            df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            ema50 = ta.trend.ema_indicator(df_4h['close'], window=50).iloc[-1]
-            ema200 = ta.trend.ema_indicator(df_4h['close'], window=200).iloc[-1]
-            ana_trend = "LONG" if ema50 > ema200 else "SHORT"
-
-            ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=30)
-            df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            
-            guncel_fiyat = df_15m['close'].iloc[-1]
-            rsi_15m = ta.momentum.rsi(df_15m['close'], window=14).iloc[-1]
-
+            # 2. YENİ GRID KANALI KURULUMU (Açık Grid Yoksa)
             islem_butcesi = KASA["guncel"] * RISK_ORANI
-            fiyat_hedef_yuzdesi = HEDEF_YUZDESI / KALDIRAC
-            fiyat_stop_yuzdesi = STOP_YUZDESI / KALDIRAC
-
-            if symbol not in ACIK_POZISYONLAR and KASA["guncel"] >= islem_butcesi:
-                if ana_trend == "LONG" and rsi_15m < 45:
-                    KASA["guncel"] -= islem_butcesi
-                    tp = guncel_fiyat * (1 + fiyat_hedef_yuzdesi)
-                    sl = guncel_fiyat * (1 - fiyat_stop_yuzdesi)
-                    ACIK_POZISYONLAR[symbol] = {"yon": "LONG", "giris": guncel_fiyat, "tp": tp, "sl": sl, "marjin": islem_butcesi, "giris_rsi": rsi_15m}
-                    telegram_mesaj_gonder(f"🚀 *YENİ LONG SİNYALİ*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• Kalan Kasa: `{KASA['guncel']:.2f} USD`")
+            if symbol not in ACIK_GRID_POZISYONLARI and KASA["guncel"] >= islem_butcesi:
+                # 4h Trend yönüne göre Grid Modu Seçimi (Trend Yönlü Grid)
+                ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=30)
+                df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                ema50 = ta.trend.ema_indicator(df_4h['close'], window=30).iloc[-1]
+                ema200 = ta.trend.ema_indicator(df_4h['close'], window=min(len(df_4h), 100)).iloc[-1]
                 
-                elif ana_trend == "SHORT" and rsi_15m > 55:
-                    KASA["guncel"] -= islem_butcesi
-                    tp = guncel_fiyat * (1 - fiyat_hedef_yuzdesi)
-                    sl = guncel_fiyat * (1 + fiyat_stop_yuzdesi)
-                    ACIK_POZISYONLAR[symbol] = {"yon": "SHORT", "giris": guncel_fiyat, "tp": tp, "sl": sl, "marjin": islem_butcesi, "giris_rsi": rsi_15m}
-                    telegram_mesaj_gonder(f"🩸 *YENİ SHORT SİNYALİ*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• Kalan Kasa: `{KASA['guncel']:.2f} USD`")
+                grid_turu = "LONG_GRID" if ema50 >= ema200 else "SHORT_GRID"
+                
+                alt_sinir = guncel_fiyat * (1 - GRID_YUZDE_GENISLIK)
+                ust_sinir = guncel_fiyat * (1 + GRID_YUZDE_GENISLIK)
+                
+                KASA["guncel"] -= islem_butcesi
+                ACIK_GRID_POZISYONLARI[symbol] = {
+                    "yon": grid_turu,
+                    "giris": guncel_fiyat,
+                    "alt_sinir": alt_sinir,
+                    "ust_sinir": ust_sinir,
+                    "marjin": islem_butcesi
+                }
+                
+                telegram_mesaj_gonder(
+                    f"📐 *YENİ 5X GRİD KANALI KURULDU*\n"
+                    f"• Parite: `{symbol}` ({grid_turu})\n"
+                    f"• Merkez Fiyat: `{guncel_fiyat:.2f}`\n"
+                    f"• Alt Sınır: `{alt_sinir:.2f}` | Üst Sınır: `{ust_sinir:.2f}`\n"
+                    f"• Ayrılan Marjin: `{islem_butcesi:.2f} USD` (5x)\n"
+                    f"• Kalan Kasa: `{KASA['guncel']:.2f} USD`"
+                )
 
     except Exception as e:
-        print(f"❌ Tarama Hatası: {e}")
+        print(f"Grid Hata: {e}")
 
 # ==========================================
-# 📥 TELEGRAM KOMUTLARI DİNLEYİCİSİ
+# 📥 TELEGRAM KOMUTLARI
 # ==========================================
 def telegram_komutlari_dinle():
-    global KASA, ACIK_POZISYONLAR
-    son_guncelleme_id = 0
+    global KASA, ACIK_GRID_POZISYONLARI
+    son_id = 0
     while True:
         try:
             if not TELEGRAM_TOKEN:
                 time.sleep(5)
                 continue
                 
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={son_guncelleme_id + 1}&timeout=20"
-            response = requests.get(url, timeout=25).json()
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={son_id + 1}&timeout=20"
+            res = requests.get(url, timeout=25).json()
 
-            if "result" in response:
-                for veri in response["result"]:
-                    son_guncelleme_id = veri["update_id"]
-                    
+            if "result" in res:
+                for veri in res["result"]:
+                    son_id = veri["update_id"]
                     if "message" in veri and "text" in veri["message"]:
-                        mesaj_metni = veri["message"]["text"].strip()
+                        metin = veri["message"]["text"].strip()
                         
-                        # 1. Kasa Güncelleme Komutu (/kasa 200)
-                        if mesaj_metni.startswith("/kasa"):
-                            parcalar = mesaj_metni.split()
-                            if len(parcalar) > 1:
-                                try:
-                                    yeni_bakiye = float(parcalar[1])
-                                    KASA["baslangic"] = yeni_bakiye
-                                    KASA["guncel"] = yeni_bakiye
-                                    KASA["gunluk_kar_zarar"] = 0.0
-                                    KASA["toplam_odenen_komisyon"] = 0.0
-                                    ACIK_POZISYONLAR.clear()
-                                    telegram_mesaj_gonder(f"✅ *Kasa Sıfırlandı ve Güncellendi!*\n• Yeni Bakiye: `{yeni_bakiye} USD`")
-                                except ValueError:
-                                    telegram_mesaj_gonder("⚠️ Örnek kullanım: `/kasa 500`")
-                        
-                        # 2. ACİL TÜM POZİSYONLARI KAPATMA KOMUTU (/kapat)
-                        elif mesaj_metni == "/kapat":
-                            if not ACIK_POZISYONLAR:
-                                telegram_mesaj_gonder("📭 Zaten açık aktif pozisyon bulunmuyor.")
+                        if metin.startswith("/kasa"):
+                            parca = metin.split()
+                            if len(parca) > 1:
+                                yeni = float(parca[1])
+                                KASA["baslangic"] = yeni
+                                KASA["guncel"] = yeni
+                                KASA["gunluk_kar_zarar"] = 0.0
+                                KASA["toplam_odenen_komisyon"] = 0.0
+                                ACIK_GRID_POZISYONLARI.clear()
+                                telegram_mesaj_gonder(f"✅ Kasa sıfırlandı: `{yeni} USD`")
+
+                        elif metin == "/kapat":
+                            if not ACIK_GRID_POZISYONLARI:
+                                telegram_mesaj_gonder("📭 Aktif grid kanalı yok.")
                             else:
-                                toplam_kurtarilan_marjin = 0.0
-                                toplam_anlik_kar_zarar = 0.0
-                                kapatma_detaylari = "🚨 *ACİL KAPATMA RAPORU*\n\n"
-                                
-                                for sym, poz in list(ACIK_POZISYONLAR.items()):
-                                    try:
-                                        ticker = exchange.fetch_ticker(sym)
-                                        anlik_fiyat = ticker['last']
-                                        giris = poz['giris']
-                                        marjin = poz['marjin']
-                                        
-                                        if poz['yon'] == "LONG":
-                                            fark_yuzdesi = (anlik_fiyat - giris) / giris
-                                        else:
-                                            fark_yuzdesi = (giris - anlik_fiyat) / giris
-                                            
-                                        kaldiracli_kar_yuzdesi = fark_yuzdesi * KALDIRAC * 100
-                                        islem_kar_zarar = marjin * (kaldiracli_kar_yuzdesi / 100)
-                                        
-                                        toplam_kurtarilan_marjin += marjin
-                                        toplam_anlik_kar_zarar += islem_kar_zarar
-                                        
-                                        kapatma_detaylari += f"• *{sym}*: `{islem_kar_zarar:+.2f} USD`\n"
-                                    except:
-                                        toplam_kurtarilan_marjin += poz['marjin']
+                                iade = sum([p['marjin'] for p in ACIK_GRID_POZISYONLARI.values()])
+                                KASA["guncel"] += iade
+                                ACIK_GRID_POZISYONLARI.clear()
+                                telegram_mesaj_gonder(f"🚨 Tüm ızgaralar acilen kapatıldı! Yeni Kasa: `{KASA['guncel']:.2f} USD`")
 
-                                KASA["guncel"] += toplam_kurtarilan_marjin + toplam_anlik_kar_zarar
-                                KASA["gunluk_kar_zarar"] += toplam_anlik_kar_zarar
-                                ACIK_POZISYONLAR.clear()
-                                
-                                kapatma_detaylari += f"\n• *Toplam Gerçekleşen K/Z:* `{toplam_anlik_kar_zarar:+.2f} USD`\n• *Yeni Nakit Kasa:* `{KASA['guncel']:.2f} USD`"
-                                telegram_mesaj_gonder(kapatma_detaylari)
-
-                        # 3. DURUM RAPORU (Anlık Toplam Varlık ve K/Z Dahil) (/durum)
-                        elif mesaj_metni == "/durum":
-                            toplam_acik_kar_zarar = 0.0
-                            aktif_marjin_toplami = 0.0
+                        elif metin == "/durum":
+                            bagli = sum([p['marjin'] for p in ACIK_GRID_POZISYONLARI.values()])
+                            toplam_varlik = KASA['guncel'] + bagli
                             
-                            for sym, poz in ACIK_POZISYONLAR.items():
-                                try:
-                                    ticker = exchange.fetch_ticker(sym)
-                                    anlik_fiyat = ticker['last']
-                                    giris = poz['giris']
-                                    marjin = poz['marjin']
-                                    aktif_marjin_toplami += marjin
-                                    
-                                    if poz['yon'] == "LONG":
-                                        fark_yuzdesi = (anlik_fiyat - giris) / giris
-                                    else:
-                                        fark_yuzdesi = (giris - anlik_fiyat) / giris
-                                        
-                                    kaldiracli_kar_yuzdesi = fark_yuzdesi * KALDIRAC * 100
-                                    toplam_acik_kar_zarar += marjin * (kaldiracli_kar_yuzdesi / 100)
-                                except:
-                                    aktif_marjin_toplami += poz['marjin']
-
-                            toplam_varlik = KASA['guncel'] + aktif_marjin_toplami + toplam_acik_kar_zarar
-                            
-                            dersler_str = "\n".join([f"• {d}" for d in KASA["ogrenilen_dersler"][-3:]]) if KASA["ogrenilen_dersler"] else "• Henüz ders yok."
-                            durum_mesaj = (
-                                f"📊 *ANLIK İZOLE MARJİN RAPORU*\n"
-                                f"• Cüzdan Nakit Kasa: `{KASA['guncel']:.2f} USD`\n"
-                                f"• Açıkta Bağlı Marjin: `{aktif_marjin_toplami:.2f} USD`\n"
-                                f"• Açık Pozisyon Anlık K/Z: `{toplam_acik_kar_zarar:+.2f} USD`\n"
-                                f"-----------------------------------\n"
-                                f"💰 *TOPLAM PORTFÖY DEĞERİ: `{toplam_varlik:.2f} USD`*\n"
-                                f"• Açık Pozisyon Sayısı: `{len(ACIK_POZISYONLAR)}`\n"
-                                f"• Ödenen Komisyon: `{KASA['toplam_odenen_komisyon']:.2f} USD`\n"
+                            dersler = "\n".join([f"• {d}" for d in KASA["ogrenilen_dersler"][-3:]]) if KASA["ogrenilen_dersler"] else "• Yok"
+                            durum = (
+                                f"📊 *5X GRİD KANAL RAPORU*\n"
+                                f"• Nakit Kasa: `{KASA['guncel']:.2f} USD`\n"
+                                f"• Kanallarda Bağlı: `{bagli:.2f} USD`\n"
+                                f"💰 *Toplam Portföy: `{toplam_varlik:.2f} USD`*\n"
+                                f"• Aktif Kanal Sayısı: `{len(ACIK_GRID_POZISYONLARI)}`\n"
                                 f"• Günlük Net K/Z: `{KASA['gunluk_kar_zarar']:+.2f} USD`\n\n"
-                                f"🧠 *Son Öğrenilenler:*\n{dersler_str}"
+                                f"🧠 *Dersler:*\n{dersler}"
                             )
-                            telegram_mesaj_gonder(durum_mesaj)
-
-                        # 4. POZİSYONLAR LİSTESİ (/pozisyonlar)
-                        elif mesaj_metni == "/pozisyonlar":
-                            if not ACIK_POZISYONLAR:
-                                telegram_mesaj_gonder("📭 Şu an açık aktif pozisyon bulunmuyor.")
-                            else:
-                                poz_mesaji = "📈 *ANLIK AÇIK POZİSYONLAR TAKİBİ*\n\n"
-                                for sym, poz in ACIK_POZISYONLAR.items():
-                                    try:
-                                        ticker = exchange.fetch_ticker(sym)
-                                        anlik_fiyat = ticker['last']
-                                        giris = poz['giris']
-                                        marjin = poz['marjin']
-                                        
-                                        if poz['yon'] == "LONG":
-                                            fark_yuzdesi = (anlik_fiyat - giris) / giris
-                                        else:
-                                            fark_yuzdesi = (giris - anlik_fiyat) / giris
-                                            
-                                        kaldiracli_kar_yuzdesi = fark_yuzdesi * KALDIRAC * 100
-                                        tahmini_kar_usd = marjin * (kaldiracli_kar_yuzdesi / 100)
-                                        durum_ikonu = "🟢" if tahmini_kar_usd >= 0 else "🔴"
-                                        
-                                        poz_mesaji += (
-                                            f"{durum_ikonu} *{sym}* ({poz['yon']} 5x)\n"
-                                            f"• Giriş: `{giris:.2f}` | Anlık: `{anlik_fiyat:.2f}`\n"
-                                            f"• K/Z Yüzdesi: `%{kaldiracli_kar_yuzdesi:+.2f}`\n"
-                                            f"• K/Z USD: `{tahmini_kar_usd:+.2f} USD`\n"
-                                            f"-----------------------------------\n"
-                                        )
-                                    except Exception as ex:
-                                        poz_mesaji += f"⚠️ *{sym}* fiyatı alınamadı: {ex}\n"
-                                
-                                telegram_mesaj_gonder(poz_mesaji)
+                            telegram_mesaj_gonder(durum)
 
         except Exception as e:
-            print(f"❌ TELEGRAM DİNLEME HATASI: {e}")
+            print(f"Telegram dinleme hata: {e}")
         time.sleep(2)
 
 if __name__ == "__main__":
-    print("🚀 Gelişmiş Kripto Ajanı Başlatılıyor...")
-    
-    t_komut = threading.Thread(target=telegram_komutlari_dinle, daemon=True)
-    t_komut.start()
-    
-    t_tarama = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
-    t_tarama.start()
-    
-    telegram_mesaj_gonder("🟢 Bot Güncellendi! Artık `/durum` komutunda açık pozisyonlardaki kâr/zarar dahil *Toplam Portföy Değeri* görünür ve `/kapat` komutuyla tüm işlemler acilen kapatılabilir.")
+    print("🚀 5x Grid Bot Başlatılıyor...")
+    threading.Thread(target=telegram_komutlari_dinle, daemon=True).start()
+    threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
+    telegram_mesaj_gonder("🟢 Bot 5x Grid (Izgara) Stratejisine güncellendi! Kanallar kuruluyor.")
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
