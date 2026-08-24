@@ -8,18 +8,8 @@ import os
 from datetime import datetime
 from flask import Flask
 
-# ==========================================
-# 🌐 RENDER UYUMLU WEB SUNUCUSU
-# ==========================================
 app = Flask(__name__)
 
-@app.route('/')
-def home():
-    return "🟢 Komisyon Hesaplamalı Kripto Ajanı Aktif!"
-
-# ==========================================
-# ⚙️ AYARLAR VE HAFIZA (KOMİSYON DAHİL)
-# ==========================================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
@@ -42,12 +32,10 @@ KASA = {
     "ogrenilen_dersler": []
 }
 
-HEDEF_YUZDESI = 0.03  # %3 Hedef
-STOP_YUZDESI = 0.015  # %1.5 Stop-Loss
-RISK_ORANI = 0.25     # Kasanın 4'te 1'i
-KALDIRAC = 5          # 5x Kaldıraç
-
-# Binance ortalama Futures/Spot alım-satım komisyonu (Giriş + Çıkış toplam ortalama %0.08)
+HEDEF_YUZDESI = 0.03
+STOP_YUZDESI = 0.015
+RISK_ORANI = 0.25
+KALDIRAC = 5
 KOMISYON_ORANI = 0.0008 
 
 def telegram_mesaj_gonder(mesaj):
@@ -63,7 +51,120 @@ def telegram_mesaj_gonder(mesaj):
         print(f"Telegram Gönderme Hatası: {e}")
 
 # ==========================================
-# 📥 TELEGRAM KOMUTLARI DİNLEYİCİSİ (İŞÇİ 1)
+# 🌐 WEB SUNUCUSU VE OTOMATİK TETİKLEME
+# ==========================================
+@app.route('/')
+def home():
+    # UptimeRobot ping attığında ana sayfada taramayı da otomatik tetikler
+    disaridan_tarama_tetikle()
+    return "🟢 Komisyon Hesaplamalı Kripto Ajanı Aktif, Tarama Yapıldı ve İstek Bekliyor!"
+
+@app.route('/tara')
+def disaridan_tarama_tetikle():
+    global KASA
+    try:
+        for symbol in TAKIP_EDILENLER:
+            ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=50)
+            df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            ema50 = ta.trend.ema_indicator(df_4h['close'], window=50).iloc[-1]
+            ema200 = ta.trend.ema_indicator(df_4h['close'], window=200).iloc[-1]
+            ana_trend = "LONG" if ema50 > ema200 else "SHORT"
+
+            ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=30)
+            df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            
+            guncel_fiyat = df_15m['close'].iloc[-1]
+            rsi_15m = ta.momentum.rsi(df_15m['close'], window=14).iloc[-1]
+            
+            # AÇIK POZİSYON TAKİBİ
+            if symbol in ACIK_POZISYONLAR:
+                poz = ACIK_POZISYONLAR[symbol]
+                islem_boyutu = poz['boyut']
+                toplam_pozisyon_degeri = islem_boyutu * KALDIRAC
+                
+                kapatilacak_mi = False
+                brut_kar_zarar = 0.0
+                durum_notu = ""
+
+                if poz['yon'] == "LONG":
+                    if guncel_fiyat >= poz['tp']:
+                        brut_kar_zarar = islem_boyutu * HEDEF_YUZDESI * KALDIRAC
+                        durum_notu = "🎯 HEDEFE ULAŞILDI (TP)"
+                        kapatilacak_mi = True
+                    elif guncel_fiyat <= poz['sl']:
+                        brut_kar_zarar = - (islem_boyutu * STOP_YUZDESI * KALDIRAC)
+                        durum_notu = "🛑 STOP OLDU (SL)"
+                        kapatilacak_mi = True
+                    elif ana_trend == "SHORT":
+                        fark_yuzdesi = (guncel_fiyat - poz['giris']) / poz['giris']
+                        brut_kar_zarar = islem_boyutu * fark_yuzdesi * KALDIRAC
+                        durum_notu = "⚠️ RÜZGAR DÖNDÜ"
+                        kapatilacak_mi = True
+
+                elif poz['yon'] == "SHORT":
+                    if guncel_fiyat <= poz['tp']:
+                        brut_kar_zarar = islem_boyutu * HEDEF_YUZDESI * KALDIRAC
+                        durum_notu = "🎯 HEDEFE ULAŞILDI (TP)"
+                        kapatilacak_mi = True
+                    elif guncel_fiyat >= poz['sl']:
+                        brut_kar_zarar = - (islem_boyutu * STOP_YUZDESI * KALDIRAC)
+                        durum_notu = "🛑 STOP OLDU (SL)"
+                        kapatilacak_mi = True
+                    elif ana_trend == "LONG":
+                        fark_yuzdesi = (poz['giris'] - guncel_fiyat) / poz['giris']
+                        brut_kar_zarar = islem_boyutu * fark_yuzdesi * KALDIRAC
+                        durum_notu = "⚠️ RÜZGAR DÖNDÜ"
+                        kapatilacak_mi = True
+
+                if kapatilacak_mi:
+                    islem_komisyonu = toplam_pozisyon_degeri * KOMISYON_ORANI
+                    net_kar_zarar = brut_kar_zarar - islem_komisyonu
+                    
+                    KASA["guncel"] += net_kar_zarar
+                    KASA["gunluk_kar_zarar"] += net_kar_zarar
+                    KASA["toplam_ odenen_komisyon"] += islem_komisyonu
+                    KASA["toplam_islem"] += 1
+                    
+                    if net_kar_zarar > 0:
+                        KASA["basarili_islem"] += 1
+                    else:
+                        yeni_ders = f"{symbol} paritesinde RSI {poz.get('giris_rsi', 0):.1f} ile açılan {poz['yon']} işlemde komisyon sonrası zarar yazıldı."
+                        if yeni_ders not in KASA["ogrenilen_dersler"]:
+                            KASA["ogrenilen_dersler"].append(yeni_ders)
+                        KASA["zararli_islem"] += 1
+
+                    telegram_mesaj_gonder(
+                        f"{durum_notu} - *{symbol}*\n"
+                        f"• Brüt K/Z: `{brut_kar_zarar:+.2f} USD`\n"
+                        f"• Kesilen Komisyon: `-{islem_komisyonu:.2f} USD`\n"
+                        f"• *Net K/Z:* `{net_kar_zarar:+.2f} USD`\n"
+                        f"• Güncel Kasa: `{KASA['guncel']:.2f} USD`"
+                    )
+                    del ACIK_POZISYONLAR[symbol]
+                continue
+
+            # YENİ SİNYAL ÜRETİMİ
+            if len(ACIK_POZISYONLAR) < 4:
+                islem_butcesi = KASA["guncel"] * RISK_ORANI
+                
+                if ana_trend == "LONG" and rsi_15m < 45:
+                    tp = guncel_fiyat * (1 + HEDEF_YUZDESI)
+                    sl = guncel_fiyat * (1 - STOP_YUZDESI)
+                    ACIK_POZISYONLAR[symbol] = {"yon": "LONG", "giris": guncel_fiyat, "tp": tp, "sl": sl, "boyut": islem_butcesi, "giris_rsi": rsi_15m}
+                    telegram_mesaj_gonder(f"🚀 *YENİ LONG SİNYALİ*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• RSI: `{rsi_15m:.1f}`")
+                
+                elif ana_trend == "SHORT" and rsi_15m > 55:
+                    tp = guncel_fiyat * (1 - HEDEF_YUZDESI)
+                    sl = guncel_fiyat * (1 + STOP_YUZDESI)
+                    ACIK_POZISYONLAR[symbol] = {"yon": "SHORT", "giris": guncel_fiyat, "tp": tp, "sl": sl, "boyut": islem_butcesi, "giris_rsi": rsi_15m}
+                    telegram_mesaj_gonder(f"🩸 *YENİ SHORT SİNYALİ*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• RSI: `{rsi_15m:.1f}`")
+
+        return "⚡ Tarama Turu Başarıyla Tamamlandı!", 200
+    except Exception as e:
+        return f"❌ Tarama Hatası: {e}", 500
+
+# ==========================================
+# 📥 TELEGRAM KOMUTLARI DİNLEYİCİSİ
 # ==========================================
 def telegram_komutlari_dinle():
     global KASA
@@ -113,160 +214,14 @@ def telegram_komutlari_dinle():
             print(f"❌ TELEGRAM DİNLEME HATASI: {e}")
         time.sleep(2)
 
-# ==========================================
-# 🧠 PİYASA TARAMA VE KOMİSYONLU HESAPLAMA (İŞÇİ 2)
-# ==========================================
-def piyasayi_tara_ve_takip_et():
-    global KASA
-    gunsonu_raporu_gonderildi = False
-    
-    while True:
-        simdiki_zaman = datetime.now()
-        
-        # Saat 23:00 Gün Sonu Raporu
-        if simdiki_zaman.hour == 23 and simdiki_zaman.minute == 0:
-            if not gunsonu_raporu_gonderildi:
-                rapor = (
-                    f"🌙 *GÜN SONU BİLANÇOSU (23:00)* 🌙\n"
-                    f"-----------------------------------\n"
-                    f"• Başlangıç Kasası: `{KASA['baslangic']:.2f} USD`\n"
-                    f"• Güncel Kasa: `{KASA['guncel']:.2f} USD`\n"
-                    f"• Toplam Ödenen Komisyon: `{KASA['toplam_ odenen_komisyon']:.2f} USD`\n"
-                    f"• Toplam İşlem: `{KASA['toplam_islem']}` (Başarılı: {KASA['basarili_islem']} | Zararlı: {KASA['zararli_islem']})\n"
-                    f"• Net Günlük Kâr/Zarar: `{KASA['gunluk_kar_zarar']:+.2f} USD`\n"
-                    f"-----------------------------------\n"
-                    f"🤖 Bot komisyonları düşerek net hesaplama yaptı."
-                )
-                telegram_mesaj_gonder(rapor)
-                gunsonu_raporu_gonderildi = True
-        else:
-            gunsonu_raporu_gonderildi = False
-
-        for symbol in TAKIP_EDILENLER:
-            try:
-                ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=50)
-                df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                ema50 = ta.trend.ema_indicator(df_4h['close'], window=50).iloc[-1]
-                ema200 = ta.trend.ema_indicator(df_4h['close'], window=200).iloc[-1]
-                ana_trend = "LONG" if ema50 > ema200 else "SHORT"
-
-                ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=30)
-                df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                
-                guncel_fiyat = df_15m['close'].iloc[-1]
-                rsi_15m = ta.momentum.rsi(df_15m['close'], window=14).iloc[-1]
-                
-                # AÇIK POZİSYON TAKİBİ
-                if symbol in ACIK_POZISYONLAR:
-                    poz = ACIK_POZISYONLAR[symbol]
-                    islem_boyutu = poz['boyut']
-                    toplam_pozisyon_degeri = islem_boyutu * KALDIRAC
-                    
-                    kapatilacak_mi = False
-                    brut_kar_zarar = 0.0
-                    durum_notu = ""
-
-                    if poz['yon'] == "LONG":
-                        if guncel_fiyat >= poz['tp']:
-                            brut_kar_zarar = islem_boyutu * HEDEF_YUZDESI * KALDIRAC
-                            durum_notu = "🎯 HEDEFE ULAŞILDI (TP)"
-                            kapatilacak_mi = True
-                        elif guncel_fiyat <= poz['sl']:
-                            brut_kar_zarar = - (islem_boyutu * STOP_YUZDESI * KALDIRAC)
-                            durum_notu = "🛑 STOP OLDU (SL)"
-                            kapatilacak_mi = True
-                        elif ana_trend == "SHORT":
-                            fark_yuzdesi = (guncel_fiyat - poz['giris']) / poz['giris']
-                            brut_kar_zarar = islem_boyutu * fark_yuzdesi * KALDIRAC
-                            durum_notu = "⚠️ RÜZGAR DÖNDÜ"
-                            kapatilacak_mi = True
-
-                    elif poz['yon'] == "SHORT":
-                        if guncel_fiyat <= poz['tp']:
-                            brut_kar_zarar = islem_boyutu * HEDEF_YUZDESI * KALDIRAC
-                            durum_notu = "🎯 HEDEFE ULAŞILDI (TP)"
-                            kapatilacak_mi = True
-                        elif guncel_fiyat >= poz['sl']:
-                            brut_kar_zarar = - (islem_boyutu * STOP_YUZDESI * KALDIRAC)
-                            durum_notu = "🛑 STOP OLDU (SL)"
-                            kapatilacak_mi = True
-                        elif ana_trend == "LONG":
-                            fark_yuzdesi = (poz['giris'] - guncel_fiyat) / poz['giris']
-                            brut_kar_zarar = islem_boyutu * fark_yuzdesi * KALDIRAC
-                            durum_notu = "⚠️ RÜZGAR DÖNDÜ"
-                            kapatilacak_mi = True
-
-                    if kapatilacak_mi:
-                        islem_komisyonu = toplam_pozisyon_degeri * KOMISYON_ORANI
-                        net_kar_zarar = brut_kar_zarar - islem_komisyonu
-                        
-                        KASA["guncel"] += net_kar_zarar
-                        KASA["gunluk_kar_zarar"] += net_kar_zarar
-                        KASA["toplam_ odenen_komisyon"] += islem_komisyonu
-                        KASA["toplam_islem"] += 1
-                        
-                        if net_kar_zarar > 0:
-                            KASA["basarili_islem"] += 1
-                        else:
-                            yeni_ders = f"{symbol} paritesinde RSI {poz.get('giris_rsi', 0):.1f} ile açılan {poz['yon']} işlemde komisyon sonrası zarar yazıldı."
-                            if yeni_ders not in KASA["ogrenilen_dersler"]:
-                                KASA["ogrenilen_dersler"].append(yeni_ders)
-                            KASA["zararli_islem"] += 1
-
-                        telegram_mesaj_gonder(
-                            f"{durum_notu} - *{symbol}*\n"
-                            f"• Brüt K/Z: `{brut_kar_zarar:+.2f} USD`\n"
-                            f"• Kesilen Komisyon: `-{islem_komisyonu:.2f} USD`\n"
-                            f"• *Net K/Z:* `{net_kar_zarar:+.2f} USD`\n"
-                            f"• Güncel Kasa: `{KASA['guncel']:.2f} USD`"
-                        )
-                        del ACIK_POZISYONLAR[symbol]
-                    continue
-
-                # YENİ SİNYAL ÜRETİMİ
-                if len(ACIK_POZISYONLAR) < 4:
-                    islem_butcesi = KASA["guncel"] * RISK_ORANI
-                    
-                    if ana_trend == "LONG" and rsi_15m < 45:
-                        tp = guncel_fiyat * (1 + HEDEF_YUZDESI)
-                        sl = guncel_fiyat * (1 - STOP_YUZDESI)
-                        ACIK_POZISYONLAR[symbol] = {"yon": "LONG", "giris": guncel_fiyat, "tp": tp, "sl": sl, "boyut": islem_butcesi, "giris_rsi": rsi_15m}
-                        telegram_mesaj_gonder(f"🚀 *YENİ LONG SİNYALİ*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• RSI: `{rsi_15m:.1f}`")
-                    
-                    elif ana_trend == "SHORT" and rsi_15m > 55:
-                        tp = guncel_fiyat * (1 - HEDEF_YUZDESI)
-                        sl = guncel_fiyat * (1 + STOP_YUZDESI)
-                        ACIK_POZISYONLAR[symbol] = {"yon": "SHORT", "giris": guncel_fiyat, "tp": tp, "sl": sl, "boyut": islem_butcesi, "giris_rsi": rsi_15m}
-                        telegram_mesaj_gonder(f"🩸 *YENİ SHORT SİNYALİ*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• RSI: `{rsi_15m:.1f}`")
-
-            except Exception as e:
-                print(f"❌ PİYASA TARAMA HATASI ({symbol}): {e}")
-            
-            time.sleep(2)
-            
-        time.sleep(180)
-
 if __name__ == "__main__":
-    print("🚀 Komisyonlu Kripto Ajanı başlatılıyor...")
+    print("🚀 Komisyonlu Kripto Ajanı Otomatik Tetikleme Modunda Başlatılıyor...")
     
-    # 1. İşçi: Web Sunucusu (Flask)
-    def web_sunucusunu_baslat():
-        port = int(os.environ.get("PORT", 5000))
-        app.run(host='0.0.0.0', port=port, use_reloader=False)
-        
-    t_web = threading.Thread(target=web_sunucusunu_baslat, daemon=True)
-    t_web.start()
-    
-    # 2. İşçi: Telegram Komut Dinleyicisi
     t_komut = threading.Thread(target=telegram_komutlari_dinle, daemon=True)
     t_komut.start()
     
-    # 3. İşçi: Piyasa Tarama ve Al-Sat Döngüsü (Artık bağımsız bir işçi!)
-    t_piyasa = threading.Thread(target=piyasayi_tara_ve_takip_et, daemon=True)
-    t_piyasa.start()
+    telegram_mesaj_gonder("🟢 Kripto Ajanı UptimeRobot Entegreli Olarak Aktif!")
     
-    telegram_mesaj_gonder("🟢 Komisyon Kesintili Kripto Ajanı Tamamen Thread Mimarisiyle Devrede!")
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, use_reloader=False)
     
-    # Ana thread'in kapanmasını önleyen sonsuz güvenlik döngüsü
-    while True:
-        time.sleep(1)
