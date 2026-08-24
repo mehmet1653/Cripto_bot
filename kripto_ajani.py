@@ -31,7 +31,6 @@ KASA = {
     "ogrenilen_dersler": []
 }
 
-# KALDIRAÇLI HEDEFLER (Telegram ekranında görünecek net yüzdeler)
 HEDEF_YUZDESI = 0.03    # %3.00 Kaldıraçlı Kâr Hedefi
 STOP_YUZDESI = 0.015    # %1.50 Kaldıraçlı Stop Sınırı
 RISK_ORANI = 0.25 
@@ -58,7 +57,6 @@ def home():
 # 🔄 ARKA PLAN TARAMA VE HASSAS TAKİP MOTORU
 # ==========================================
 def otomatik_arkaplan_tarayici():
-    print("🔄 Tam senkronize arka plan taraması çalışıyor (30sn aralıklarla)...")
     while True:
         try:
             disaridan_tarama_tetikle_internal()
@@ -133,7 +131,7 @@ def disaridan_tarama_tetikle_internal():
                     del ACIK_POZISYONLAR[symbol]
                 continue
 
-            # 2. YENİ SİNYAL ÜRETİMİ (Açık Pozisyon Yoksa)
+            # 2. YENİ SİNYAL ÜRETİMİ
             ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=50)
             df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             ema50 = ta.trend.ema_indicator(df_4h['close'], window=50).iloc[-1]
@@ -147,8 +145,6 @@ def disaridan_tarama_tetikle_internal():
             rsi_15m = ta.momentum.rsi(df_15m['close'], window=14).iloc[-1]
 
             islem_butcesi = KASA["guncel"] * RISK_ORANI
-            
-            # Coinin kendi fiyatında gereken hassas yüzde değişimi (Kaldıraça bölünüyor)
             fiyat_hedef_yuzdesi = HEDEF_YUZDESI / KALDIRAC
             fiyat_stop_yuzdesi = STOP_YUZDESI / KALDIRAC
 
@@ -192,6 +188,7 @@ def telegram_komutlari_dinle():
                     if "message" in veri and "text" in veri["message"]:
                         mesaj_metni = veri["message"]["text"].strip()
                         
+                        # 1. Kasa Güncelleme Komutu (/kasa 200)
                         if mesaj_metni.startswith("/kasa"):
                             parcalar = mesaj_metni.split()
                             if len(parcalar) > 1:
@@ -206,18 +203,85 @@ def telegram_komutlari_dinle():
                                 except ValueError:
                                     telegram_mesaj_gonder("⚠️ Örnek kullanım: `/kasa 500`")
                         
+                        # 2. ACİL TÜM POZİSYONLARI KAPATMA KOMUTU (/kapat)
+                        elif mesaj_metni == "/kapat":
+                            if not ACIK_POZISYONLAR:
+                                telegram_mesaj_gonder("📭 Zaten açık aktif pozisyon bulunmuyor.")
+                            else:
+                                toplam_kurtarilan_marjin = 0.0
+                                toplam_anlik_kar_zarar = 0.0
+                                kapatma_detaylari = "🚨 *ACİL KAPATMA RAPORU*\n\n"
+                                
+                                for sym, poz in list(ACIK_POZISYONLAR.items()):
+                                    try:
+                                        ticker = exchange.fetch_ticker(sym)
+                                        anlik_fiyat = ticker['last']
+                                        giris = poz['giris']
+                                        marjin = poz['marjin']
+                                        
+                                        if poz['yon'] == "LONG":
+                                            fark_yuzdesi = (anlik_fiyat - giris) / giris
+                                        else:
+                                            fark_yuzdesi = (giris - anlik_fiyat) / giris
+                                            
+                                        kaldiracli_kar_yuzdesi = fark_yuzdesi * KALDIRAC * 100
+                                        islem_kar_zarar = marjin * (kaldiracli_kar_yuzdesi / 100)
+                                        
+                                        toplam_kurtarilan_marjin += marjin
+                                        toplam_anlik_kar_zarar += islem_kar_zarar
+                                        
+                                        kapatma_detaylari += f"• *{sym}*: `{islem_kar_zarar:+.2f} USD`\n"
+                                    except:
+                                        toplam_kurtarilan_marjin += poz['marjin']
+
+                                KASA["guncel"] += toplam_kurtarilan_marjin + toplam_anlik_kar_zarar
+                                KASA["gunluk_kar_zarar"] += toplam_anlik_kar_zarar
+                                ACIK_POZISYONLAR.clear()
+                                
+                                kapatma_detaylari += f"\n• *Toplam Gerçekleşen K/Z:* `{toplam_anlik_kar_zarar:+.2f} USD`\n• *Yeni Nakit Kasa:* `{KASA['guncel']:.2f} USD`"
+                                telegram_mesaj_gonder(kapatma_detaylari)
+
+                        # 3. DURUM RAPORU (Anlık Toplam Varlık ve K/Z Dahil) (/durum)
                         elif mesaj_metni == "/durum":
+                            toplam_acik_kar_zarar = 0.0
+                            aktif_marjin_toplami = 0.0
+                            
+                            for sym, poz in ACIK_POZISYONLAR.items():
+                                try:
+                                    ticker = exchange.fetch_ticker(sym)
+                                    anlik_fiyat = ticker['last']
+                                    giris = poz['giris']
+                                    marjin = poz['marjin']
+                                    aktif_marjin_toplami += marjin
+                                    
+                                    if poz['yon'] == "LONG":
+                                        fark_yuzdesi = (anlik_fiyat - giris) / giris
+                                    else:
+                                        fark_yuzdesi = (giris - anlik_fiyat) / giris
+                                        
+                                    kaldiracli_kar_yuzdesi = fark_yuzdesi * KALDIRAC * 100
+                                    toplam_acik_kar_zarar += marjin * (kaldiracli_kar_yuzdesi / 100)
+                                except:
+                                    aktif_marjin_toplami += poz['marjin']
+
+                            toplam_varlik = KASA['guncel'] + aktif_marjin_toplami + toplam_acik_kar_zarar
+                            
                             dersler_str = "\n".join([f"• {d}" for d in KASA["ogrenilen_dersler"][-3:]]) if KASA["ogrenilen_dersler"] else "• Henüz ders yok."
                             durum_mesaj = (
                                 f"📊 *ANLIK İZOLE MARJİN RAPORU*\n"
                                 f"• Cüzdan Nakit Kasa: `{KASA['guncel']:.2f} USD`\n"
-                                f"• Açık Pozisyon: `{len(ACIK_POZISYONLAR)}`\n"
+                                f"• Açıkta Bağlı Marjin: `{aktif_marjin_toplami:.2f} USD`\n"
+                                f"• Açık Pozisyon Anlık K/Z: `{toplam_acik_kar_zarar:+.2f} USD`\n"
+                                f"-----------------------------------\n"
+                                f"💰 *TOPLAM PORTFÖY DEĞERİ: `{toplam_varlik:.2f} USD`*\n"
+                                f"• Açık Pozisyon Sayısı: `{len(ACIK_POZISYONLAR)}`\n"
                                 f"• Ödenen Komisyon: `{KASA['toplam_odenen_komisyon']:.2f} USD`\n"
                                 f"• Günlük Net K/Z: `{KASA['gunluk_kar_zarar']:+.2f} USD`\n\n"
                                 f"🧠 *Son Öğrenilenler:*\n{dersler_str}"
                             )
                             telegram_mesaj_gonder(durum_mesaj)
 
+                        # 4. POZİSYONLAR LİSTESİ (/pozisyonlar)
                         elif mesaj_metni == "/pozisyonlar":
                             if not ACIK_POZISYONLAR:
                                 telegram_mesaj_gonder("📭 Şu an açık aktif pozisyon bulunmuyor.")
@@ -227,7 +291,6 @@ def telegram_komutlari_dinle():
                                     try:
                                         ticker = exchange.fetch_ticker(sym)
                                         anlik_fiyat = ticker['last']
-                                        
                                         giris = poz['giris']
                                         marjin = poz['marjin']
                                         
@@ -238,7 +301,6 @@ def telegram_komutlari_dinle():
                                             
                                         kaldiracli_kar_yuzdesi = fark_yuzdesi * KALDIRAC * 100
                                         tahmini_kar_usd = marjin * (kaldiracli_kar_yuzdesi / 100)
-                                        
                                         durum_ikonu = "🟢" if tahmini_kar_usd >= 0 else "🔴"
                                         
                                         poz_mesaji += (
@@ -258,7 +320,7 @@ def telegram_komutlari_dinle():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print("🚀 Tam Senkronize Kripto Ajanı Başlatılıyor...")
+    print("🚀 Gelişmiş Kripto Ajanı Başlatılıyor...")
     
     t_komut = threading.Thread(target=telegram_komutlari_dinle, daemon=True)
     t_komut.start()
@@ -266,7 +328,7 @@ if __name__ == "__main__":
     t_tarama = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
     t_tarama.start()
     
-    telegram_mesaj_gonder("🟢 Bot Güncellendi! Telegram K/Z yüzdeleri ile TP/SL kapanış hedefleri %100 birebir eşitlendi.")
+    telegram_mesaj_gonder("🟢 Bot Güncellendi! Artık `/durum` komutunda açık pozisyonlardaki kâr/zarar dahil *Toplam Portföy Değeri* görünür ve `/kapat` komutuyla tüm işlemler acilen kapatılabilir.")
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
