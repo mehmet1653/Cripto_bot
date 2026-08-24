@@ -39,7 +39,10 @@ KASA = {
 
 KALDIRAC = 5
 RISK_ORANI = 0.20           
-KAR_HEDEF_YUZDE = 1.5       
+
+# 🛠️ YENİ LEHİMİZE ÇEVRİLEN ORANLAR:
+KAR_HEDEF_YUZDE = 2.5       # Kâr hedefi büyütüldü (%2.5)
+ZARAR_KES_YUZDE = 1.5       # Zarar sınırı daraltıldı (%1.5) -> Artık 1 kâr, 1 zararı rahatça finanse ediyor!
 KOMISYON_ORANI = 0.0005 
 
 def telegram_mesaj_gonder(mesaj):
@@ -57,7 +60,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Gate.io Anlık Scalping Grid Bot | Durum: {durum_str}"
+    return f"Gate.io Smart Scalp Pro Bot | Durum: {durum_str}"
 
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
@@ -75,7 +78,7 @@ def otomatik_arkaplan_tarayici():
                     
         except Exception as e:
             print(f"Tarama Hatası: {e}")
-        time.sleep(15)
+        time.sleep(10)
 
 def fonlama_ucretlerini_uygula():
     global KASA
@@ -134,6 +137,15 @@ def coklu_grid_yonetimi():
                     
                 kaldiracli_yuzde = fark_orani * KALDIRAC * 100
                 
+                # 🛡️ TRAILING STOP / BAŞA BAŞ KİLİTLEME MANTIĞI
+                # Eğer işlem %1.2 kâra ulaştıysa, stop'u giriş fiyatına çek (Zararı sıfırla)
+                if kaldiracli_yuzde >= 1.2 and not sistem.get("korumaya_alindi", False):
+                    sistem["korumaya_alindi"] = True
+                    telegram_mesaj_gonder(f"🛡️ *RİSK KİLİTTE*: `{symbol}` pozisyonu kâra geçti, stop başa baş noktaya sabitlendi!")
+
+                # Gerçek Stop Kontrolü (Eğer korumaya alındıysa stop %0, alınmadıysa -%1.5)
+                aktif_stop_limiti = 0.0 if sistem.get("korumaya_alindi", False) else -ZARAR_KES_YUZDE
+
                 if kaldiracli_yuzde >= KAR_HEDEF_YUZDE:
                     toplam_deger = marjin * KALDIRAC
                     komisyon = toplam_deger * KOMISYON_ORANI * 2 
@@ -147,35 +159,40 @@ def coklu_grid_yonetimi():
                     KASA["basarili_islem"] += 1
 
                     telegram_mesaj_gonder(
-                        f"🎯 *KÂR CEBE ATILDI!* - `{symbol}`\n"
+                        f"🎯 *ÜSTÜN KÂR CEBE ATILDI!* - `{symbol}`\n"
                         f"• Net K/Z: `{net_kz:+.2f} USD` (`%{kaldiracli_yuzde:.2f}`)\n"
-                        f"• Kesilen Komisyon: `{komisyon:.4f} USD`\n"
+                        f"• Komisyon Düşülmüş Saf Kazanç\n"
                         f"• Güncel Kasa: `{KASA['guncel']:.2f} USD`"
                     )
                     del AKTIF_GRID_SISTEMLERI[symbol]
                     
-                elif kaldiracli_yuzde <= -3.0:
+                elif kaldiracli_yuzde <= aktif_stop_limiti:
                     toplam_deger = marjin * KALDIRAC
                     komisyon = toplam_deger * KOMISYON_ORANI * 2
-                    zarar = marjin * 0.03
+                    
+                    # Eğer korumadaysa zarar 0, değilse belirlenen -%1.5
+                    zarar_orani_uygulanan = 0.0 if sistem.get("korumaya_alindi", False) else ZARAR_KES_YUZDE
+                    zarar = marjin * (zarar_orani_uygulanan / 100)
                     net_kz = -zarar - komisyon
                     
                     KASA["guncel"] = KASA["guncel"] + marjin + net_kz
                     KASA["gunluk_kar_zarar"] += net_kz
                     KASA["toplam_odenen_komisyon"] += komisyon
                     KASA["toplam_islem"] += 1
-                    KASA["zararli_islem"] += 1
-
-                    HAFIZA_KAYITLARI["zararli_islemler"].append({"symbol": symbol, "yon": yon, "zaman": su_an})
-                    HAFIZA_KAYITLARI["yasakli_yonler"][symbol] = {
-                        "yon": yon,
-                        "bitis_zamani": su_an + 1800  # Kısa vadede yasak süresini 30 dakikaya indirdik
-                    }
+                    
+                    if zarar_orani_uygulanan > 0:
+                        KASA["zararli_islem"] += 1
+                        HAFIZA_KAYITLARI["zararli_islemler"].append({"symbol": symbol, "yon": yon, "zaman": su_an})
+                        HAFIZA_KAYITLARI["yasakli_yonler"][symbol] = {
+                            "yon": yon,
+                            "bitis_zamani": su_an + 1200 # 20 dakika yasak
+                        }
+                        mesaj_detay = f"🛑 *KONTROLLÜ STOP* (Zarar: `{net_kz:+.2f} USD`)"
+                    else:
+                        mesaj_detay = f"🛡️ *BAŞA BAŞ KAPANDI (SIFIR ZARAR)*"
 
                     telegram_mesaj_gonder(
-                        f"🛑 *KONTROLLÜ STOP & HAFIZAYA KAYIT* - `{symbol}`\n"
-                        f"• Hata Analizi: `{yon} yönü 15m trendde ters kaldı.`\n"
-                        f"• Zarar (Komisyon Dahil): `{net_kz:+.2f} USD`\n"
+                        f"{mesaj_detay} - `{symbol}`\n"
                         f"• Kesilen Komisyon: `{komisyon:.4f} USD`"
                     )
                     del AKTIF_GRID_SISTEMLERI[symbol]
@@ -183,16 +200,13 @@ def coklu_grid_yonetimi():
 
             islem_butcesi = KASA["guncel"] * RISK_ORANI
             if symbol not in AKTIF_GRID_SISTEMLERI and KASA["guncel"] >= islem_butcesi:
-                # 🛠️ 15 DAKİKALIK ANLIK SCALPING ANALİZİ
                 ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=40)
                 df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 
-                # Kısa vadeli hızlı ortalamalar (EMA 7 ve EMA 21)
                 ema7 = ta.trend.ema_indicator(df_15m['close'], window=7).iloc[-1]
                 ema21 = ta.trend.ema_indicator(df_15m['close'], window=21).iloc[-1]
                 rsi15m = ta.momentum.rsi(df_15m['close'], window=14).iloc[-1]
                 
-                # Anlık 15m Yön Tayini
                 if ema7 >= ema21 and rsi15m >= 48:
                     grid_yonu = "LONG"
                 elif ema7 < ema21 and rsi15m <= 52:
@@ -204,20 +218,21 @@ def coklu_grid_yonetimi():
                     yasakli_bilgi = HAFIZA_KAYITLARI["yasakli_yonler"][symbol]
                     if yasakli_bilgi["yon"] == grid_yonu:
                         grid_yonu = "SHORT" if grid_yonu == "LONG" else "LONG"
-                        telegram_mesaj_gonder(f"🧠 *ANLIK HAFIZA FİLTRESİ*: `{symbol}` yönü 15m için `{grid_yonu}` olarak tersine çevrildi.")
+                        telegram_mesaj_gonder(f"🧠 *HAFIZA FİLTRESİ*: `{symbol}` ters yöne zorlandı -> `{grid_yonu}`")
 
                 KASA["guncel"] -= islem_butcesi
                 AKTIF_GRID_SISTEMLERI[symbol] = {
                     "yon": grid_yonu,
                     "merkez_fiyat": guncel_fiyat,
-                    "marjin": islem_butcesi
+                    "marjin": islem_butcesi,
+                    "korumaya_alindi": False
                 }
                 
                 telegram_mesaj_gonder(
-                    f"⚡ *15M ANLIK MİNİ GRID KURULDU*\n"
+                    f"⚡ *PRO SCALP AÇILDI (1:1.7 R/R)*\n"
                     f"• Parite: `{symbol}` ({grid_yonu} 5x)\n"
-                    f"• Giriş Fiyatı: `{guncel_fiyat:.2f}` | RSI(15m): `{rsi15m:.1f}`\n"
-                    f"• Marjin: `{islem_butcesi:.2f} USD`"
+                    f"• Fiyat: `{guncel_fiyat:.2f}` | RSI: `{rsi15m:.1f}`\n"
+                    f"• Hedef: `+%2.5` | Stop: `-%1.5`"
                 )
 
     except Exception as e:
@@ -243,7 +258,7 @@ def telegram_komutlari_dinle():
                         
                         if metin == "/baslat":
                             BOT_CALISIYOR_MU = True
-                            telegram_mesaj_gonder("🚀 *15 Dakikalık Anlık Scalping Botu Başlatıldı!*")
+                            telegram_mesaj_gonder("🚀 *Smart Scalp Pro Bot Aktif Edildi! (Kâr > Zarar Kurgusu)*")
 
                         elif metin == "/kapat":
                             BOT_CALISIYOR_MU = False
@@ -283,7 +298,6 @@ def telegram_komutlari_dinle():
 
                         elif metin == "/durum":
                             bagli = sum([p['marjin'] for p in AKTIF_GRID_SISTEMLERI.values()])
-                            
                             anlik_acik_kz = 0.0
                             for sym, p in AKTIF_GRID_SISTEMLERI.items():
                                 try:
@@ -299,15 +313,14 @@ def telegram_komutlari_dinle():
                             durum_str = "Çalışıyor 🟢" if BOT_CALISIYOR_MU else "Beklemede ⏸️"
                             
                             durum = (
-                                f"📊 *GÜNCEL 15M SCALPING RAPORU*\n"
+                                f"📊 *SMART SCALP PRO RAPORU*\n"
                                 f"• Durum: `{durum_str}`\n"
                                 f"• Nakit Kasa: `{KASA['guncel']:.2f} USD`\n"
                                 f"• Bağlı Marjin: `{bagli:.2f} USD`\n"
                                 f"• Anlık Açık K/Z: `{anlik_acik_kz:+.2f} USD`\n"
                                 f"💰 *Toplam Portföy: `{toplam_varlik:.2f} USD`*\n"
-                                f"• 💸 Toplam Kesilen Komisyon: `{KASA['toplam_odenen_komisyon']:.4f} USD`\n"
+                                f"• 💸 Komisyon: `{KASA['toplam_odenen_komisyon']:.4f} USD`\n"
                                 f"• Günlük Net K/Z: `{KASA['gunluk_kar_zarar']:+.2f} USD`\n"
-                                f"• Hafızadaki Hatalar: `{len(HAFIZA_KAYITLARI['zararli_islemler'])} adet`\n"
                                 f"• Başarılı: `{KASA['basarili_islem']}` | Zararlı: `{KASA['zararli_islem']}`"
                             )
                             telegram_mesaj_gonder(durum)
@@ -316,7 +329,7 @@ def telegram_komutlari_dinle():
                             if not AKTIF_GRID_SISTEMLERI:
                                 telegram_mesaj_gonder("📭 Aktif grid bulunmuyor.")
                             else:
-                                msg = "⚡ *ANLIK AKTİF MİNİ GRIDLER*\n\n"
+                                msg = "⚡ *PRO AKTİF POZİSYONLAR*\n\n"
                                 for sym, p in AKTIF_GRID_SISTEMLERI.items():
                                     try:
                                         t = exchange.fetch_ticker(sym)
@@ -327,8 +340,9 @@ def telegram_komutlari_dinle():
                                         kaldiracli_yuzde = fark_orani * KALDIRAC * 100
                                         tahmini_dolar = p['marjin'] * (kaldiracli_yuzde / 100)
                                         ikon = "🟢" if tahmini_dolar >= 0 else "🔴"
+                                        koruma_str = "🛡️ Korumada" if p.get("korumaya_alindi") else "⏳ Normal"
                                         
-                                        msg += f"{ikon} *{sym}* ({p['yon']} 5x)\n• Merkez: `{p['merkez_fiyat']:.2f}` | Anlık: `{curr:.2f}`\n• K/Z: `%{kaldiracli_yuzde:+.2f}` (`{tahmini_dolar:+.2f} USD`)\n-------------------\n"
+                                        msg += f"{ikon} *{sym}* ({p['yon']} 5x) - `{koruma_str}`\n• Merkez: `{p['merkez_fiyat']:.2f}` | Anlık: `{curr:.2f}`\n• K/Z: `%{kaldiracli_yuzde:+.2f}` (`{tahmini_dolar:+.2f} USD`)\n-------------------\n"
                                     except:
                                         pass
                                 telegram_mesaj_gonder(msg)
@@ -338,10 +352,10 @@ def telegram_komutlari_dinle():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print("🚀 15M Scalping Botu Aktif...")
+    print("🚀 Smart Scalp Pro Bot Aktif...")
     threading.Thread(target=telegram_komutlari_dinle, daemon=True).start()
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    telegram_mesaj_gonder("⚡ Bot güncellendi! Artık 4h yerine tamamen **15 dakikalık (15m)** anlık scalping mumlarına ve EMA 7/21 hızına göre yön tayin ediyor.")
+    telegram_mesaj_gonder("⚡ Bot güncellendi! Kâr hedefi %2.5, Zarar kes %1.5 yapıldı ve Başa Baş Koruma (Trailing Stop) eklendi.")
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
