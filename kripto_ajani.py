@@ -31,8 +31,9 @@ KASA = {
     "ogrenilen_dersler": []
 }
 
-HEDEF_YUZDESI = 0.03
-STOP_YUZDESI = 0.015
+# KALDIRAÇLI HEDEFLER (Telegram ekranında görünecek net yüzdeler)
+HEDEF_YUZDESI = 0.03    # %3.00 Kaldıraçlı Kâr Hedefi
+STOP_YUZDESI = 0.015    # %1.50 Kaldıraçlı Stop Sınırı
 RISK_ORANI = 0.25 
 KALDIRAC = 5
 KOMISYON_ORANI = 0.0008 
@@ -51,29 +52,25 @@ def telegram_mesaj_gonder(mesaj):
 
 @app.route('/')
 def home():
-    return "🟢 Hızlı Tarama Modlu Gate.io Kripto Ajanı Aktif!"
-
-@app.route('/tara')
-def disaridan_tarama_tetikle():
-    return "⚡ Manuel tetikleme noktası.", 200
+    return "🟢 Tam Senkronize Gate.io Kripto Ajanı Aktif!"
 
 # ==========================================
-# 🔄 HIZLANDIRILMIŞ ARKA PLAN TARAMA MOTORU
+# 🔄 ARKA PLAN TARAMA VE HASSAS TAKİP MOTORU
 # ==========================================
 def otomatik_arkaplan_tarayici():
-    print("🔄 Arka plan tarama döngüsü başlatıldı (30 saniye aralıklarla)...")
+    print("🔄 Tam senkronize arka plan taraması çalışıyor (30sn aralıklarla)...")
     while True:
         try:
             disaridan_tarama_tetikle_internal()
         except Exception as e:
             print(f"Arka plan tarama hatası: {e}")
-        time.sleep(30) # 3 dakika yerine her 30 saniyede bir tarar ve pozisyonları kontrol eder
+        time.sleep(30)
 
 def disaridan_tarama_tetikle_internal():
     global KASA
     try:
         for symbol in TAKIP_EDILENLER:
-            # AÇIK POZİSYON KONTROLÜ (Öncelikli olarak her döngüde anlık fiyatla kontrol edilir)
+            # 1. AÇIK POZİSYON KONTROLÜ
             if symbol in ACIK_POZISYONLAR:
                 try:
                     ticker = exchange.fetch_ticker(symbol)
@@ -91,20 +88,21 @@ def disaridan_tarama_tetikle_internal():
 
                 if poz['yon'] == "LONG":
                     if guncel_fiyat >= poz['tp']:
-                        brut_kar_zarar = marjin * HEDEF_YUZDESI * KALDIRAC
+                        brut_kar_zarar = marjin * HEDEF_YUZDESI
                         durum_notu = "🎯 HEDEFE ULAŞILDI (TP)"
                         kapatilacak_mi = True
                     elif guncel_fiyat <= poz['sl']:
-                        brut_kar_zarar = - (marjin * STOP_YUZDESI * KALDIRAC)
+                        brut_kar_zarar = - (marjin * STOP_YUZDESI)
                         durum_notu = "🛑 STOP OLDU (SL)"
                         kapatilacak_mi = True
+
                 elif poz['yon'] == "SHORT":
                     if guncel_fiyat <= poz['tp']:
-                        brut_kar_zarar = marjin * HEDEF_YUZDESI * KALDIRAC
+                        brut_kar_zarar = marjin * HEDEF_YUZDESI
                         durum_notu = "🎯 HEDEFE ULAŞILDI (TP)"
                         kapatilacak_mi = True
                     elif guncel_fiyat >= poz['sl']:
-                        brut_kar_zarar = - (marjin * STOP_YUZDESI * KALDIRAC)
+                        brut_kar_zarar = - (marjin * STOP_YUZDESI)
                         durum_notu = "🛑 STOP OLDU (SL)"
                         kapatilacak_mi = True
 
@@ -135,7 +133,7 @@ def disaridan_tarama_tetikle_internal():
                     del ACIK_POZISYONLAR[symbol]
                 continue
 
-            # YENİ SİNYAL ÜRETİMİ (Açık pozisyon yoksa trend taraması yapılır)
+            # 2. YENİ SİNYAL ÜRETİMİ (Açık Pozisyon Yoksa)
             ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=50)
             df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             ema50 = ta.trend.ema_indicator(df_4h['close'], window=50).iloc[-1]
@@ -150,18 +148,22 @@ def disaridan_tarama_tetikle_internal():
 
             islem_butcesi = KASA["guncel"] * RISK_ORANI
             
+            # Coinin kendi fiyatında gereken hassas yüzde değişimi (Kaldıraça bölünüyor)
+            fiyat_hedef_yuzdesi = HEDEF_YUZDESI / KALDIRAC
+            fiyat_stop_yuzdesi = STOP_YUZDESI / KALDIRAC
+
             if symbol not in ACIK_POZISYONLAR and KASA["guncel"] >= islem_butcesi:
                 if ana_trend == "LONG" and rsi_15m < 45:
                     KASA["guncel"] -= islem_butcesi
-                    tp = guncel_fiyat * (1 + HEDEF_YUZDESI)
-                    sl = guncel_fiyat * (1 - STOP_YUZDESI)
+                    tp = guncel_fiyat * (1 + fiyat_hedef_yuzdesi)
+                    sl = guncel_fiyat * (1 - fiyat_stop_yuzdesi)
                     ACIK_POZISYONLAR[symbol] = {"yon": "LONG", "giris": guncel_fiyat, "tp": tp, "sl": sl, "marjin": islem_butcesi, "giris_rsi": rsi_15m}
                     telegram_mesaj_gonder(f"🚀 *YENİ LONG SİNYALİ*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• Kalan Kasa: `{KASA['guncel']:.2f} USD`")
                 
                 elif ana_trend == "SHORT" and rsi_15m > 55:
                     KASA["guncel"] -= islem_butcesi
-                    tp = guncel_fiyat * (1 - HEDEF_YUZDESI)
-                    sl = guncel_fiyat * (1 + STOP_YUZDESI)
+                    tp = guncel_fiyat * (1 - fiyat_hedef_yuzdesi)
+                    sl = guncel_fiyat * (1 + fiyat_stop_yuzdesi)
                     ACIK_POZISYONLAR[symbol] = {"yon": "SHORT", "giris": guncel_fiyat, "tp": tp, "sl": sl, "marjin": islem_butcesi, "giris_rsi": rsi_15m}
                     telegram_mesaj_gonder(f"🩸 *YENİ SHORT SİNYALİ*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• Kalan Kasa: `{KASA['guncel']:.2f} USD`")
 
@@ -256,7 +258,7 @@ def telegram_komutlari_dinle():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print("🚀 Hızlı Arka Plan Tarayıcılı Kripto Ajanı Başlatılıyor...")
+    print("🚀 Tam Senkronize Kripto Ajanı Başlatılıyor...")
     
     t_komut = threading.Thread(target=telegram_komutlari_dinle, daemon=True)
     t_komut.start()
@@ -264,7 +266,7 @@ if __name__ == "__main__":
     t_tarama = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
     t_tarama.start()
     
-    telegram_mesaj_gonder("🟢 Bot Hızlı Modda Aktif! Arka plan taraması her 30 saniyede bir çalışacak şekilde güncellendi.")
+    telegram_mesaj_gonder("🟢 Bot Güncellendi! Telegram K/Z yüzdeleri ile TP/SL kapanış hedefleri %100 birebir eşitlendi.")
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
