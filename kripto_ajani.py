@@ -13,7 +13,8 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-exchange = ccxt.binance({
+# Binance yerine Gate.io entegrasyonu (Render IP kısıtlamalarına takılmaz)
+exchange = ccxt.gate({
     'enableRateLimit': True,
     'options': {'defaultType': 'spot'}
 })
@@ -47,7 +48,7 @@ def telegram_mesaj_gonder(mesaj):
     payload = {"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}
     try:
         requests.post(url, json=payload, timeout=10)
-    except Exception as e:
+    except Exception as.e:
         print(f"Telegram Gönderme Hatası: {e}")
 
 # ==========================================
@@ -55,7 +56,7 @@ def telegram_mesaj_gonder(mesaj):
 # ==========================================
 @app.route('/')
 def home():
-    return "🟢 Komisyon Hesaplamalı Kripto Ajanı Uykusuz ve Aktif!"
+    return "🟢 Gate.io Komisyon Hesaplamalı Kripto Ajanı Aktif!"
 
 @app.route('/tara')
 def disaridan_tarama_tetikle():
@@ -65,7 +66,7 @@ def disaridan_tarama_tetikle():
 # 🔄 ARKA PLANDA SÜREKLİ DÖNEN TARAMA MOTORU
 # ==========================================
 def otomatik_arkaplan_tarayici():
-    print("🔄 Arka plan tarama döngüsü başlatıldı...")
+    print("🔄 Arka plan tarama döngüsü başlatıldı (Gate.io)...")
     while True:
         try:
             disaridan_tarama_tetikle_internal()
@@ -147,7 +148,7 @@ def disaridan_tarama_tetikle_internal():
                         KASA["zararli_islem"] += 1
 
                     telegram_mesaj_gonder(
-                        f"{durum_notu} - *{symbol}*\n"
+                        f"{durum_notu} - *{symbol}* (Gate.io)\n"
                         f"• Brüt K/Z: `{brut_kar_zarar:+.2f} USD`\n"
                         f"• Kesilen Komisyon: `-{islem_komisyonu:.2f} USD`\n"
                         f"• *Net K/Z:* `{net_kar_zarar:+.2f} USD`\n"
@@ -164,13 +165,13 @@ def disaridan_tarama_tetikle_internal():
                     tp = guncel_fiyat * (1 + HEDEF_YUZDESI)
                     sl = guncel_fiyat * (1 - STOP_YUZDESI)
                     ACIK_POZISYONLAR[symbol] = {"yon": "LONG", "giris": guncel_fiyat, "tp": tp, "sl": sl, "boyut": islem_butcesi, "giris_rsi": rsi_15m}
-                    telegram_mesaj_gonder(f"🚀 *YENİ LONG SİNYALİ*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• RSI: `{rsi_15m:.1f}`")
+                    telegram_mesaj_gonder(f"🚀 *YENİ LONG SİNYALİ (Gate.io)*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• RSI: `{rsi_15m:.1f}`")
                 
                 elif ana_trend == "SHORT" and rsi_15m > 55:
                     tp = guncel_fiyat * (1 - HEDEF_YUZDESI)
                     sl = guncel_fiyat * (1 + STOP_YUZDESI)
                     ACIK_POZISYONLAR[symbol] = {"yon": "SHORT", "giris": guncel_fiyat, "tp": tp, "sl": sl, "boyut": islem_butcesi, "giris_rsi": rsi_15m}
-                    telegram_mesaj_gonder(f"🩸 *YENİ SHORT SİNYALİ*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• RSI: `{rsi_15m:.1f}`")
+                    telegram_mesaj_gonder(f"🩸 *YENİ SHORT SİNYALİ (Gate.io)*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• RSI: `{rsi_15m:.1f}`")
 
     except Exception as e:
         print(f"❌ Tarama Hatası: {e}")
@@ -213,7 +214,7 @@ def telegram_komutlari_dinle():
                         elif mesaj_metni == "/durum":
                             dersler_str = "\n".join([f"• {d}" for d in KASA["ogrenilen_dersler"][-3:]]) if KASA["ogrenilen_dersler"] else "• Henüz ders yok."
                             durum_mesaj = (
-                                f"📊 *ANLIK DURUM & KOMİSYON RAPORU*\n"
+                                f"📊 *ANLIK DURUM & KOMİSYON RAPORU (Gate.io)*\n"
                                 f"• Güncel Kasa: `{KASA['guncel']:.2f} USD`\n"
                                 f"• Ödenen Komisyon: `{KASA['toplam_ odenen_komisyon']:.2f} USD`\n"
                                 f"• Açık Pozisyon: `{len(ACIK_POZISYONLAR)}`\n"
@@ -227,7 +228,7 @@ def telegram_komutlari_dinle():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print("🚀 Komisyonlu Kripto Ajanı Başlatılıyor...")
+    print("🚀 Gate.io Tabanlı Komisyonlu Kripto Ajanı Başlatılıyor...")
     
     # 1. Telegram komut dinleyicisini başlat
     t_komut = threading.Thread(target=telegram_komutlari_dinle, daemon=True)
@@ -237,8 +238,8 @@ if __name__ == "__main__":
     t_tarama = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
     t_tarama.start()
     
-    telegram_mesaj_gonder("🟢 Kripto Ajanı Tamamen Aktif ve Görevde!")
+    telegram_mesaj_gonder("🟢 Gate.io Entegreli Kripto Ajanı Tamamen Aktif ve Görevde!")
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
-                                
+    
