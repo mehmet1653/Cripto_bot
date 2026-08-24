@@ -113,9 +113,10 @@ def telegram_komutlari_dinle():
                                 f"🧠 *Son Öğrenilenler:*\n{dersler_str}"
                             )
                             telegram_mesaj_gonder(durum_mesaj)
-                except Exception as e:
+                        except Exception as e:
             print(f"❌ TELEGRAM DİNLEME HATASI: {e}")
-        time.sleep(2)
+
+                        time.sleep(2)
 
 # ==========================================
 # 🧠 PİYASA TARAMA VE KOMİSYONLU HESAPLAMA (İŞÇİ 2)
