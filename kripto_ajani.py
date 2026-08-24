@@ -35,7 +35,6 @@ KASA = {
 KALDIRAC = 5
 RISK_ORANI = 0.30       # Kasanın %30'u ile ızgara alanı açılır
 GRID_YUZDE_GENISLIK = 0.08  # Anlık fiyatın %8 altı ve üstü kanal aralığı
-GRID_SAYISI = 12        # Kademe sayısı
 KOMISYON_ORANI = 0.0008 
 
 def telegram_mesaj_gonder(mesaj):
@@ -72,7 +71,7 @@ def grid_tarama_ve_yonetim():
             ticker = exchange.fetch_ticker(symbol)
             guncel_fiyat = ticker['last']
 
-            # 1. MEVCUT GRID KANALINI KONTROL ET (Zarar-Kes veya Kâr Al Sınırları)
+            # 1. MEVCUT GRID KANALINI KONTROL ET
             if symbol in ACIK_GRID_POZISYONLARI:
                 grid_veri = ACIK_GRID_POZISYONLARI[symbol]
                 alt_sinir = grid_veri['alt_sinir']
@@ -83,11 +82,10 @@ def grid_tarama_ve_yonetim():
                 kapat_nedeni = ""
                 brut_kar = 0.0
 
-                # Kanal dışına taşma kontrolü (Stop / Sınır aşımı)
                 if yon == "LONG_GRID":
                     if guncel_fiyat <= alt_sinir:
-                        kapat_nedeni = "🛑 ALT KANAL K KIRILDI (STOP)"
-                        brut_kar = - (marjin * 0.04) # %4 max kanal zararı
+                        kapat_nedeni = "🛑 ALT KANAL KIRILDI (STOP)"
+                        brut_kar = - (marjin * 0.04)
                     elif guncel_fiyat >= ust_sinir:
                         kapat_nedeni = "🎯 ÜST KANAL HEDEFE ULAŞTI (TP)"
                         brut_kar = marjin * 0.04
@@ -125,17 +123,15 @@ def grid_tarama_ve_yonetim():
                     del ACIK_GRID_POZISYONLARI[symbol]
                 continue
 
-            # 2. YENİ GRID KANALI KURULUMU (Açık Grid Yoksa)
+            # 2. YENİ GRID KANALI KURULUMU
             islem_butcesi = KASA["guncel"] * RISK_ORANI
             if symbol not in ACIK_GRID_POZISYONLARI and KASA["guncel"] >= islem_butcesi:
-                # 4h Trend yönüne göre Grid Modu Seçimi (Trend Yönlü Grid)
                 ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=30)
                 df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 ema50 = ta.trend.ema_indicator(df_4h['close'], window=30).iloc[-1]
                 ema200 = ta.trend.ema_indicator(df_4h['close'], window=min(len(df_4h), 100)).iloc[-1]
                 
                 grid_turu = "LONG_GRID" if ema50 >= ema200 else "SHORT_GRID"
-                
                 alt_sinir = guncel_fiyat * (1 - GRID_YUZDE_GENISLIK)
                 ust_sinir = guncel_fiyat * (1 + GRID_YUZDE_GENISLIK)
                 
@@ -204,7 +200,6 @@ def telegram_komutlari_dinle():
                         elif metin == "/durum":
                             bagli = sum([p['marjin'] for p in ACIK_GRID_POZISYONLARI.values()])
                             toplam_varlik = KASA['guncel'] + bagli
-                            
                             dersler = "\n".join([f"• {d}" for d in KASA["ogrenilen_dersler"][-3:]]) if KASA["ogrenilen_dersler"] else "• Yok"
                             durum = (
                                 f"📊 *5X GRİD KANAL RAPORU*\n"
@@ -217,6 +212,38 @@ def telegram_komutlari_dinle():
                             )
                             telegram_mesaj_gonder(durum)
 
+                        elif metin == "/pozisyonlar":
+                            if not ACIK_GRID_POZISYONLARI:
+                                telegram_mesaj_gonder("📭 Şu an açık aktif grid kanalı bulunmuyor.")
+                            else:
+                                poz_mesaji = "📈 *ANLIK 5X GRİD KANALLARI*\n\n"
+                                for sym, poz in ACIK_GRID_POZISYONLARI.items():
+                                    try:
+                                        ticker = exchange.fetch_ticker(sym)
+                                        anlik_fiyat = ticker['last']
+                                        giris = poz['giris']
+                                        marjin = poz['marjin']
+                                        
+                                        if poz['yon'] == "LONG_GRID":
+                                            fark_yuzdesi = ((anlik_fiyat - giris) / giris) * 100
+                                        else:
+                                            fark_yuzdesi = ((giris - anlik_fiyat) / giris) * 100
+                                            
+                                        kaldiracli_yuzde = fark_yuzdesi * KALDIRAC
+                                        tahmini_kar = marjin * (kaldiracli_yuzde / 100)
+                                        ikon = "🟢" if tahmini_kar >= 0 else "🔴"
+                                        
+                                        poz_mesaji += (
+                                            f"{ikon} *{sym}* ({poz['yon']} 5x)\n"
+                                            f"• Giriş: `{giris:.2f}` | Anlık: `{anlik_fiyat:.2f}`\n"
+                                            f"• Alt Sınır: `{poz['alt_sinir']:.2f}` | Üst Sınır: `{poz['ust_sinir']:.2f}`\n"
+                                            f"• Kanal K/Z: `%{kaldiracli_yuzde:+.2f}` (`{tahmini_kar:+.2f} USD`)\n"
+                                            f"-----------------------------------\n"
+                                        )
+                                    except Exception as ex:
+                                        poz_mesaji += f"⚠️ *{sym}* veri alınamadı: {ex}\n"
+                                telegram_mesaj_gonder(poz_mesaji)
+
         except Exception as e:
             print(f"Telegram dinleme hata: {e}")
         time.sleep(2)
@@ -225,8 +252,8 @@ if __name__ == "__main__":
     print("🚀 5x Grid Bot Başlatılıyor...")
     threading.Thread(target=telegram_komutlari_dinle, daemon=True).start()
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    telegram_mesaj_gonder("🟢 Bot 5x Grid (Izgara) Stratejisine güncellendi! Kanallar kuruluyor.")
+    telegram_mesaj_gonder("🟢 Bot güncellendi! Artık `/pozisyonlar` komutu aktif.")
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
-    
+                            
