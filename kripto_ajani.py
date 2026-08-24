@@ -21,7 +21,6 @@ TAKIP_EDILENLER = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'BNB/USDT:
 AKTIF_GRID_SISTEMLERI = {}
 BOT_CALISIYOR_MU = False
 
-# 🧠 ÖĞRENEN HAFIZA SİSTEMİ
 HAFIZA_KAYITLARI = {
     "zararli_islemler": [],
     "yasakli_yonler": {}
@@ -60,9 +59,6 @@ def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
     return f"Gate.io Çoklu Kademe Grid Bot | Durum: {durum_str}"
 
-# ==========================================
-# 🔄 ARKA PLAN & GRID DÖNGÜSÜ
-# ==========================================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
     son_funding_zamani = time.time()
@@ -126,7 +122,6 @@ def coklu_grid_yonetimi():
             ticker = exchange.fetch_ticker(symbol)
             guncel_fiyat = ticker['last']
 
-            # 1. VAR OLAN KADEMELERİ KONTROL ET
             if symbol in AKTIF_GRID_SISTEMLERI:
                 sistem = AKTIF_GRID_SISTEMLERI[symbol]
                 merkez = sistem['merkez_fiyat']
@@ -139,7 +134,6 @@ def coklu_grid_yonetimi():
                     
                 kaldiracli_yuzde = fark_orani * KALDIRAC * 100
                 
-                # Hedef Kâr (TP)
                 if kaldiracli_yuzde >= KAR_HEDEF_YUZDE:
                     toplam_deger = marjin * KALDIRAC
                     komisyon = toplam_deger * KOMISYON_ORANI * 2 
@@ -155,11 +149,11 @@ def coklu_grid_yonetimi():
                     telegram_mesaj_gonder(
                         f"🎯 *KÂR CEBE ATILDI!* - `{symbol}`\n"
                         f"• Net K/Z: `{net_kz:+.2f} USD` (`%{kaldiracli_yuzde:.2f}`)\n"
+                        f"• Kesilen Komisyon: `{komisyon:.4f} USD`\n"
                         f"• Güncel Kasa: `{KASA['guncel']:.2f} USD`"
                     )
                     del AKTIF_GRID_SISTEMLERI[symbol]
                     
-                # Kontrollü Stop (SL)
                 elif kaldiracli_yuzde <= -3.0:
                     toplam_deger = marjin * KALDIRAC
                     komisyon = toplam_deger * KOMISYON_ORANI * 2
@@ -180,13 +174,13 @@ def coklu_grid_yonetimi():
 
                     telegram_mesaj_gonder(
                         f"🛑 *KONTROLLÜ STOP & HAFIZAYA KAYIT* - `{symbol}`\n"
-                        f"• Hata Analizi: `{yon} yönü hatalı trend tespiti yaptı, hafızaya işlendi.`\n"
-                        f"• Zarar: `{net_kz:+.2f} USD` | Kasa: `{KASA['guncel']:.2f} USD`"
+                        f"• Hata Analizi: `{yon} yönü hatalı trend tespiti yaptı.`\n"
+                        f"• Zarar (Komisyon Dahil): `{net_kz:+.2f} USD`\n"
+                        f"• Kesilen Komisyon: `{komisyon:.4f} USD`"
                     )
                     del AKTIF_GRID_SISTEMLERI[symbol]
                 continue
 
-            # 2. YENİ KASA BÜTÇESİYLE MİNİ GRID BAŞLAT
             islem_butcesi = KASA["guncel"] * RISK_ORANI
             if symbol not in AKTIF_GRID_SISTEMLERI and KASA["guncel"] >= islem_butcesi:
                 ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=30)
@@ -201,7 +195,7 @@ def coklu_grid_yonetimi():
                     yasakli_bilgi = HAFIZA_KAYITLARI["yasakli_yonler"][symbol]
                     if yasakli_bilgi["yon"] == grid_yonu:
                         grid_yonu = "SHORT" if grid_yonu == "LONG" else "LONG"
-                        telegram_mesaj_gonder(f"🧠 *HAFIZA DEVREDE*: `{symbol}` için geçmiş hatalar analiz edildi, yön `{grid_yonu}` olarak adapte edildi.")
+                        telegram_mesaj_gonder(f"🧠 *HAFIZA DEVREDE*: `{symbol}` yönü `{grid_yonu}` olarak adapte edildi.")
 
                 KASA["guncel"] -= islem_butcesi
                 AKTIF_GRID_SISTEMLERI[symbol] = {
@@ -211,7 +205,7 @@ def coklu_grid_yonetimi():
                 }
                 
                 telegram_mesaj_gonder(
-                    f"⚡ *YENİ MİNİ GRID KURULDU (HAFIZA DESTEKLİ)*\n"
+                    f"⚡ *YENİ MİNİ GRID KURULDU*\n"
                     f"• Parite: `{symbol}` ({grid_yonu} 5x)\n"
                     f"• Giriş Fiyatı: `{guncel_fiyat:.2f}`\n"
                     f"• Marjin: `{islem_butcesi:.2f} USD`"
@@ -220,9 +214,6 @@ def coklu_grid_yonetimi():
     except Exception as e:
         print(f"Grid Yönetim Hata: {e}")
 
-# ==========================================
-# 📥 TELEGRAM KOMUTLARI
-# ==========================================
 def telegram_komutlari_dinle():
     global KASA, AKTIF_GRID_SISTEMLERI, BOT_CALISIYOR_MU, HAFIZA_KAYITLARI
     son_id = 0
@@ -243,7 +234,7 @@ def telegram_komutlari_dinle():
                         
                         if metin == "/baslat":
                             BOT_CALISIYOR_MU = True
-                            telegram_mesaj_gonder("🚀 *Öğrenen Hafıza Sistemli Grid Botu Başlatıldı!*")
+                            telegram_mesaj_gonder("🚀 *Bot Başlatıldı!*")
 
                         elif metin == "/kapat":
                             BOT_CALISIYOR_MU = False
@@ -257,8 +248,7 @@ def telegram_komutlari_dinle():
                                     marjin = p['marjin']
                                     
                                     fark_orani = (curr - merkez) / merkez
-                                    if p['yon'] == "SHORT": 
-                                        fark_orani = -fark_orani
+                                    if p['yon'] == "SHORT": fark_orani = -fark_orani
                                         
                                     kaldiracli_yuzde = fark_orani * KALDIRAC * 100
                                     brut_tutar = marjin * (kaldiracli_yuzde / 100)
@@ -273,22 +263,18 @@ def telegram_komutlari_dinle():
                                     KASA["gunluk_kar_zarar"] += net_durum
                                     KASA["toplam_odenen_komisyon"] += komisyon
                                     KASA["toplam_islem"] += 1
-                                    if net_durum >= 0:
-                                        KASA["basarili_islem"] += 1
-                                    else:
-                                        KASA["zararli_islem"] += 1
+                                    if net_durum >= 0: KASA["basarili_islem"] += 1
+                                    else: KASA["zararli_islem"] += 1
                                 except:
                                     toplam_gercek_iade += p['marjin']
                                     
                             KASA["guncel"] += toplam_gercek_iade
                             AKTIF_GRID_SISTEMLERI.clear()
-                            
                             telegram_mesaj_gonder(f"🚨 *Tüm Kanallar Kapatıldı*\n• Güncel Nakit Kasa: `{KASA['guncel']:.2f} USD`")
 
                         elif metin == "/durum":
                             bagli = sum([p['marjin'] for p in AKTIF_GRID_SISTEMLERI.values()])
                             
-                            # Anlık açık pozisyonların toplam kâr/zararını hesapla
                             anlik_acik_kz = 0.0
                             for sym, p in AKTIF_GRID_SISTEMLERI.items():
                                 try:
@@ -304,14 +290,15 @@ def telegram_komutlari_dinle():
                             durum_str = "Çalışıyor 🟢" if BOT_CALISIYOR_MU else "Beklemede ⏸️"
                             
                             durum = (
-                                f"📊 *GÜNCEL ÖĞRENEN GRID RAPORU*\n"
+                                f"📊 *GÜNCEL GRID RAPORU*\n"
                                 f"• Durum: `{durum_str}`\n"
                                 f"• Nakit Kasa: `{KASA['guncel']:.2f} USD`\n"
                                 f"• Bağlı Marjin: `{bagli:.2f} USD`\n"
                                 f"• Anlık Açık K/Z: `{anlik_acik_kz:+.2f} USD`\n"
                                 f"💰 *Toplam Portföy: `{toplam_varlik:.2f} USD`*\n"
+                                f"• 💸 Toplam Kesilen Komisyon: `{KASA['toplam_odenen_komisyon']:.4f} USD`\n"
                                 f"• Günlük Net K/Z: `{KASA['gunluk_kar_zarar']:+.2f} USD`\n"
-                                f"• Kayıtlı Hata Hafızası: `{len(HAFIZA_KAYITLARI['zararli_islemler'])} adet`\n"
+                                f"• Hafızadaki Hatalar: `{len(HAFIZA_KAYITLARI['zararli_islemler'])} adet`\n"
                                 f"• Başarılı: `{KASA['basarili_islem']}` | Zararlı: `{KASA['zararli_islem']}`"
                             )
                             telegram_mesaj_gonder(durum)
@@ -326,8 +313,7 @@ def telegram_komutlari_dinle():
                                         t = exchange.fetch_ticker(sym)
                                         curr = t['last']
                                         fark_orani = (curr - p['merkez_fiyat']) / p['merkez_fiyat']
-                                        if p['yon'] == "SHORT": 
-                                            fark_orani = -fark_orani
+                                        if p['yon'] == "SHORT": fark_orani = -fark_orani
                                             
                                         kaldiracli_yuzde = fark_orani * KALDIRAC * 100
                                         tahmini_dolar = p['marjin'] * (kaldiracli_yuzde / 100)
@@ -343,10 +329,10 @@ def telegram_komutlari_dinle():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print("🚀 Gelişmiş Hafıza Sistemli Bot Devrede...")
+    print("🚀 Bot Aktif...")
     threading.Thread(target=telegram_komutlari_dinle, daemon=True).start()
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    telegram_mesaj_gonder("⚡ Bot güncellendi! `/durum` komutuna anlık açık kâr/zarar dahil edildi.")
+    telegram_mesaj_gonder("⚡ Bot güncellendi! Artık `/durum` raporunda ödenen toplam komisyon miktarını da görebilirsin.")
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
