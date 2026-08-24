@@ -21,10 +21,10 @@ TAKIP_EDILENLER = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'BNB/USDT:
 AKTIF_GRID_SISTEMLERI = {}
 BOT_CALISIYOR_MU = False
 
-# 🧠 ÖĞRENEN HAFIZA SİSTEMİ (Geçmiş hataları ve dersleri tutar)
+# 🧠 ÖĞRENEN HAFIZA SİSTEMİ
 HAFIZA_KAYITLARI = {
-    "zararli_islemler": [],  # [{symbol, yon, neden, zaman}]
-    "yasakli_yonler": {}     # {symbol: {"yon": "LONG", "bitis_tzamani": timestamp}}
+    "zararli_islemler": [],
+    "yasakli_yonler": {}
 }
 
 KASA = {
@@ -73,7 +73,7 @@ def otomatik_arkaplan_tarayici():
                 coklu_grid_yonetimi()
                 
                 su_an = time.time()
-                if su_an - son_funding_zamani >= 14400: # 4 Saat
+                if su_an - son_funding_zamani >= 14400:
                     fonlama_ucretlerini_uygula()
                     son_funding_zamani = su_an
                     
@@ -115,7 +115,6 @@ def coklu_grid_yonetimi():
     try:
         su_an = time.time()
         
-        # Süresi dolan yasaklı yönleri temizle (Öğrenme süresi bitince tekrar şans tanır)
         for sym in list(HAFIZA_KAYITLARI["yasakli_yonler"].keys()):
             if su_an > HAFIZA_KAYITLARI["yasakli_yonler"][sym]["bitis_zamani"]:
                 del HAFIZA_KAYITLARI["yasakli_yonler"][sym]
@@ -160,7 +159,7 @@ def coklu_grid_yonetimi():
                     )
                     del AKTIF_GRID_SISTEMLERI[symbol]
                     
-                # Kontrollü Stop ve Hafızaya Kayıt (Öğrenme Mekanizması)
+                # Kontrollü Stop (SL)
                 elif kaldiracli_yuzde <= -3.0:
                     toplam_deger = marjin * KALDIRAC
                     komisyon = toplam_deger * KOMISYON_ORANI * 2
@@ -173,9 +172,7 @@ def coklu_grid_yonetimi():
                     KASA["toplam_islem"] += 1
                     KASA["zararli_islem"] += 1
 
-                    # 🧠 HAFIZAYA İŞLE: Bu parite bu yönde hata verdi, ders çıkarıldı!
                     HAFIZA_KAYITLARI["zararli_islemler"].append({"symbol": symbol, "yon": yon, "zaman": su_an})
-                    # Bu coinde bu yönü 1 saat boyunca cezalı/yasaklı konuma al (yanlış trendde ısrar etmesin)
                     HAFIZA_KAYITLARI["yasakli_yonler"][symbol] = {
                         "yon": yon,
                         "bitis_zamani": su_an + 3600 
@@ -189,7 +186,7 @@ def coklu_grid_yonetimi():
                     del AKTIF_GRID_SISTEMLERI[symbol]
                 continue
 
-            # 2. YENİ KASA BÜTÇESİYLE MİNİ GRID BAŞLAT (HAFIZA FİLTRELİ)
+            # 2. YENİ KASA BÜTÇESİYLE MİNİ GRID BAŞLAT
             islem_butcesi = KASA["guncel"] * RISK_ORANI
             if symbol not in AKTIF_GRID_SISTEMLERI and KASA["guncel"] >= islem_butcesi:
                 ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=30)
@@ -198,14 +195,11 @@ def coklu_grid_yonetimi():
                 ema50 = ta.trend.ema_indicator(df_4h['close'], window=20).iloc[-1]
                 ema200 = ta.trend.ema_indicator(df_4h['close'], window=min(len(df_4h), 28)).iloc[-1]
                 
-                # Standart Trend Analizi
                 grid_yonu = "LONG" if ema50 >= ema200 else "SHORT"
                 
-                # 🧠 HAFIZA KONTROLÜ: Bot daha önce bu yönde bu paritede yanıldı mı?
                 if symbol in HAFIZA_KAYITLARI["yasakli_yonler"]:
                     yasakli_bilgi = HAFIZA_KAYITLARI["yasakli_yonler"][symbol]
                     if yasakli_bilgi["yon"] == grid_yonu:
-                        # Hata tekrarlanmasın diye ters yöne dön veya güvenli olması için pas geç
                         grid_yonu = "SHORT" if grid_yonu == "LONG" else "LONG"
                         telegram_mesaj_gonder(f"🧠 *HAFIZA DEVREDE*: `{symbol}` için geçmiş hatalar analiz edildi, yön `{grid_yonu}` olarak adapte edildi.")
 
@@ -293,17 +287,31 @@ def telegram_komutlari_dinle():
 
                         elif metin == "/durum":
                             bagli = sum([p['marjin'] for p in AKTIF_GRID_SISTEMLERI.values()])
-                            toplam_varlik = KASA['guncel'] + bagli
+                            
+                            # Anlık açık pozisyonların toplam kâr/zararını hesapla
+                            anlik_acik_kz = 0.0
+                            for sym, p in AKTIF_GRID_SISTEMLERI.items():
+                                try:
+                                    t = exchange.fetch_ticker(sym)
+                                    curr = t['last']
+                                    fark = (curr - p['merkez_fiyat']) / p['merkez_fiyat']
+                                    if p['yon'] == "SHORT": fark = -fark
+                                    anlik_acik_kz += p['marjin'] * (fark * KALDIRAC)
+                                except:
+                                    pass
+
+                            toplam_varlik = KASA['guncel'] + bagli + anlik_acik_kz
                             durum_str = "Çalışıyor 🟢" if BOT_CALISIYOR_MU else "Beklemede ⏸️"
                             
                             durum = (
-                                f"📊 *ÖĞRENEN GRID RAPORU*\n"
+                                f"📊 *GÜNCEL ÖĞRENEN GRID RAPORU*\n"
                                 f"• Durum: `{durum_str}`\n"
                                 f"• Nakit Kasa: `{KASA['guncel']:.2f} USD`\n"
                                 f"• Bağlı Marjin: `{bagli:.2f} USD`\n"
+                                f"• Anlık Açık K/Z: `{anlik_acik_kz:+.2f} USD`\n"
                                 f"💰 *Toplam Portföy: `{toplam_varlik:.2f} USD`*\n"
-                                f"• Kayıtlı Hata Hafızası: `{len(HAFIZA_KAYITLARI['zararli_islemler'])} adet`\n"
                                 f"• Günlük Net K/Z: `{KASA['gunluk_kar_zarar']:+.2f} USD`\n"
+                                f"• Kayıtlı Hata Hafızası: `{len(HAFIZA_KAYITLARI['zararli_islemler'])} adet`\n"
                                 f"• Başarılı: `{KASA['basarili_islem']}` | Zararlı: `{KASA['zararli_islem']}`"
                             )
                             telegram_mesaj_gonder(durum)
@@ -335,11 +343,11 @@ def telegram_komutlari_dinle():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print("🚀 Öğrenen Hafıza Sistemli Bot Devrede...")
+    print("🚀 Gelişmiş Hafıza Sistemli Bot Devrede...")
     threading.Thread(target=telegram_komutlari_dinle, daemon=True).start()
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    telegram_mesaj_gonder("⚡ Bot güncellendi! Hatalardan ders çıkaran ve yön filtreleyen 'Öğrenen Hafıza' entegre edildi. Başlatmak için `/baslat` yazabilirsin.")
+    telegram_mesaj_gonder("⚡ Bot güncellendi! `/durum` komutuna anlık açık kâr/zarar dahil edildi.")
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
-                                        
+    
