@@ -38,7 +38,7 @@ KASA = {
 }
 
 KALDIRAC = 5
-RISK_ORANI = 0.25           # 🔥 KASAYI TAM 4 E PARÇAYA BÖLÜYORUZ (%25)
+RISK_ORANI = 0.25           # Tüm kasayı 4 eşit izole parçaya bölme (%25)
 
 # KADEMELİ HEDEFLER
 ILK_HEDEF_YUZDE = 1.5       
@@ -61,7 +61,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Gate.io İzole 4'lü Scalp Bot | Durum: {durum_str}"
+    return f"Gate.io Akıllı Piyasa Analizli Scalp Bot | Durum: {durum_str}"
 
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
@@ -138,7 +138,7 @@ def coklu_grid_yonetimi():
                     
                 kaldiracli_yuzde = fark_orani * KALDIRAC * 100
                 
-                # 1. KADEMELİ KÂR AL (Yarısı Satılır)
+                # 1. KADEMELİ KÂR AL
                 if kaldiracli_yuzde >= ILK_HEDEF_YUZDE and not sistem.get("ilk_hedef_alindi", False):
                     sistem["ilk_hedef_alindi"] = True
                     
@@ -208,28 +208,61 @@ def coklu_grid_yonetimi():
                     del AKTIF_GRID_SISTEMLERI[symbol]
                 continue
 
-            # 🔥 İŞLEM BAŞI 4'E BÖLÜNMÜŞ İZOLE BÜTÇE (Anlık Kasanın %25'i)
+            # 🔥 PROFESYONEL PİYASA ANALİZİ & TESTERE (RANGE) KONTROLÜ
             islem_butcesi = KASA["guncel"] * RISK_ORANI
             if symbol not in AKTIF_GRID_SISTEMLERI and KASA["guncel"] >= islem_butcesi:
-                ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=40)
+                ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                 df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 
+                # Gösterge Hesaplamaları
                 ema7 = ta.trend.ema_indicator(df_15m['close'], window=7).iloc[-1]
                 ema21 = ta.trend.ema_indicator(df_15m['close'], window=21).iloc[-1]
                 rsi15m = ta.momentum.rsi(df_15m['close'], window=14).iloc[-1]
                 
-                if ema7 >= ema21 and rsi15m >= 48:
-                    grid_yonu = "LONG"
-                elif ema7 < ema21 and rsi15m <= 52:
-                    grid_yonu = "SHORT"
-                else:
-                    grid_yonu = "LONG" if rsi15m > 50 else "SHORT"
+                # Bollinger Bantları (Testere Tespiti İçin)
+                bollinger = ta.volatility.BollingerBands(df_15m['close'], window=20, window_dev=2)
+                bb_upper = bollinger.bollinger_hband().iloc[-1]
+                bb_lower = bollinger.bollinger_lband().iloc[-1]
+                bb_mavg = bollinger.bollinger_mavg().iloc[-1]
                 
+                # ATR (Volatilite Ölçümü)
+                atr = ta.volatility.AverageTrueRange(df_15m['high'], df_15m['low'], df_15m['close'], window=14).average_true_range().iloc[-1]
+                fiyat_atr_orani = atr / guncel_fiyat * 100  # Volatilite yüzdesi
+
+                # PİYASA DURUM ANALİZİ
+                piyasa_durumu = "NORMAL"
+                grid_yonu = None
+
+                # 1. TESTERE (RANGE) TESPİTİ: Bollinger bantları dar ve ATR düşükse piyasa yataydır!
+                bant_genisligi = (bb_upper - bb_lower) / bb_mavg * 100
+                if bant_genisligi < 1.2 or fiyat_atr_orani < 0.15:
+                    piyasa_durumu = "TESTERE (YATAY)"
+                    # Testere piyasasında uçlardan tepki oyna (Mean Reversion)
+                    if guncel_fiyat >= bb_upper * 0.998 and rsi15m > 62:
+                        grid_yonu = "SHORT" # Üst banda çarptı, aşağı dönecek
+                    elif guncel_fiyat <= bb_lower * 1.002 and rsi15m < 38:
+                        grid_yonu = "LONG"  # Alt banda çarptı, yukarı dönecek
+                    else:
+                        continue # Testere ortadaysa sakın işlem açma, komisyondan koru!
+
+                else:
+                    # 2. TREND PİYASASI: Güçlü hareket varsa EMA ve RSI ile yön seç
+                    piyasa_durumu = "TREND"
+                    if ema7 > ema21 and rsi15m > 50 and rsi15m < 75:
+                        grid_yonu = "LONG"
+                    elif ema7 < ema21 and rsi15m < 50 and rsi15m > 25:
+                        grid_yonu = "SHORT"
+                    else:
+                        continue # Yön net değilse bekle
+
+                if not grid_yonu:
+                    continue
+
+                # Hafıza Filtresi Kontrolü
                 if symbol in HAFIZA_KAYITLARI["yasakli_yonler"]:
                     yasakli_bilgi = HAFIZA_KAYITLARI["yasakli_yonler"][symbol]
                     if yasakli_bilgi["yon"] == grid_yonu:
-                        grid_yonu = "SHORT" if grid_yonu == "LONG" else "LONG"
-                        telegram_mesaj_gonder(f"🧠 *HAFIZA FİLTRESİ*: `{symbol}` ters yöne çevrildi -> `{grid_yonu}`")
+                        continue # Yasaklı yöndeyse bu sinyali atla
 
                 KASA["guncel"] -= islem_butcesi
                 AKTIF_GRID_SISTEMLERI[symbol] = {
@@ -240,10 +273,11 @@ def coklu_grid_yonetimi():
                 }
                 
                 telegram_mesaj_gonder(
-                    f"⚡ *İZOLE 4'LÜ BÖLME AÇILDI (%25 Bütçe)*\n"
-                    f"• Parite: `{symbol}` ({grid_yonu} 5x)\n"
-                    f"• İzole Marjin: `{islem_butcesi:.2f} USD`\n"
-                    f"• Fiyat: `{guncel_fiyat:.2f}` | RSI: `{rsi15m:.1f}`"
+                    f"🧠 *AKILLI ANALİZ & İŞLEM AÇILDI*\n"
+                    f"• Parite: `{symbol}` ({grid_yonu} 5x İzole)\n"
+                    f"• Piyasa Modu: `{piyasa_durumu}`\n"
+                    f"• Fiyat: `{guncel_fiyat:.2f}` | RSI: `{rsi15m:.1f}`\n"
+                    f"• İzole Marjin: `{islem_butcesi:.2f} USD`"
                 )
 
     except Exception as e:
@@ -269,7 +303,7 @@ def telegram_komutlari_dinle():
                         
                         if metin == "/baslat":
                             BOT_CALISIYOR_MU = True
-                            telegram_mesaj_gonder("🚀 *İzole 4 Parçalı Scalp Bot Aktif! (Tüm Kasa Kullanımda)*")
+                            telegram_mesaj_gonder("🚀 *Akıllı Analiz Botu Aktif! (Testere ve Trend Filtreli)*")
 
                         elif metin == "/kapat":
                             BOT_CALISIYOR_MU = False
@@ -324,7 +358,7 @@ def telegram_komutlari_dinle():
                             durum_str = "Çalışıyor 🟢" if BOT_CALISIYOR_MU else "Beklemede ⏸️"
                             
                             durum = (
-                                f"📊 *İZOLE 4'LÜ SCALP RAPORU*\n"
+                                f"📊 *AKILLI ANALİZ RAPORU*\n"
                                 f"• Durum: `{durum_str}`\n"
                                 f"• Nakit Kasa: `{KASA['guncel']:.2f} USD`\n"
                                 f"• Bağlı İzole Marjin: `{bagli:.2f} USD`\n"
@@ -340,7 +374,7 @@ def telegram_komutlari_dinle():
                             if not AKTIF_GRID_SISTEMLERI:
                                 telegram_mesaj_gonder("📭 Aktif pozisyon bulunmuyor.")
                             else:
-                                msg = "⚡ *İZOLE 4'LÜ AKTİF POZİSYONLAR*\n\n"
+                                msg = "⚡ *AKILLI AKTİF POZİSYONLAR*\n\n"
                                 for sym, p in AKTIF_GRID_SISTEMLERI.items():
                                     try:
                                         t = exchange.fetch_ticker(sym)
@@ -363,11 +397,11 @@ def telegram_komutlari_dinle():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print("🚀 İzole 4'lü Scalp Bot Aktif...")
+    print("🚀 Akıllı Piyasa Analizli Bot Aktif...")
     threading.Thread(target=telegram_komutlari_dinle, daemon=True).start()
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    telegram_mesaj_gonder("⚡ Bot güncellendi! Kasa tam 4 eşit parçaya bölünerek (%25 izole marjin ile) tüm paralere aktif olarak dağıtıldı.")
+    telegram_mesaj_gonder("⚡ Bot güncellendi! Artık piyasanın testere mi yoksa trend mi olduğunu analiz ediyor; testeredeyse bant uçlarından tepki (Mean Reversion) oynuyor, kararsızsa hiç bulaşmıyor.")
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
-    
+                                    
