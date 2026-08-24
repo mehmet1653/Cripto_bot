@@ -113,10 +113,9 @@ def telegram_komutlari_dinle():
                                 f"🧠 *Son Öğrenilenler:*\n{dersler_str}"
                             )
                             telegram_mesaj_gonder(durum_mesaj)
-                        except Exception as e:
+        except Exception as e:
             print(f"❌ TELEGRAM DİNLEME HATASI: {e}")
-
-                        time.sleep(2)
+        time.sleep(2)
 
 # ==========================================
 # 🧠 PİYASA TARAMA VE KOMİSYONLU HESAPLAMA (İŞÇİ 2)
@@ -228,7 +227,7 @@ def piyasayi_tara_ve_takip_et():
                         del ACIK_POZISYONLAR[symbol]
                     continue
 
-                # YENİ SİNYAL ÜRETİMİ (RSI Aralıkları Genişletildi: LONG < 45, SHORT > 55)
+                # YENİ SİNYAL ÜRETİMİ
                 if len(ACIK_POZISYONLAR) < 4:
                     islem_butcesi = KASA["guncel"] * RISK_ORANI
                     
@@ -244,9 +243,8 @@ def piyasayi_tara_ve_takip_et():
                         ACIK_POZISYONLAR[symbol] = {"yon": "SHORT", "giris": guncel_fiyat, "tp": tp, "sl": sl, "boyut": islem_butcesi, "giris_rsi": rsi_15m}
                         telegram_mesaj_gonder(f"🩸 *YENİ SHORT SİNYALİ*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• RSI: `{rsi_15m:.1f}`")
 
-                        except Exception as e:
+            except Exception as e:
                 print(f"❌ PİYASA TARAMA HATASI ({symbol}): {e}")
-    
             
             time.sleep(2)
             
@@ -265,7 +263,7 @@ if __name__ == "__main__":
     t_komut = threading.Thread(target=telegram_komutlari_dinle, daemon=True)
     t_komut.start()
     
-    telegram_mesaj_gonder("🟢 Komisyon Kesintili Kripto Ajanı Devrede ve Genişletilmiş Filtrelerle Taramaya Başladı!")
+    telegram_mesaj_gonder("🟢 Komisyon Kesintili Kripto Ajanı Devrede ve Hata Takipli Modda Başladı!")
     
     piyasayi_tara_ve_takip_et()
     
