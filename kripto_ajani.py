@@ -17,10 +17,6 @@ app = Flask(__name__)
 def home():
     return "🟢 Komisyon Hesaplamalı Kripto Ajanı Aktif!"
 
-def run_web():
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
-    
 # ==========================================
 # ⚙️ AYARLAR VE HAFIZA (KOMİSYON DAHİL)
 # ==========================================
@@ -253,17 +249,24 @@ def piyasayi_tara_ve_takip_et():
 if __name__ == "__main__":
     print("🚀 Komisyonlu Kripto Ajanı başlatılıyor...")
     
+    # 1. İşçi: Web Sunucusu (Flask)
     def web_sunucusunu_baslat():
         port = int(os.environ.get("PORT", 5000))
-        app.run(host='0.0.0.0', port=port)
+        app.run(host='0.0.0.0', port=port, use_reloader=False)
         
     t_web = threading.Thread(target=web_sunucusunu_baslat, daemon=True)
     t_web.start()
     
+    # 2. İşçi: Telegram Komut Dinleyicisi
     t_komut = threading.Thread(target=telegram_komutlari_dinle, daemon=True)
     t_komut.start()
     
-    telegram_mesaj_gonder("🟢 Komisyon Kesintili Kripto Ajanı Devrede ve Hata Takipli Modda Başladı!")
+    # 3. İşçi: Piyasa Tarama ve Al-Sat Döngüsü (Artık bağımsız bir işçi!)
+    t_piyasa = threading.Thread(target=piyasayi_tara_ve_takip_et, daemon=True)
+    t_piyasa.start()
     
-    piyasayi_tara_ve_takip_et()
+    telegram_mesaj_gonder("🟢 Komisyon Kesintili Kripto Ajanı Tamamen Thread Mimarisiyle Devrede!")
     
+    # Ana thread'in kapanmasını önleyen sonsuz güvenlik döngüsü
+    while True:
+        time.sleep(1)
