@@ -37,7 +37,7 @@ KASA = {
     "toplam_odenmis_funding": 0.0
 }
 
-KALDIRAC = 5
+KALDIRAC = 10
 
 # KADEMELİ HEDEFLER
 ILK_HEDEF_YUZDE = 1.5       
