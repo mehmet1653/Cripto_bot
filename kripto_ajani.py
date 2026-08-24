@@ -24,7 +24,7 @@ ACIK_POZISYONLAR = {}
 
 KASA = {
     "baslangic": 100.0,
-    "guncel": 100.0,
+    "guncel": 100.0, # Toplam cüzdan bakiyesi (Nakit + Açık Pozisyon Marjinleri)
     "toplam_islem": 0,
     "basarili_islem": 0,
     "zararli_islem": 0,
@@ -35,7 +35,7 @@ KASA = {
 
 HEDEF_YUZDESI = 0.03
 STOP_YUZDESI = 0.015
-RISK_ORANI = 0.25
+RISK_ORANI = 0.25 # Kasazın %25'i her işlem için marjin olarak ayrılır
 KALDIRAC = 5
 KOMISYON_ORANI = 0.0008 
 
@@ -56,7 +56,7 @@ def telegram_mesaj_gonder(mesaj):
 # ==========================================
 @app.route('/')
 def home():
-    return "🟢 Gate.io Komisyon Hesaplamalı Kripto Ajanı Aktif!"
+    return "🟢 İzole Marjin Mantıklı Gate.io Kripto Ajanı Aktif!"
 
 @app.route('/tara')
 def disaridan_tarama_tetikle():
@@ -66,7 +66,7 @@ def disaridan_tarama_tetikle():
 # 🔄 ARKA PLANDA SÜREKLİ DÖNEN TARAMA MOTORU
 # ==========================================
 def otomatik_arkaplan_tarayici():
-    print("🔄 Arka plan tarama döngüsü başlatıldı (Gate.io)...")
+    print("🔄 Arka plan tarama döngüsü başlatıldı (İzole Marjin Modu)...")
     while True:
         try:
             disaridan_tarama_tetikle_internal()
@@ -93,8 +93,8 @@ def disaridan_tarama_tetikle_internal():
             # AÇIK POZİSYON TAKİBİ
             if symbol in ACIK_POZISYONLAR:
                 poz = ACIK_POZISYONLAR[symbol]
-                islem_boyutu = poz['boyut']
-                toplam_pozisyon_degeri = islem_boyutu * KALDIRAC
+                marjin = poz['marjin']
+                toplam_pozisyon_degeri = marjin * KALDIRAC
                 
                 kapatilacak_mi = False
                 brut_kar_zarar = 0.0
@@ -102,31 +102,31 @@ def disaridan_tarama_tetikle_internal():
 
                 if poz['yon'] == "LONG":
                     if guncel_fiyat >= poz['tp']:
-                        brut_kar_zarar = islem_boyutu * HEDEF_YUZDESI * KALDIRAC
+                        brut_kar_zarar = marjin * HEDEF_YUZDESI * KALDIRAC
                         durum_notu = "🎯 HEDEFE ULAŞILDI (TP)"
                         kapatilacak_mi = True
                     elif guncel_fiyat <= poz['sl']:
-                        brut_kar_zarar = - (islem_boyutu * STOP_YUZDESI * KALDIRAC)
+                        brut_kar_zarar = - (marjin * STOP_YUZDESI * KALDIRAC)
                         durum_notu = "🛑 STOP OLDU (SL)"
                         kapatilacak_mi = True
                     elif ana_trend == "SHORT":
                         fark_yuzdesi = (guncel_fiyat - poz['giris']) / poz['giris']
-                        brut_kar_zarar = islem_boyutu * fark_yuzdesi * KALDIRAC
+                        brut_kar_zarar = marjin * fark_yuzdesi * KALDIRAC
                         durum_notu = "⚠️ RÜZGAR DÖNDÜ"
                         kapatilacak_mi = True
 
                 elif poz['yon'] == "SHORT":
                     if guncel_fiyat <= poz['tp']:
-                        brut_kar_zarar = islem_boyutu * HEDEF_YUZDESI * KALDIRAC
+                        brut_kar_zarar = marjin * HEDEF_YUZDESI * KALDIRAC
                         durum_notu = "🎯 HEDEFE ULAŞILDI (TP)"
                         kapatilacak_mi = True
                     elif guncel_fiyat >= poz['sl']:
-                        brut_kar_zarar = - (islem_boyutu * STOP_YUZDESI * KALDIRAC)
+                        brut_kar_zarar = - (marjin * STOP_YUZDESI * KALDIRAC)
                         durum_notu = "🛑 STOP OLDU (SL)"
                         kapatilacak_mi = True
                     elif ana_trend == "LONG":
                         fark_yuzdesi = (poz['giris'] - guncel_fiyat) / poz['giris']
-                        brut_kar_zarar = islem_boyutu * fark_yuzdesi * KALDIRAC
+                        brut_kar_zarar = marjin * fark_yuzdesi * KALDIRAC
                         durum_notu = "⚠️ RÜZGAR DÖNDÜ"
                         kapatilacak_mi = True
 
@@ -134,7 +134,8 @@ def disaridan_tarama_tetikle_internal():
                     islem_komisyonu = toplam_pozisyon_degeri * KOMISYON_ORANI
                     net_kar_zarar = brut_kar_zarar - islem_komisyonu
                     
-                    KASA["guncel"] += net_kar_zarar
+                    # İzole mantık: Kilitlenen marjin kasaya geri döner, üzerine net kar/zarar eklenir ve komisyon düşülür
+                    KASA["guncel"] = KASA["guncel"] + marjin + net_kar_zarar
                     KASA["gunluk_kar_zarar"] += net_kar_zarar
                     KASA["toplam_ odenen_komisyon"] += islem_komisyonu
                     KASA["toplam_islem"] += 1
@@ -148,30 +149,35 @@ def disaridan_tarama_tetikle_internal():
                         KASA["zararli_islem"] += 1
 
                     telegram_mesaj_gonder(
-                        f"{durum_notu} - *{symbol}* (Gate.io)\n"
+                        f"{durum_notu} - *{symbol}* (İzole Kapatma)\n"
                         f"• Brüt K/Z: `{brut_kar_zarar:+.2f} USD`\n"
                         f"• Kesilen Komisyon: `-{islem_komisyonu:.2f} USD`\n"
                         f"• *Net K/Z:* `{net_kar_zarar:+.2f} USD`\n"
-                        f"• Güncel Kasa: `{KASA['guncel']:.2f} USD`"
+                        f"• Güncel Cüzdan Kasası: `{KASA['guncel']:.2f} USD`"
                     )
                     del ACIK_POZISYONLAR[symbol]
                 continue
 
-            # YENİ SİNYAL ÜRETİMİ
-            if len(ACIK_POZISYONLAR) < 4:
-                islem_butcesi = KASA["guncel"] * RISK_ORANI
-                
+            # YENİ SİNYAL ÜRETİMİ (İzole Marjin Kontrollü)
+            # Anlık cüzdandaki paraya göre risk bütçesi hesaplanır
+            islem_butcesi = KASA["guncel"] * RISK_ORANI
+            
+            if symbol not in ACIK_POZISYONLAR and KASA["guncel"] >= islem_butcesi:
                 if ana_trend == "LONG" and rsi_15m < 45:
+                    # İzole mantık: Marjin kasadan anında düşer
+                    KASA["guncel"] -= islem_butcesi
                     tp = guncel_fiyat * (1 + HEDEF_YUZDESI)
                     sl = guncel_fiyat * (1 - STOP_YUZDESI)
-                    ACIK_POZISYONLAR[symbol] = {"yon": "LONG", "giris": guncel_fiyat, "tp": tp, "sl": sl, "boyut": islem_butcesi, "giris_rsi": rsi_15m}
-                    telegram_mesaj_gonder(f"🚀 *YENİ LONG SİNYALİ (Gate.io)*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• RSI: `{rsi_15m:.1f}`")
+                    ACIK_POZISYONLAR[symbol] = {"yon": "LONG", "giris": guncel_fiyat, "tp": tp, "sl": sl, "marjin": islem_butcesi, "giris_rsi": rsi_15m}
+                    telegram_mesaj_gonder(f"🚀 *YENİ LONG SİNYALİ (İzole)*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Kesilen Marjin: `{islem_butcesi:.2f} USD` (5x)\n• Kalan Kasa: `{KASA['guncel']:.2f} USD`\n• RSI: `{rsi_15m:.1f}`")
                 
                 elif ana_trend == "SHORT" and rsi_15m > 55:
+                    # İzole mantık: Marjin kasadan anında düşer
+                    KASA["guncel"] -= islem_butcesi
                     tp = guncel_fiyat * (1 - HEDEF_YUZDESI)
                     sl = guncel_fiyat * (1 + STOP_YUZDESI)
-                    ACIK_POZISYONLAR[symbol] = {"yon": "SHORT", "giris": guncel_fiyat, "tp": tp, "sl": sl, "boyut": islem_butcesi, "giris_rsi": rsi_15m}
-                    telegram_mesaj_gonder(f"🩸 *YENİ SHORT SİNYALİ (Gate.io)*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Marjin: `{islem_butcesi:.2f} USD` (5x)\n• RSI: `{rsi_15m:.1f}`")
+                    ACIK_POZISYONLAR[symbol] = {"yon": "SHORT", "giris": guncel_fiyat, "tp": tp, "sl": sl, "marjin": islem_butcesi, "giris_rsi": rsi_15m}
+                    telegram_mesaj_gonder(f"🩸 *YENİ SHORT SİNYALİ (İzole)*\n• Parite: `{symbol}`\n• Fiyat: `{guncel_fiyat:.2f}`\n• Kesilen Marjin: `{islem_butcesi:.2f} USD` (5x)\n• Kalan Kasa: `{KASA['guncel']:.2f} USD`\n• RSI: `{rsi_15m:.1f}`")
 
     except Exception as e:
         print(f"❌ Tarama Hatası: {e}")
@@ -180,7 +186,7 @@ def disaridan_tarama_tetikle_internal():
 # 📥 TELEGRAM KOMUTLARI DİNLEYİCİSİ
 # ==========================================
 def telegram_komutlari_dinle():
-    global KASA
+    global KASA, ACIK_POZISYONLAR
     son_guncelleme_id = 0
     while True:
         try:
@@ -207,17 +213,18 @@ def telegram_komutlari_dinle():
                                     KASA["guncel"] = yeni_bakiye
                                     KASA["gunluk_kar_zarar"] = 0.0
                                     KASA["toplam_ odenen_komisyon"] = 0.0
-                                    telegram_mesaj_gonder(f"✅ *Kasa Sıfırlandı ve Güncellendi!*\n• Yeni Başlangıç: `{yeni_bakiye} USD`")
+                                    ACIK_POZISYONLAR.clear() # Kasayı sıfırlarken açık pozisyonları da temizle
+                                    telegram_mesaj_gonder(f"✅ *Kasa Sıfırlandı ve Güncellendi!*\n• Yeni Bakiye: `{yeni_bakiye} USD`")
                                 except ValueError:
                                     telegram_mesaj_gonder("⚠️ Örnek kullanım: `/kasa 500`")
                         
                         elif mesaj_metni == "/durum":
                             dersler_str = "\n".join([f"• {d}" for d in KASA["ogrenilen_dersler"][-3:]]) if KASA["ogrenilen_dersler"] else "• Henüz ders yok."
                             durum_mesaj = (
-                                f"📊 *ANLIK DURUM & KOMİSYON RAPORU (Gate.io)*\n"
-                                f"• Güncel Kasa: `{KASA['guncel']:.2f} USD`\n"
+                                f"📊 *ANLIK İZOLE MARJİN RAPORU*\n"
+                                f"• Cüzdan Nakit Kasa: `{KASA['guncel']:.2f} USD`\n"
+                                f"• Açık Pozisyon Sayısı: `{len(ACIK_POZISYONLAR)}`\n"
                                 f"• Ödenen Komisyon: `{KASA['toplam_ odenen_komisyon']:.2f} USD`\n"
-                                f"• Açık Pozisyon: `{len(ACIK_POZISYONLAR)}`\n"
                                 f"• Toplam İşlem: `{KASA['toplam_islem']}`\n"
                                 f"• Günlük Net K/Z: `{KASA['gunluk_kar_zarar']:+.2f} USD`\n\n"
                                 f"🧠 *Son Öğrenilenler:*\n{dersler_str}"
@@ -228,17 +235,15 @@ def telegram_komutlari_dinle():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print("🚀 Gate.io Tabanlı Komisyonlu Kripto Ajanı Başlatılıyor...")
+    print("🚀 İzole Marjin Destekli Kripto Ajanı Başlatılıyor...")
     
-    # 1. Telegram komut dinleyicisini başlat
     t_komut = threading.Thread(target=telegram_komutlari_dinle, daemon=True)
     t_komut.start()
     
-    # 2. Arka plan periyodik piyasa tarayıcısını başlat
     t_tarama = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
     t_tarama.start()
     
-    telegram_mesaj_gonder("🟢 Gate.io Entegreli Kripto Ajanı Tamamen Aktif ve Görevde!")
+    telegram_mesaj_gonder("🟢 İzole Marjin Modu Aktif! Pozisyon açıldığında bakiye anlık düşecek.")
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
