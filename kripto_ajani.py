@@ -59,7 +59,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Gate.io Dolar Bazlı Bot | Durum: {durum_str}"
+    return f"Gate.io Kapat Komutlu Bot | Durum: {durum_str}"
 
 def set_leverage_safely(symbol, leverage):
     try:
@@ -148,6 +148,34 @@ async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = False
     await update.message.reply_text("⏸️ *Bot durduruldu.*", parse_mode='Markdown')
+
+async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Borsadaki tüm açık pozisyonları manuel olarak kapatır"""
+    global AKTIF_GRID_SISTEMLERI
+    await update.message.reply_text("🔄 *Tüm açık pozisyonlar kapatılıyor...*", parse_mode='Markdown')
+    
+    try:
+        positions = exchange.fetch_positions()
+        active_positions = [p for p in positions if float(p.get('contracts', 0)) > 0]
+        
+        if not active_positions:
+            await update.message.reply_text("ℹ️ Zaten açık hiçbir pozisyon bulunmuyor.", parse_mode='Markdown')
+            return
+
+        kapatilanlar = 0
+        for p in active_positions:
+            sym = p['symbol']
+            yon = p['side'].upper()
+            kontrat = float(p['contracts'])
+            
+            mesaj = f"🛑 *MANUEL KAPATMA (/kapat)* - `{sym}`"
+            pozisyonu_garantili_kapat(sym, yon, kontrat, mesaj)
+            kapatilanlar += 1
+
+        AKTIF_GRID_SISTEMLERI.clear()
+        await update.message.reply_text(f"✅ İşlem tamamlandı. Toplam `{kapatilanlar}` pozisyon kapatıldı.", parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f"❌ Pozisyonlar kapatılırken hata oluştu: `{str(e)}`", parse_mode='Markdown')
 
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
@@ -290,13 +318,10 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     min_amount = 1.0
 
-                # Eğer bizim hesapladığımız miktar, borsanın zorunlu kıldığı min limitten küçükse 
-                # ve bu durum devasa bütçe aşımına yol açacaksa o pariteyi es gec (Yanlışlıkla 1 BTC açmasın)
                 if ham_miktar < min_amount:
-                    # Sadece min miktar tam bizim bütçemize uygunsa min_amount yap, değilse atla
                     gereken_dolar = min_amount * guncel_fiyat / KALDIRAC
                     if gereken_dolar > sabit_islem_butcesi * 1.5:
-                        continue # Bütçemizi aşıyor, bu pariteyi pas geç
+                        continue 
                     miktar = min_amount
                 else:
                     miktar = float(exchange.amount_to_precision(symbol, ham_miktar))
@@ -327,7 +352,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(15)
 
 if __name__ == "__main__":
-    print(f"🚀 Dolar Bazlı Hassas Bot Başlatılıyor...")
+    print(f"🚀 Kapat Komutlu Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
@@ -339,7 +364,11 @@ if __name__ == "__main__":
     app_tg.add_handler(CommandHandler("pozisyonlar", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
+    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))  # Yeni eklenen komut
     
     print("Telegram komut dinleyicisi aktif...")
-    app_tg.run_polling()
+    try:
+        app_tg.run_polling(drop_pending_updates=True)
+    except Exception as e:
+        print(f"Telegram polling hatası: {e}")
     
