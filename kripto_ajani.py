@@ -69,7 +69,7 @@ def home():
     return f"Gate.io Testnet Tam Bot | Durum: {durum_str}"
 
 def set_leverage_safely(symbol, leverage):
-    """Kaldıraç ve marjin modunu sabitleyen fonksiyon (10x dışına çıkmasını engeller)"""
+    """Kaldıraç ve marjin modunu sabitleyen fonksiyon"""
     try:
         exchange.set_margin_mode('cross', symbol, {'leverage': leverage})
         exchange.set_leverage(leverage, symbol)
@@ -81,6 +81,34 @@ def set_leverage_safely(symbol, leverage):
         except Exception as e2:
             print(f"Kaldıraç sabitleme hatası ({symbol}): {e2}")
             return False
+
+def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
+    """Fiyat sapması veya hata durumunda pozisyonun kapanmasını garanti eden akıllı fonksiyon"""
+    kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
+    basarili = False
+    
+    # 1. Deneme: Normal Reduce-Only Market Emri
+    try:
+        exchange.create_market_order(symbol, kapatma_yonu, miktar, {'reduce_only': True})
+        basarili = True
+    except Exception as e1:
+        print(f"[UYARI] 1. Kapatma denemesi başarısız ({symbol}): {e1}")
+        
+        # 2. Deneme: Reduce-only parametresini kaldırarak veya limit emir ile zorla kapatma
+        try:
+            time.sleep(0.5)
+            ticker = exchange.fetch_ticker(symbol)
+            guvenli_fiyat = ticker['ask'] if kapatma_yonu == 'buy' else ticker['bid']
+            
+            # Fiyat kaymalarını önlemek için agresif limit emir (piyasa fiyatının bir tık ötesinde)
+            exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, guvenli_fiyat, {'timeInForce': 'IOC'})
+            basarili = True
+        except Exception as e2:
+            print(f"[KRİTİK HATA] 2. Kapatma denemesi de başarısız ({symbol}): {e2}")
+            telegram_mesaj_gonder(f"🚨 *POZİSYON KAPATILAMADI!* (`{symbol}`)\nAcil müdahale gerekebilir. Hata: `{str(e2)}`")
+
+    if basarili:
+        telegram_mesaj_gonder(sebep_mesaji)
 
 def get_account_status_summary():
     """Toplam cüzdan durumunu, kasayı ve açık pozisyonları çeken fonksiyon"""
@@ -169,23 +197,17 @@ def otomatik_arkaplan_tarayici():
                             telegram_mesaj_gonder(f"🚨 *1. Hedef Emir Hatası* (`{symbol}`):\n`{str(e)}`")
 
                     if kaldiracli_yuzde >= FINAL_HEDEF_YUZDE:
-                        try:
-                            kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
-                            exchange.create_market_order(symbol, kapatma_yonu, sistem['miktar'], {'reduce_only': True})
-                            telegram_mesaj_gonder(f"🚀 *FİNAL HEDEF* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)")
+                        mesaj = f"🚀 *FİNAL HEDEF* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)"
+                        pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
+                        if symbol in AKTIF_GRID_SISTEMLERI:
                             del AKTIF_GRID_SISTEMLERI[symbol]
-                        except Exception as e:
-                            telegram_mesaj_gonder(f"🚨 *Final Hedef Emir Hatası* (`{symbol}`):\n`{str(e)}`")
                         
                     elif kaldiracli_yuzde <= -ZARAR_KES_YUZDE:
-                        try:
-                            kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
-                            exchange.create_market_order(symbol, kapatma_yonu, sistem['miktar'], {'reduce_only': True})
-                            HAFIZA_KAYITLARI["yasakli_yonler"][symbol] = {"yon": yon, "bitis_zamani": su_an + 1200}
-                            telegram_mesaj_gonder(f"🛑 *ZARAR KES (STOP)* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)")
+                        mesaj = f"🛑 *ZARAR KES (STOP)* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)"
+                        pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
+                        HAFIZA_KAYITLARI["yasakli_yonler"][symbol] = {"yon": yon, "bitis_zamani": su_an + 1200}
+                        if symbol in AKTIF_GRID_SISTEMLERI:
                             del AKTIF_GRID_SISTEMLERI[symbol]
-                        except Exception as e:
-                            telegram_mesaj_gonder(f"🚨 *Stop Loss Emir Hatası* (`{symbol}`):\n`{str(e)}`")
                     continue
 
                 # 2. YENİ POZİSYON TARAMA (RSI, EMA, Bollinger)
