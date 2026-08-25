@@ -72,10 +72,14 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
 
 KALDIRAC = 10
 
-# ==================== KASA KORUMA & RİSK YÖNETİMİ ====================
-HEDEF_ROESINI_ISTENEN = 20.0     # Pozisyonda hedeflenen net getiri (%20 Kâr ROI -> Fiyat %2 lehimize)
-ZARAR_KES_ROESINI_ISTENEN = 10.0 # Pozisyonda göze alınan net zarar (%10 Stop ROI -> Fiyat %1 aleyhimize)
-MIN_ADX_GUCU = 20.0              # Yatay piyasayı filtrelemek için minimum trend gücü
+# ==================== KASA KORUMA & AKILLI RİSK YÖNETİMİ ====================
+HEDEF_ROESINI_ISTENEN = 20.0         # Normal Büyük Hedef (%20 Kâr ROI)
+ZARAR_KES_ROESINI_ISTENEN = 10.0     # Stop-Loss (%10 Zarar ROI)
+MIN_ADX_GUCU = 20.0                  # Minimum trend gücü
+
+# YENİ AKILLI DİNAMİK KÂR AL KURALLARI (2 Saat + Toplam Portföyde %3 Kâr)
+AKILLI_BEKLEME_SANIYESI = 7200        # 2 Saat (2 * 60 * 60 saniye)
+AKILLI_PORTFOY_KAR_YUZDESI = 3.0     # Toplam portföyde %3 kâr eşiği
 # ======================================================================
 
 def telegram_mesaj_gonder(mesaj):
@@ -93,7 +97,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Testnet Kasa Koruma Modlu Bot | Durum: {durum_str}"
+    return f"Testnet Akıllı Kasa Koruma Botu | Durum: {durum_str}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -195,7 +199,7 @@ def get_account_status_summary():
 
         gunluk_pnl = ANALitik_HAFIZA['gunluk_net_kar_usd']
         
-        summary = f"🛡️ *KASA KORUMA & POZİSYON RAPORU*\n\n"
+        summary = f"🧠 *AKILLI KASA KORUMA RAPORU*\n\n"
         summary += f"💰 **Toplam Kasa:** `{total_usdt:.2f} USDT`\n"
         summary += f"💵 **Kullanılabilir:** `{free_usdt:.2f} USDT`\n"
         
@@ -233,7 +237,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 *Kasa koruma botu aktif edildi!*", parse_mode='Markdown')
+    await update.message.reply_text("🟢 *Akıllı koruma botu aktif edildi!*", parse_mode='Markdown')
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -264,7 +268,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🔄 Kasa Koruma Modlu Akıllı Tarayıcı aktif.")
+    print("🧠 Akıllı Kasa Koruma Modlu Avcı Tarayıcı aktif.")
     
     try:
         exchange.load_markets()
@@ -278,25 +282,76 @@ def otomatik_arkaplan_tarayici():
                 continue
 
             try:
+                balance = exchange.fetch_balance()
+                toplam_bakiye = float(balance['total'].get('USDT', 0))
+            except Exception:
+                toplam_bakiye = 1000.0
+
+            try:
                 borsa_pozisyonlari = exchange.fetch_positions()
             except Exception:
                 borsa_pozisyonlari = []
 
             aktif_borsa_map = {}
+            toplam_acik_pnl = 0.0
+            toplam_kullanilan_marjin = 0.0
+
             for pos in borsa_pozisyonlari:
-                if float(pos.get('contracts', 0)) > 0:
+                contracts = float(pos.get('contracts', 0))
+                if contracts > 0:
                     sym = pos.get('symbol')
                     side = str(pos.get('side', '')).upper()
                     if not side:
                         side = "LONG" if float(pos.get('notional', 0)) > 0 else "SHORT"
+                    
+                    pnl = float(pos.get('unrealizedPnl', 0))
+                    toplam_acik_pnl += pnl
+                    
+                    margin = float(pos.get('initialMargin', 0))
+                    if margin == 0:
+                        notional = float(pos.get('notional', 0))
+                        if notional > 0:
+                            margin = notional / KALDIRAC
+                    toplam_kullanilan_marjin += margin
+
                     aktif_borsa_map[sym] = {
                         "side": side,
-                        "contracts": float(pos['contracts']),
+                        "contracts": contracts,
                         "entryPrice": float(pos.get('entryPrice', 0)),
-                        "unrealizedPnl": float(pos.get('unrealizedPnl', 0)),
+                        "unrealizedPnl": pnl,
                         "percentage": float(pos.get('percentage', 0))
                     }
 
+            # =========================================================================
+            # AKILLI TOPLU KÂR AL MEKANİZMASI (Zaman Aşımı + %3 Portföy Kârı)
+            # =========================================================================
+            if aktif_borsa_map and toplam_kullanilan_marjin > 0:
+                toplam_portfoy_kar_yuzdesi = (toplam_acik_pnl / toplam_kullanilan_marjin) * 100
+                
+                # En eski pozisyonun açılış zamanını kontrol edelim
+                en_ erken_zaman = min([d.get("acilis_zamani", time.time()) for d in AKTIF_GRID_SISTEMLERI.values()], default=time.time())
+                gecen_sure = time.time() - en_ erken_zaman
+
+                # Eğer en az 2 saat (7200 sn) geçtimi VE toplam portföy kârı %3 ve üzerine çıktıysa
+                if gecti_mi_zaman := (gecen_sure >= AKILLI_BEKLEME_SANIYESI) and (toplam_portfoy_kar_yuzdesi >= AKILLI_PORTFOY_KAR_YUZDESI):
+                    telegram_mesaj_gonder(
+                        f"🎯 *AKILLI KÂR KİLİTLEME DEVREYE GİRDİ*\n"
+                        f"• Yatay piyasa / bekleme süresi doldu (`{gecen_sure/3600:.1f} saat`).\n"
+                        f"• Toplam Portföy Kârı: `+{toplam_acik_pnl:.2f} USDT` (`+{toplam_portfoy_kar_yuzdesi:.2f}%`)\n"
+                        f"• Tüm pozisyonlar kârla kapatılıp kasa nakite çevriliyor..."
+                    )
+                    
+                    for sym, pos_bilgi in list(aktif_borsa_map.items()):
+                        pozisyonu_garantili_kapat(sym, pos_bilgi["side"], pos_bilgi["contracts"], "")
+
+                    ANALitik_HAFIZA["gunluk_net_kar_usd"] += toplam_acik_pnl
+                    ANALitik_HAFIZA["basarili_islem_sayisi"] += len(aktif_borsa_map)
+                    AKTIF_GRID_SISTEMLERI.clear()
+                    hafizayi_kaydet()
+                    time.sleep(5)
+                    continue
+
+            # Bireysel Parite Kontrolleri (Hedef ve Stop-Loss)
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU:
                     break
@@ -324,7 +379,7 @@ def otomatik_arkaplan_tarayici():
                         ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
                         hafizayi_kaydet()
                         
-                        mesaj = f"🚀 *HEDEF BAŞARILI (KÂR ALINDI)* - `{symbol}` (`+{net_kar_zarar_yuzdesi:.2f}%`)"
+                        mesaj = f"🚀 *HEDEF BAŞARILI (BİREYSEL KÂR AL)* - `{symbol}` (`+{net_kar_zarar_yuzdesi:.2f}%`)"
                         pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj)
                         
                     elif net_kar_zarar_yuzdesi <= -ZARAR_KES_ROESINI_ISTENEN or pos_bilgi["percentage"] <= -ZARAR_KES_ROESINI_ISTENEN:
@@ -349,12 +404,6 @@ def otomatik_arkaplan_tarayici():
                     continue
 
                 if symbol in aktif_borsa_map:
-                    continue
-
-                try:
-                    balance = exchange.fetch_balance()
-                    toplam_bakiye = float(balance['total'].get('USDT', 0))
-                except Exception:
                     continue
 
                 hedef_marjin = toplam_bakiye / 4.0
@@ -406,6 +455,7 @@ def otomatik_arkaplan_tarayici():
                         
                     miktar = float(exchange.amount_to_precision(symbol, gercek_ham_miktar))
                 except Exception:
+                    contract_size = 1.0
                     miktar = float(exchange.amount_to_precision(symbol, ham_miktar))
 
                 emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
@@ -413,64 +463,12 @@ def otomatik_arkaplan_tarayici():
                 try:
                     exchange.create_market_order(symbol, emir_yonu, miktar)
                     
-                    hesaplanan_marjin = (miktar * contract_size * guncel_fiyat) / KALDIRAC if 'contract_size' in locals() else hedef_marjin
+                    hesaplanan_marjin = (miktar * contract_size * guncel_fiyat) / KALDIRAC
                     
                     AKTIF_GRID_SISTEMLERI[symbol] = {
                         "yon": grid_yonu,
                         "merkez_fiyat": guncel_fiyat,
                         "marjin": hesaplanan_marjin,
                         "miktar": miktar,
-                        "giris_rsi": rsi
-                    }
-                    hafizayi_kaydet()
-                    
-                    fiyat_hedef_orani = HEDEF_ROESINI_ISTENEN / (100.0 * KALDIRAC)
-                    fiyat_stop_orani = ZARAR_KES_ROESINI_ISTENEN / (100.0 * KALDIRAC)
-
-                    if grid_yonu == 'LONG':
-                        stop_fiyati = guncel_fiyat * (1.0 - fiyat_stop_orani)
-                        hedef_fiyati = guncel_fiyat * (1.0 + fiyat_hedef_orani)
-                    else:
-                        stop_fiyati = guncel_fiyat * (1.0 + fiyat_stop_orani)
-                        hedef_fiyati = guncel_fiyat * (1.0 - fiyat_hedef_orani)
-
-                    telegram_mesaj_gonder(
-                        f"🛡️ *İŞLEM AÇILDI (KASA KORUMALI) - {KALDIRAC}x*\n"
-                        f"• Parite: `{symbol}` ({grid_yonu})\n"
-                        f"• Giriş Fiyatı: `{guncel_fiyat}`\n"
-                        f"• Hedef Kâr: `~{hedef_fiyati:.4f}` (`+{HEDEF_ROESINI_ISTENEN}% ROI`)\n"
-                        f"• Zarar Kes: `~{stop_fiyati:.4f}` (`-{ZARAR_KES_ROESINI_ISTENEN}% ROI`)\n"
-                        f"• Trend Gücü (ADX): `{adx_degeri:.1f}`\n"
-                        f"• Marjin: `~{hesaplanan_marjin:.2f} USDT`\n"
-                        f"• Giriş RSI: `{rsi:.1f}`"
-                    )
-                    time.sleep(10)
-                except Exception as order_err:
-                    print(f"Emir hatası ({symbol}): {order_err}")
-
-        except Exception as loop_err:
-            print(f"Döngü hatası: {loop_err}")
-        
-        time.sleep(2)
-
-if __name__ == "__main__":
-    print(f"🛡️ Kasa Koruma Modlu Bot Başlatılıyor...")
-    
-    threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    
-    port = int(os.environ.get("PORT", 5000))
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
-    
-    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app_tg.add_handler(CommandHandler("durum", durum_komutu))
-    app_tg.add_handler(CommandHandler("pozisyonlar", durum_komutu))
-    app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
-    app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
-    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
-    
-    print("Telegram komut dinleyicisi aktif...")
-    try:
-        app_tg.run_polling(drop_pending_updates=True)
-    except Exception as e:
-        print(f"Telegram polling hatası: {e}")
-                    
+                        "giris_rsi": rsi,
+                        "acilis_zamani": t
