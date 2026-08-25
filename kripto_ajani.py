@@ -192,7 +192,7 @@ def otomatik_arkaplan_tarayici():
     except Exception as e:
         print(f"Piyasalar yüklenemedi: {e}")
     
-    while while_durumu := True:
+    while True:
         try:
             if not BOT_CALISIYOR_MU:
                 time.sleep(5)
@@ -241,50 +241,61 @@ def otomatik_arkaplan_tarayici():
                         
                     kaldiracli_yuzde = fark_orani * KALDIRAC * 100
                     
+                    # 1. KADEME KÂR ALMA
                     if kaldiracli_yuzde >= ILK_HEDEF_YUZDE and not sistem.get("ilk_hedef_alindi", False):
                         sistem.update({"ilk_hedef_alindi": True})
                         try:
-                             miktar_cinsi = sistem['miktar'] / 2
+                             yeni_miktar = sistem['miktar'] / 2
+                             sistem['miktar'] = yeni_miktar
+                             
                              kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
-                             exchange.create_market_order(symbol, kapatma_yonu, miktar_cinsi, {'reduce_only': True})
-                             telegram_mesaj_gonder(f"🎯 *1. KADEME KÂR* - `{symbol}` (`+{kaldiracli_yuzde:.2f}%`)")
+                             exchange.create_market_order(symbol, kapatma_yonu, yeni_miktar, {'reduce_only': True})
+                             
+                             telegram_mesaj_gonder(f"🎯 *1. KADEME KÂR (Miktar Yarılandı)* - `{symbol}` (`+{kaldiracli_yuzde:.2f}%`)")
                         except Exception:
                             pass
 
+                    # FİNAL HEDEF
                     if kaldiracli_yuzde >= FINAL_HEDEF_YUZDE:
-                        mesaj = f"🚀 *FİNAL HEDEF (BAŞARILI)* - `{symbol}` (`+{kaldiracli_yuzde:.2f}%`)"
-                        pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
+                        tahmini_kar_usd = (sistem['marjin'] * kaldiracli_yuzde) / 100
+                        mesaj = f"🚀 *FİNAL HEDEF (BAŞARILI)* - `{symbol}` (`+{kaldiracli_yuzde:.2f}%` | `+{tahmini_kar_usd:.2f} USDT`)"
                         
+                        pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
                         ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
                         
                         if symbol in AKTIF_GRID_SISTEMLERI:
                             del AKTIF_GRID_SISTEMLERI[symbol]
                         
-                    elif kaldiracli_yuzde <= -ZARAR_KES_YUZDE:
-                        # Kapanış anındaki yaklaşık Dolar zararını hesaplıyoruz
-                        tahmini_zarar_usd = (sistem['marjin'] * abs(kaldiracli_yuzde)) / 100
+                    # ZARAR KES KONTROLÜ (1. Kademe alındıysa stopu giriş fiyatına (0%) sabitliyoruz)
+                    aktif_zarar_siniri = 0.0 if sistem.get("ilk_hedef_alindi", False) else -ZARAR_KES_YUZDE
+                    
+                    if kaldiracli_yuzde <= aktif_zarar_siniri:
+                        tahmini_zarar_usd = (sistem['marjin'] * abs(kaldiracli_yuzde)) / 100 if kaldiracli_yuzde < 0 else 0.0
                         
-                        mesaj = f"🛑 *ZARAR KES & ANALİTİK DERS* - `{symbol}` (`{kaldiracli_yuzde:.2f}%` | `-{tahmini_zarar_usd:.2f} USDT`)"
+                        if sistem.get("ilk_hedef_alindi", False):
+                            mesaj = f"🛡️ *BAŞA BAŞ (BREAK-EVEN) STOP* - `{symbol}` (`+{kaldiracli_yuzde:.2f}%` | Kâr korundu)"
+                        else:
+                            mesaj = f"🛑 *ZARAR KES & ANALİTİK DERS* - `{symbol}` (`{kaldiracli_yuzde:.2f}%` | `-{tahmini_zarar_usd:.2f} USDT`)"
+                            ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
+                            
+                            analitik_hata_notu = {
+                                "symbol": symbol,
+                                "yanlis_yon": yon,
+                                "giris_fiyati": merkez,
+                                "zarar_orani": kaldiracli_yuzde,
+                                "zarar_usd": tahmini_zarar_usd,
+                                "zaman": time.strftime('%H:%M:%S')
+                            }
+                            ANALitik_HAFIZA["basarisiz_analizler"].append(analitik_hata_notu)
+                            
+                            telegram_mesaj_gonder(
+                                f"🧬 *Hafıza Güncellendi (Analitik Ders):*\n"
+                                f"• Parite: `{symbol}`\n"
+                                f"• Yanılan Yön: `{yon}`\n"
+                                f"• Çıkarılan Ders: Hata not edilerek sonraki döngüye aktarıldı."
+                            )
+
                         pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
-                        
-                        ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
-                        
-                        analitik_hata_notu = {
-                            "symbol": symbol,
-                            "yanlis_yon": yon,
-                            "giris_fiyati": merkez,
-                            "zarar_orani": kaldiracli_yuzde,
-                            "zarar_usd": tahmini_zarar_usd,
-                            "zaman": time.strftime('%H:%M:%S')
-                        }
-                        ANALitik_HAFIZA["basarisiz_analizler"].append(analitik_hata_notu)
-                        
-                        telegram_mesaj_gonder(
-                            f"🧬 *Hafıza Güncellendi (Analitik Ders):*\n"
-                            f"• Parite: `{symbol}`\n"
-                            f"• Yanılan Yön: `{yon}`\n"
-                            f"• Çıkarılan Ders: Hata not edilerek sonraki döngüye aktarıldı."
-                        )
                         
                         if symbol in AKTIF_GRID_SISTEMLERI:
                             del AKTIF_GRID_SISTEMLERI[symbol]
@@ -387,4 +398,4 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-                
+                    
