@@ -64,7 +64,7 @@ def bakiye_al():
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Gate.io Testnet Raporlu Bot | Durum: {durum_str}"
+    return f"Gate.io Testnet Canlı Raporlu Bot | Durum: {durum_str}"
 
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
@@ -121,7 +121,7 @@ def coklu_grid_yonetimi():
                 kaldiracli_yuzde = fark_orani * KALDIRAC * 100
                 
                 if kaldiracli_yuzde >= ILK_HEDEF_YUZDE and not sistem.get("ilk_hedef_alindi", False):
-                    sistem["ilk_hedef_alindi", True] if False else sistem.update({"ilk_hedef_alindi": True})
+                    sistem["ilk_hedef_alindi"] = True
                     try:
                          miktar_cinsi = sistem['miktar'] / 2
                          kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
@@ -191,7 +191,8 @@ def coklu_grid_yonetimi():
                 elif guncel_fiyat <= bb_lower * 1.002 and rsi15m < 38:
                     grid_yonu = "LONG"
                 else:
-                    print(f"[TARAMA] {symbol} | Mod: {piyasa_durumu} | Fiyat: {guncel_fiyat} | RSI: {rsi15m:.1f} -> Şartlar sağlanmadı.")
+                    # YENİ: Şart sağlanmadığında Telegram'a anlık bilgi geçecek
+                    telegram_mesaj_gonder(f"🔍 *TARAMA RAPORU* (`{symbol}`)\n• Mod: `{piyasa_durumu}`\n• Fiyat: `{guncel_fiyat}` | RSI: `{rsi15m:.1f}`\n• Bant Genişliği: `%{bant_genisligi:.2f}`\n👉 *Durum:* Şartlar sağlanmadı, bekleniyor.")
                     continue
             else:
                 piyasa_durumu = "TREND"
@@ -200,7 +201,8 @@ def coklu_grid_yonetimi():
                 elif ema7 < ema21 and rsi15m < 50 and rsi15m > 25:
                     grid_yonu = "SHORT"
                 else:
-                    print(f"[TARAMA] {symbol} | Mod: {piyasa_durumu} | Fiyat: {guncel_fiyat} | RSI: {rsi15m:.1f} -> Şartlar sağlanmadı.")
+                    # YENİ: Şart sağlanmadığında Telegram'a anlık bilgi geçecek
+                    telegram_mesaj_gonder(f"🔍 *TARAMA RAPORU* (`{symbol}`)\n• Mod: `{piyasa_durumu}`\n• Fiyat: `{guncel_fiyat}` | RSI: `{rsi15m:.1f}`\n• EMA7/21: `{ema7:.2f}` / `{ema21:.2f}`\n👉 *Durum:* Şartlar sağlanmadı, bekleniyor.")
                     continue
 
             if symbol in HAFIZA_KAYITLARI["yasakli_yonler"]:
@@ -231,7 +233,6 @@ def coklu_grid_yonetimi():
                     f"• Fiyat: `{guncel_fiyat:.2f}`"
                 )
             except Exception as e:
-                # BURASI ÇOK ÖNEMLİ: Emir açılamazsa hatayı anında Telegram'a çat diye atacak
                 hata_detayi = f"🚨 *EMİR AÇILAMADI / TAKILDI!* (`{symbol}`)\n• Yön: `{emir_yonu}`\n• Hata: `{str(e)}`"
                 print(f"[EMİR HATASI] {symbol}: {e}")
                 telegram_mesaj_gonder(hata_detayi)
@@ -259,7 +260,7 @@ def telegram_komutlari_dinle():
                         
                         if metin == "/baslat":
                             BOT_CALISIYOR_MU = True
-                            telegram_mesaj_gonder("🚀 *Raporlu Bot Aktif Edildi!* Takipteyiz.")
+                            telegram_mesaj_gonder("🚀 *Anlık Raporlu Bot Aktif Edildi!* Artık her adımı bildireceğim.")
 
                         elif metin == "/kapat":
                             BOT_CALISIYOR_MU = False
@@ -297,11 +298,11 @@ def telegram_komutlari_dinle():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print(f"🚀 Raporlu Güvenli Bot Başlatılıyor ({KALDIRAC}x)...")
+    print(f"🚀 Canlı Raporlu Bot Başlatılıyor ({KALDIRAC}x)...")
     threading.Thread(target=telegram_komutlari_dinle, daemon=True).start()
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    telegram_mesaj_gonder(f"⚡ *Raporlu Bot Devrede ({KALDIRAC}x)! Herhangi bir takılmada haber vereceğim.*")
+    telegram_mesaj_gonder(f"⚡ *Canlı Raporlu Bot Devrede ({KALDIRAC}x)! /baslat komutunu verip tarama raporlarını takip edebilirsin.*")
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
-    
+                        
