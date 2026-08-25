@@ -15,7 +15,7 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = "8870934003:AAGIpiwdgpnQVW7nbJIRcR0dOLOzj-MOZsA"
 CHAT_ID = "6929517567"
 
-# Gate.io Testnet (Demo) Bağlantısı ve Test Keyleri
+# Gate.io Testnet (Demo) Bağlantısı
 exchange = ccxt.gate({
     'apiKey': '82cca880898a88d1a31e86d8eb474c57',
     'secret': '1ac479b9df5e6f2e89560b0d238a250694719b6fcae20da00ebc54ad6aeb8898',
@@ -30,10 +30,9 @@ exchange.set_sandbox_mode(True)
 
 TAKIP_EDILENLER = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'BNB/USDT:USDT']
 AKTIF_GRID_SISTEMLERI = {}
-BOT_CALISIYOR_MU = True  # Baş direkt açık olsun
+BOT_CALISIYOR_MU = True
 
 HAFIZA_KAYITLARI = {
-    "zararli_islemler": [],
     "yasakli_yonler": {}
 }
 
@@ -69,7 +68,6 @@ def home():
     return f"Gate.io Testnet Tam Bot | Durum: {durum_str}"
 
 def set_leverage_safely(symbol, leverage):
-    """Kaldıraç ve marjin modunu sabitleyen fonksiyon"""
     try:
         exchange.set_margin_mode('cross', symbol, {'leverage': leverage})
         exchange.set_leverage(leverage, symbol)
@@ -79,22 +77,16 @@ def set_leverage_safely(symbol, leverage):
             exchange.set_leverage(leverage, symbol)
             return True
         except Exception as e2:
-            print(f"Kaldıraç sabitleme hatası ({symbol}): {e2}")
             return False
 
 def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
-    """Fiyat sapması veya hata durumunda pozisyonun kapanmasını garanti eden akıllı fonksiyon"""
     kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
     basarili = False
     
-    # 1. Deneme: Normal Reduce-Only Market Emri
     try:
         exchange.create_market_order(symbol, kapatma_yonu, miktar, {'reduce_only': True})
         basarili = True
     except Exception as e1:
-        print(f"[UYARI] 1. Kapatma denemesi başarısız ({symbol}): {e1}")
-        
-        # 2. Deneme: Agresif limit IOC emir ile zorla kapatma
         try:
             time.sleep(0.5)
             ticker = exchange.fetch_ticker(symbol)
@@ -102,14 +94,12 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
             exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, guvenli_fiyat, {'timeInForce': 'IOC'})
             basarili = True
         except Exception as e2:
-            print(f"[KRİTİK HATA] 2. Kapatma denemesi de başarısız ({symbol}): {e2}")
-            telegram_mesaj_gonder(f"🚨 *POZİSYON KAPATILAMADI!* (`{symbol}`)\nAcil müdahale gerekebilir. Hata: `{str(e2)}`")
+            telegram_mesaj_gonder(f"🚨 *POZİSYON KAPATILAMADI!* (`{symbol}`)\nHata: `{str(e2)}`")
 
     if basarili:
         telegram_mesaj_gonder(sebep_mesaji)
 
 def get_account_status_summary():
-    """Toplam cüzdan durumunu, kasayı ve açık pozisyonları çeken fonksiyon"""
     try:
         balance = exchange.fetch_balance()
         total_usdt = balance['total'].get('USDT', 0)
@@ -143,6 +133,16 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = get_account_status_summary()
     await update.message.reply_text(status_text, parse_mode='Markdown')
 
+async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global BOT_CALISIYOR_MU
+    BOT_CALISIYOR_MU = True
+    await update.message.reply_text("🟢 *Bot aktif edildi, tarama ve işlemler başlatıldı!*", parse_mode='Markdown')
+
+async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global BOT_CALISIYOR_MU
+    BOT_CALISIYOR_MU = False
+    await update.message.reply_text("⏸️ *Bot durduruldu.*", parse_mode='Markdown')
+
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, HAFIZA_KAYITLARI
@@ -151,22 +151,20 @@ def otomatik_arkaplan_tarayici():
     while True:
         try:
             if not BOT_CALISIYOR_MU:
-                time.sleep(10)
+                time.sleep(5)
                 continue
                 
             su_an = time.time()
             
-            # --- BORSA SENKRONİZASYONU (Açık pozisyonları anında hafızaya kaydet) ---
+            # Borsadaki açık pozisyonları senkronize et
             try:
                 b_positions = exchange.fetch_positions()
                 for bp in b_positions:
                     kontrat = float(bp.get('contracts', 0))
                     sym = bp['symbol']
                     if kontrat > 0:
-                        b_yon = bp['side'].upper() # 'LONG' veya 'SHORT'
+                        b_yon = bp['side'].upper()
                         b_giris = float(bp.get('entryPrice', 0))
-                        
-                        # Eğer bot bu pozisyonu bilmiyorsa veya unuttuysa hemen hafızaya ekle
                         if sym not in AKTIF_GRID_SISTEMLERI:
                             AKTIF_GRID_SISTEMLERI[sym] = {
                                 "yon": b_yon,
@@ -176,9 +174,9 @@ def otomatik_arkaplan_tarayici():
                                 "ilk_hedef_alindi": False
                             }
             except Exception as sync_err:
-                print(f"[SENKRONİZASYON HATASI]: {sync_err}")
+                pass
 
-            # Yasaklı yön süre kontrolü
+            # Yasaklı süreleri temizle
             for sym in list(HAFIZA_KAYITLARI["yasakli_yonler"].keys()):
                 if su_an > HAFIZA_KAYITLARI["yasakli_yonler"][sym]["bitis_zamani"]:
                     del HAFIZA_KAYITLARI["yasakli_yonler"][sym]
@@ -191,10 +189,9 @@ def otomatik_arkaplan_tarayici():
                     ticker = exchange.fetch_ticker(symbol)
                     guncel_fiyat = ticker['last']
                 except Exception as e:
-                    print(f"[HATA] {symbol} fiyat çekilemedi: {e}")
                     continue
 
-                # 1. AÇIK POZİSYON KONTROLÜ (Kâr / Zarar / Hedef takibi)
+                # 1. AÇIK POZİSYON KONTROLÜ
                 if symbol in AKTIF_GRID_SISTEMLERI:
                     sistem = AKTIF_GRID_SISTEMLERI[symbol]
                     merkez = sistem['merkez_fiyat']
@@ -214,7 +211,7 @@ def otomatik_arkaplan_tarayici():
                              exchange.create_market_order(symbol, kapatma_yonu, miktar_cinsi, {'reduce_only': True})
                              telegram_mesaj_gonder(f"🎯 *1. KADEME KÂR* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)")
                         except Exception as e:
-                            telegram_mesaj_gonder(f"🚨 *1. Hedef Emir Hatası* (`{symbol}`):\n`{str(e)}`")
+                            pass
 
                     if kaldiracli_yuzde >= FINAL_HEDEF_YUZDE:
                         mesaj = f"🚀 *FİNAL HEDEF* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)"
@@ -230,7 +227,7 @@ def otomatik_arkaplan_tarayici():
                             del AKTIF_GRID_SISTEMLERI[symbol]
                     continue
 
-                # 2. YENİ POZİSYON TARAMA (RSI, EMA, Bollinger)
+                # 2. YENİ POZİSYON AÇMA TARAMASI
                 toplam_bakiye = bakiye_al()
                 bagli_marjin = sum([p['marjin'] for p in AKTIF_GRID_SISTEMLERI.values()])
                 anlik_portfoy = toplam_bakiye + bagli_marjin
@@ -301,17 +298,15 @@ def otomatik_arkaplan_tarayici():
                         f"• Fiyat: `{guncel_fiyat:.2f}`"
                     )
                 except Exception as e:
-                    hata_detayi = f"🚨 *EMİR AÇILAMADI!* (`{symbol}`)\n• Hata: `{str(e)}`"
-                    print(f"[EMİR HATASI] {symbol}: {e}")
-                    telegram_mesaj_gonder(hata_detayi)
+                    pass
 
         except Exception as e:
-            print(f"[HATA] Döngü Kritik Hata: {e}")
+            pass
         
         time.sleep(15)
 
 if __name__ == "__main__":
-    print(f"🚀 Tam Donanımlı Bot Başlatılıyor ({KALDIRAC}x)...")
+    print(f"🚀 Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
@@ -320,7 +315,10 @@ if __name__ == "__main__":
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
+    app_tg.add_handler(CommandHandler("pozisyonlar", durum_komutu)) # pozisyonlar yazınca da durum göstersin
+    app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
+    app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     
-    print("Telegram komut dinleyicisi (/durum) aktif...")
+    print("Telegram komut dinleyicisi aktif...")
     app_tg.run_polling()
     
