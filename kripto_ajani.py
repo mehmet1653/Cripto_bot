@@ -72,11 +72,12 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
 
 KALDIRAC = 10
 
-# DÜZELTME: Kaldıraçlı gerçek ROI (Getiri/Zarar) oranları buraya bağlandı.
-# Örneğin 10x kaldıraçta %2.5 kâr için fiyatın %0.25 hareket etmesi yeterlidir.
-HEDEF_ROESINI_ISTENEN = 2.5   # Pozisyonda hedeflenen net getiri (%2.5 kâr)
-ZARAR_KES_ROESINI_ISTENEN = 1.5 # Pozisyonda göze alınan net zarar (%1.5 stop)
-# ==========================================================
+# ==================== KASA KORUMA & RİSK YÖNETİMİ ====================
+# Komisyonları ve iğneleri tolere eden geniş, sürdürülebilir oranlar (1:2 Risk/Ödül)
+HEDEF_ROESINI_ISTENEN = 20.0     # Pozisyonda hedeflenen net getiri (%20 Kâr ROI -> Fiyat %2 lehimize)
+ZARAR_KES_ROESINI_ISTENEN = 10.0 # Pozisyonda göze alınan net zarar (%10 Stop ROI -> Fiyat %1 aleyhimize)
+MIN_ADX_GUCU = 20.0              # Yatay piyasayı filtrelemek için minimum trend gücü
+# ======================================================================
 
 def telegram_mesaj_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID:
@@ -93,7 +94,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Testnet Uyumlu Akıllı Bot | Durum: {durum_str}"
+    return f"Testnet Kasa Koruma Modlu Bot | Durum: {durum_str}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -195,7 +196,7 @@ def get_account_status_summary():
 
         gunluk_pnl = ANALitik_HAFIZA['gunluk_net_kar_usd']
         
-        summary = f"🧠 *ANALİTİK KASA & POZİSYON RAPORU*\n\n"
+        summary = f"🛡️ *KASA KORUMA & POZİSYON RAPORU*\n\n"
         summary += f"💰 **Toplam Kasa:** `{total_usdt:.2f} USDT`\n"
         summary += f"💵 **Kullanılabilir:** `{free_usdt:.2f} USDT`\n"
         
@@ -233,7 +234,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 *Bot aktif edildi ve izlemeye başladı!*", parse_mode='Markdown')
+    await update.message.reply_text("🟢 *Kasa koruma botu aktif edildi!*", parse_mode='Markdown')
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -264,7 +265,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🔄 Testnet Uyumlu Akıllı Tarayıcı aktif.")
+    print("🔄 Kasa Koruma Modlu Akıllı Tarayıcı aktif.")
     
     try:
         exchange.load_markets()
@@ -319,7 +320,7 @@ def otomatik_arkaplan_tarayici():
                     net_kar_zarar_yuzdesi = fark_orani * 100 * KALDIRAC
                     
                     if net_kar_zarar_yuzdesi >= HEDEF_ROESINI_ISTENEN or pos_bilgi["percentage"] >= HEDEF_ROESINI_ISTENEN:
-                        tahmini_kar_usd = abs(pos_bilgi["unrealizedPnl"]) if pos_bilgi["unrealizedPnl"] > 0 else 1.0
+                        tahmini_kar_usd = abs(pos_bilgi["unrealizedPnl"]) if pos_bilgi["unrealizedPnl"] > 0 else 2.0
                         ANALitik_HAFIZA["gunluk_net_kar_usd"] += tahmini_kar_usd
                         ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
                         hafizayi_kaydet()
@@ -343,7 +344,7 @@ def otomatik_arkaplan_tarayici():
                         ANALitik_HAFIZA["basarisiz_analizler"].append(analitik_hata_notu)
                         hafizayi_kaydet()
                         
-                        mesaj = f"🛑 *ZARAR KES (STOP OLDU) & ANALİZE EKLENDİ* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%`)"
+                        mesaj = f"🛑 *ZARAR KES (KASA KORUMA STOP) & ANALİZE EKLENDİ* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%`)"
                         pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj)
                         
                     continue
@@ -362,20 +363,28 @@ def otomatik_arkaplan_tarayici():
                     continue
 
                 try:
-                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=30)
+                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     
                     ema7 = ta.trend.ema_indicator(df['close'], window=7).iloc[-1]
                     ema21 = ta.trend.ema_indicator(df['close'], window=21).iloc[-1]
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
+                    
+                    # ADX (Trend Gücü) Hesaplama Filtresi
+                    adx_indicator = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14)
+                    adx_degeri = adx_indicator.adx().iloc[-1]
                 except Exception:
+                    continue
+
+                # 1. Filtre: Yatay piyasadaysa (ADX zayıfsa) kesinlikle işlem açma
+                if adx_degeri < MIN_ADX_GUCU:
                     continue
 
                 grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
 
-                if grid_yonu == "SHORT" and rsi < 40:
+                if grid_yonu == "SHORT" and rsi < 42:
                     continue 
-                if grid_yonu == "LONG" and rsi > 60:
+                if grid_yonu == "LONG" and rsi > 58:
                     continue 
 
                 son_hatalar = [h for h in ANALitik_HAFIZA["basarisiz_analizler"] if h["symbol"] == symbol]
@@ -418,8 +427,7 @@ def otomatik_arkaplan_tarayici():
                     }
                     hafizayi_kaydet()
                     
-                    # DÜZELTME: Fiyat bazlı hedef ve stop hesaplaması artık kaldıraç oranına (10x) tam uyumlu yapıldı.
-                    # Örneğin SHORT işlemde fiyat yukarı çıkarsa zarar ederiz. Stop fiyatı = Giriş * (1 + (ZararKes% / Kaldıraç))
+                    # Sağlam Kasa Koruma Fiyat Aralıkları (10x Kaldıraç için %10 Stop, %20 Kâr)
                     fiyat_hedef_orani = HEDEF_ROESINI_ISTENEN / (100.0 * KALDIRAC)
                     fiyat_stop_orani = ZARAR_KES_ROESINI_ISTENEN / (100.0 * KALDIRAC)
 
@@ -431,11 +439,12 @@ def otomatik_arkaplan_tarayici():
                         hedef_fiyati = guncel_fiyat * (1.0 - fiyat_hedef_orani)
 
                     telegram_mesaj_gonder(
-                        f"🚀 *İŞLEM BAŞARIYLA AÇILDI - {KALDIRAC}x*\n"
+                        f"🛡️ *İŞLEM AÇILDI (KASA KORUMALI) - {KALDIRAC}x*\n"
                         f"• Parite: `{symbol}` ({grid_yonu})\n"
                         f"• Giriş Fiyatı: `{guncel_fiyat}`\n"
                         f"• Hedef Kâr: `~{hedef_fiyati:.4f}` (`+{HEDEF_ROESINI_ISTENEN}% ROI`)\n"
                         f"• Zarar Kes: `~{stop_fiyati:.4f}` (`-{ZARAR_KES_ROESINI_ISTENEN}% ROI`)\n"
+                        f"• Trend Gücü (ADX): `{adx_degeri:.1f}`\n"
                         f"• Marjin: `~{hesaplanan_marjin:.2f} USDT`\n"
                         f"• Giriş RSI: `{rsi:.1f}`"
                     )
@@ -449,7 +458,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print(f"🚀 Testnet Uyumlu Akıllı Bot Başlatılıyor...")
+    print(f"🛡️ Kasa Koruma Modlu Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
@@ -463,9 +472,4 @@ if __name__ == "__main__":
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
-    print("Telegram komut dinleyicisi aktif...")
-    try:
-        app_tg.run_polling(drop_pending_updates=True)
-    except Exception as e:
-        print(f"Telegram polling hatası: {e}")
-                    
+    print("Telegram komut dinleyicisi a
