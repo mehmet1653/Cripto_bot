@@ -94,13 +94,11 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
     except Exception as e1:
         print(f"[UYARI] 1. Kapatma denemesi başarısız ({symbol}): {e1}")
         
-        # 2. Deneme: Reduce-only parametresini kaldırarak veya limit emir ile zorla kapatma
+        # 2. Deneme: Agresif limit IOC emir ile zorla kapatma
         try:
             time.sleep(0.5)
             ticker = exchange.fetch_ticker(symbol)
             guvenli_fiyat = ticker['ask'] if kapatma_yonu == 'buy' else ticker['bid']
-            
-            # Fiyat kaymalarını önlemek için agresif limit emir (piyasa fiyatının bir tık ötesinde)
             exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, guvenli_fiyat, {'timeInForce': 'IOC'})
             basarili = True
         except Exception as e2:
@@ -158,6 +156,28 @@ def otomatik_arkaplan_tarayici():
                 
             su_an = time.time()
             
+            # --- BORSA SENKRONİZASYONU (Açık pozisyonları anında hafızaya kaydet) ---
+            try:
+                b_positions = exchange.fetch_positions()
+                for bp in b_positions:
+                    kontrat = float(bp.get('contracts', 0))
+                    sym = bp['symbol']
+                    if kontrat > 0:
+                        b_yon = bp['side'].upper() # 'LONG' veya 'SHORT'
+                        b_giris = float(bp.get('entryPrice', 0))
+                        
+                        # Eğer bot bu pozisyonu bilmiyorsa veya unuttuysa hemen hafızaya ekle
+                        if sym not in AKTIF_GRID_SISTEMLERI:
+                            AKTIF_GRID_SISTEMLERI[sym] = {
+                                "yon": b_yon,
+                                "merkez_fiyat": b_giris,
+                                "marjin": kontrat * b_giris / KALDIRAC,
+                                "miktar": kontrat,
+                                "ilk_hedef_alindi": False
+                            }
+            except Exception as sync_err:
+                print(f"[SENKRONİZASYON HATASI]: {sync_err}")
+
             # Yasaklı yön süre kontrolü
             for sym in list(HAFIZA_KAYITLARI["yasakli_yonler"].keys()):
                 if su_an > HAFIZA_KAYITLARI["yasakli_yonler"][sym]["bitis_zamani"]:
@@ -253,7 +273,6 @@ def otomatik_arkaplan_tarayici():
                         grid_yonu = "SHORT"
 
                 if not grid_yonu:
-                    print(f"[TARAMA] {symbol} | Fiyat: {guncel_fiyat} | RSI: {rsi15m:.1f} -> Bekleniyor...")
                     continue
 
                 if symbol in HAFIZA_KAYITLARI["yasakli_yonler"]:
@@ -304,4 +323,4 @@ if __name__ == "__main__":
     
     print("Telegram komut dinleyicisi (/durum) aktif...")
     app_tg.run_polling()
-                
+    
