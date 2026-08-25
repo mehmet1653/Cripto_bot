@@ -71,8 +71,11 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
 })
 
 KALDIRAC = 10
-HEDEF_YUZDE = 2.5         
-ZARAR_KES_YUZDE = 1.5     
+
+# DÜZELTME: Kaldıraçlı gerçek ROI (Getiri/Zarar) oranları buraya bağlandı.
+# Örneğin 10x kaldıraçta %2.5 kâr için fiyatın %0.25 hareket etmesi yeterlidir.
+HEDEF_ROESINI_ISTENEN = 2.5   # Pozisyonda hedeflenen net getiri (%2.5 kâr)
+ZARAR_KES_ROESINI_ISTENEN = 1.5 # Pozisyonda göze alınan net zarar (%1.5 stop)
 # ==========================================================
 
 def telegram_mesaj_gonder(mesaj):
@@ -144,7 +147,6 @@ def get_account_status_summary():
         total_usdt = float(balance['total'].get('USDT', 0))
         free_usdt = float(balance['free'].get('USDT', 0))
         
-        # Doğrudan borsadaki açık pozisyonları çekiyoruz (Tam senkronizasyon için)
         try:
             borsa_pozisyonlari = exchange.fetch_positions()
         except Exception:
@@ -152,23 +154,19 @@ def get_account_status_summary():
 
         toplam_anlik_pnl = 0.0
         aktif_ozet_listesi = []
-        aktif_symbol_kumesi = set()
 
         for pos in borsa_pozisyonlari:
             contracts = float(pos.get('contracts', 0))
             if contracts > 0:
                 sym = pos.get('symbol')
-                aktif_symbol_kumesi.add(sym)
-                
                 side = str(pos.get('side', '')).upper()
                 if not side:
                     side = "LONG" if float(pos.get('notional', 0)) > 0 else "SHORT"
                 
                 entry_price = float(pos.get('entryPrice', 0))
                 pnl = float(pos.get('unrealizedPnl', 0))
-                
-                # Borsanın döndürdüğü yüzde (ROI) veya hesaplanan oran
                 roe = float(pos.get('percentage', 0))
+                
                 if roe == 0 and entry_price > 0:
                     mark_price = float(pos.get('markPrice', entry_price))
                     fark = (mark_price - entry_price) / entry_price
@@ -279,7 +277,6 @@ def otomatik_arkaplan_tarayici():
                 time.sleep(3)
                 continue
 
-            # Borsadaki mevcut pozisyonları canlı takip et
             try:
                 borsa_pozisyonlari = exchange.fetch_positions()
             except Exception:
@@ -310,7 +307,6 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
-                # Eğer pozisyon borsada açıksa kâr/zarar kontrolü yap
                 if symbol in aktif_borsa_map:
                     pos_bilgi = aktif_borsa_map[symbol]
                     yon = pos_bilgi["side"]
@@ -322,7 +318,7 @@ def otomatik_arkaplan_tarayici():
                         
                     net_kar_zarar_yuzdesi = fark_orani * 100 * KALDIRAC
                     
-                    if net_kar_zarar_yuzdesi >= (HEDEF_YUZDE * KALDIRAC) or pos_bilgi["percentage"] >= (HEDEF_YUZDE * KALDIRAC):
+                    if net_kar_zarar_yuzdesi >= HEDEF_ROESINI_ISTENEN or pos_bilgi["percentage"] >= HEDEF_ROESINI_ISTENEN:
                         tahmini_kar_usd = abs(pos_bilgi["unrealizedPnl"]) if pos_bilgi["unrealizedPnl"] > 0 else 1.0
                         ANALitik_HAFIZA["gunluk_net_kar_usd"] += tahmini_kar_usd
                         ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
@@ -331,7 +327,7 @@ def otomatik_arkaplan_tarayici():
                         mesaj = f"🚀 *HEDEF BAŞARILI (KÂR ALINDI)* - `{symbol}` (`+{net_kar_zarar_yuzdesi:.2f}%`)"
                         pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj)
                         
-                    elif net_kar_zarar_yuzdesi <= -(ZARAR_KES_YUZDE * KALDIRAC) or pos_bilgi["percentage"] <= -(ZARAR_KES_YUZDE * KALDIRAC):
+                    elif net_kar_zarar_yuzdesi <= -ZARAR_KES_ROESINI_ISTENEN or pos_bilgi["percentage"] <= -ZARAR_KES_ROESINI_ISTENEN:
                         tahmini_zarar_usd = abs(pos_bilgi["unrealizedPnl"]) if pos_bilgi["unrealizedPnl"] < 0 else 1.0
                         ANALitik_HAFIZA["gunluk_net_kar_usd"] -= tahmini_zarar_usd
                         ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
@@ -352,7 +348,6 @@ def otomatik_arkaplan_tarayici():
                         
                     continue
 
-                # Zaten açık pozisyon varsa yeni açma
                 if symbol in aktif_borsa_map:
                     continue
 
@@ -383,7 +378,6 @@ def otomatik_arkaplan_tarayici():
                 if grid_yonu == "LONG" and rsi > 60:
                     continue 
 
-                # Öğrenme filtresi: Geçmiş hatalı işlemleri tekrar etme
                 son_hatalar = [h for h in ANALitik_HAFIZA["basarisiz_analizler"] if h["symbol"] == symbol]
                 if son_hatalar:
                     son_hata = son_hatalar[-1]
@@ -424,19 +418,24 @@ def otomatik_arkaplan_tarayici():
                     }
                     hafizayi_kaydet()
                     
+                    # DÜZELTME: Fiyat bazlı hedef ve stop hesaplaması artık kaldıraç oranına (10x) tam uyumlu yapıldı.
+                    # Örneğin SHORT işlemde fiyat yukarı çıkarsa zarar ederiz. Stop fiyatı = Giriş * (1 + (ZararKes% / Kaldıraç))
+                    fiyat_hedef_orani = HEDEF_ROESINI_ISTENEN / (100.0 * KALDIRAC)
+                    fiyat_stop_orani = ZARAR_KES_ROESINI_ISTENEN / (100.0 * KALDIRAC)
+
                     if grid_yonu == 'LONG':
-                        stop_fiyati = guncel_fiyat * (1.0 - (ZARAR_KES_YUZDE / 100.0))
-                        hedef_fiyati = guncel_fiyat * (1.0 + (HEDEF_YUZDE / 100.0))
+                        stop_fiyati = guncel_fiyat * (1.0 - fiyat_stop_orani)
+                        hedef_fiyati = guncel_fiyat * (1.0 + fiyat_hedef_orani)
                     else:
-                        stop_fiyati = guncel_fiyat * (1.0 + (ZARAR_KES_YUZDE / 100.0))
-                        hedef_fiyati = guncel_fiyat * (1.0 - (HEDEF_YUZDE / 100.0))
+                        stop_fiyati = guncel_fiyat * (1.0 + fiyat_stop_orani)
+                        hedef_fiyati = guncel_fiyat * (1.0 - fiyat_hedef_orani)
 
                     telegram_mesaj_gonder(
                         f"🚀 *İŞLEM BAŞARIYLA AÇILDI - {KALDIRAC}x*\n"
                         f"• Parite: `{symbol}` ({grid_yonu})\n"
                         f"• Giriş Fiyatı: `{guncel_fiyat}`\n"
-                        f"• Hedef Kâr: `~{hedef_fiyati:.4f}` (`+{HEDEF_YUZDE}%`)\n"
-                        f"• Zarar Kes: `~{stop_fiyati:.4f}` (`-{ZARAR_KES_YUZDE}%`)\n"
+                        f"• Hedef Kâr: `~{hedef_fiyati:.4f}` (`+{HEDEF_ROESINI_ISTENEN}% ROI`)\n"
+                        f"• Zarar Kes: `~{stop_fiyati:.4f}` (`-{ZARAR_KES_ROESINI_ISTENEN}% ROI`)\n"
                         f"• Marjin: `~{hesaplanan_marjin:.2f} USDT`\n"
                         f"• Giriş RSI: `{rsi:.1f}`"
                     )
@@ -469,4 +468,4 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-                                              
+                    
