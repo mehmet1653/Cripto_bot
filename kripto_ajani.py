@@ -58,7 +58,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Çift Emirli (Stop & Hedef) Bot | Durum: {durum_str}"
+    return f"Çift Emirli (Native OCO Stop & Hedef) Bot | Durum: {durum_str}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -72,10 +72,60 @@ def set_isolated_leverage_safely(symbol, leverage):
     except Exception:
         return False
 
+def gate_tetiklemeli_emir_gonder(symbol, yon, miktar, tetik_fiyati):
+    """
+    Gate.io'nun native futures API'sini kullanarak kusursuz conditional (stop/TP) emir gönderir.
+    yon: 'buy' (short kapatır) veya 'sell' (long kapatır)
+    """
+    try:
+        # ccxt sembolünü gate formatına çevir (örn: ETH/USDT:USDT -> ETH_USDT)
+        market_id = exchange.market(symbol)['id']
+        
+        # Gate.io futures price trigger body
+        payload = {
+            "contract": market_id,
+            "size": float(miktar),
+            "iceberg": 0,
+            "price": "0", # Piyasa fiyatından kapatması için 0 (Market Trigger)
+            "tif": "ioc",
+            "rule": 1,    # 1: tetik fiyatı >= son fiyat, 2: tetik fiyatı <= son fiyat (Gate otomatik algılar ama rule verilir)
+            "trigger": {
+                "strategy_type": 0, # Fiyat bazlı tetik
+                "price": str(tetik_fiyati),
+                "price_type": 1     # 1: Son fiyat (Last Price)
+            }
+        }
+        
+        # Gate.io native endpoint: POST /futures/{settle}/price_orders
+        settle = symbol.split('/')[1].split(':')[1] # USDT
+        response = exchange.private_futures_post_settle_price_orders(settle, payload)
+        return True, response
+    except Exception as e:
+        # Alternatif CCXT standart parametre denemesi
+        try:
+            params = {
+                'triggerPrice': float(tetik_fiyati),
+                'reduceOnly': True,
+                'stopPrice': float(tetik_fiyati)
+            }
+            order_side = 'buy' if yon == 'buy' else 'sell'
+            exchange.create_order(symbol, 'market', order_side, miktar, None, params)
+            return True, "CCXT Fallback Başarılı"
+        except Exception as e2:
+            return False, str(e2)
+
 def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
     kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
     basarili = False
     
+    try:
+        # Açık olabilecek tüm bekleyen tetik emirlerini iptal et
+        settle = symbol.split('/')[1].split(':')[1]
+        market_id = exchange.market(symbol)['id']
+        exchange.private_futures_delete_settle_price_orders(settle, {'contract': market_id})
+    except Exception:
+        pass
+
     try:
         market_info = exchange.market(symbol)
         min_amount = float(market_info['limits']['amount']['min'] or 1.0)
@@ -170,7 +220,7 @@ async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AKTIF_GRID_SISTEMLERI
-    await update.message.reply_text("🔄 *Tüm açık pozisyonlar kapatılıyor...*", parse_mode='Markdown')
+    await update.message.reply_text("🔄 *Tüm açık pozisyonlar ve bekleyen emirler kapatılıyor...*", parse_mode='Markdown')
     
     try:
         positions = exchange.fetch_positions()
@@ -198,7 +248,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🔄 Çift Emirli (Stop & Hedef) tarayıcı aktif.")
+    print("🔄 Native Çift Emirli (Stop & Hedef) tarayıcı aktif.")
     
     try:
         exchange.load_markets()
@@ -351,34 +401,22 @@ def otomatik_arkaplan_tarayici():
                     if grid_yonu == 'LONG':
                         stop_fiyati = guncel_fiyat * (1.0 - (ZARAR_KES_YUZDE / 100.0))
                         hedef_fiyati = guncel_fiyat * (1.0 + (HEDEF_YUZDE / 100.0))
-                        kapatma_yonu = 'sell'
+                        kapatma_yonu = 'sell' # Long kapatmak için sell
                     else:
                         stop_fiyati = guncel_fiyat * (1.0 + (ZARAR_KES_YUZDE / 100.0))
                         hedef_fiyati = guncel_fiyat * (1.0 - (HEDEF_YUZDE / 100.0))
-                        kapatma_yonu = 'buy'
+                        kapatma_yonu = 'buy'  # Short kapatmak için buy
                     
                     stop_fiyati = float(exchange.price_to_precision(symbol, stop_fiyati))
                     hedef_fiyati = float(exchange.price_to_precision(symbol, hedef_fiyati))
                     
-                    # 2. STOP EMRİNİ ANINDA GÖNDER
-                    try:
-                        exchange.create_order(symbol, 'stop', kapatma_yonu, miktar, stop_fiyati, {
-                            'stopPrice': stop_fiyati,
-                            'triggerPrice': stop_fiyati,
-                            'reduceOnly': True
-                        })
-                    except Exception as stop_err:
-                        print(f"Stop emri kurulamadı: {stop_err}")
+                    time.sleep(0.5) # Pozisyonun borsaya işlenmesi için kısa bekleme
 
-                    # 3. HEDEF (TAKE PROFIT) EMRİNİ ANINDA GÖNDER
-                    try:
-                        exchange.create_order(symbol, 'takeProfit', kapatma_yonu, miktar, hedef_fiyati, {
-                            'stopPrice': hedef_fiyati,
-                            'triggerPrice': hedef_fiyati,
-                            'reduceOnly': True
-                        })
-                    except Exception as tp_err:
-                        print(f"Hedef emri kurulamadı: {tp_err}")
+                    # 2. STOP EMRİNİ GÖNDER
+                    stop_basarili, stop_res = gate_tetiklemeli_emir_gonder(symbol, kapatma_yonu, miktar, stop_fiyati)
+                    
+                    # 3. HEDEF (TAKE PROFIT) EMRİNİ GÖNDER
+                    tp_basarili, tp_res = gate_tetiklemeli_emir_gonder(symbol, kapatma_yonu, miktar, hedef_fiyati)
 
                     hesaplanan_marjin = (miktar * contract_size * guncel_fiyat) / KALDIRAC if 'contract_size' in locals() else hedef_marjin
                     
@@ -389,8 +427,11 @@ def otomatik_arkaplan_tarayici():
                         "miktar": miktar,
                         "giris_rsi": rsi
                     }
+                    
+                    emir_durum_str = "✅ (Stop & Hedef Panele Eklendi)" if (stop_basarili and tp_basarili) else "⚠️ (Bot Takibinde)"
+                    
                     telegram_mesaj_gonder(
-                        f"🚀 *İŞLEM AÇILDI (STOP & HEDEF EKLENDİ - {KALDIRAC}x)*\n"
+                        f"🚀 *İŞLEM AÇILDI {emir_durum_str} - {KALDIRAC}x*\n"
                         f"• Parite: `{symbol}` ({grid_yonu})\n"
                         f"• Giriş: `{guncel_fiyat}`\n"
                         f"• Hedef Kâr: `{hedef_fiyati}` (`+{HEDEF_YUZDE}%`)\n"
@@ -408,7 +449,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(10)
 
 if __name__ == "__main__":
-    print(f"🚀 Çift Emirli Bot Başlatılıyor...")
+    print(f"🚀 Native Çift Emirli Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
@@ -419,12 +460,4 @@ if __name__ == "__main__":
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("pozisyonlar", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
-    app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
-    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
-    
-    print("Telegram komut dinleyicisi aktif...")
-    try:
-        app_tg.run_polling(drop_pending_updates=True)
-    except Exception as e:
-        print(f"Telegram polling hatası: {e}")
-        
+    ap
