@@ -102,15 +102,26 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
 def get_account_status_summary():
     try:
         balance = exchange.fetch_balance()
-        total_usdt = balance['total'].get('USDT', 0)
-        free_usdt = balance['free'].get('USDT', 0)
+        total_usdt = float(balance['total'].get('USDT', 0))
+        free_usdt = float(balance['free'].get('USDT', 0))
         
+        # Borsadan güncel açık pozisyonları ve anlık PnL verilerini çekiyoruz
         positions = exchange.fetch_positions()
         active_positions = [p for p in positions if float(p.get('contracts', 0)) > 0]
         
+        toplam_anlik_pnl = 0.0
+        for p in active_positions:
+            toplam_anlik_pnl += float(p.get('unrealizedPnl', 0))
+            
         summary = f"🧠 *CÜZDAN VE KASA DURUMU*\n\n"
         summary += f"💰 **Toplam Kasa:** `{total_usdt:.2f} USDT`\n"
-        summary += f"💵 **Kullanılabilir:** `{free_usdt:.2f} USDT`\n"
+        summary += f"💵 **Kullanılabilir Para:** `{free_usdt:.2f} USDT`\n"
+        
+        if toplam_anlik_pnl >= 0:
+            summary += f"📈 **Toplam Anlık PnL:** `+{toplam_anlik_pnl:.2f} USDT` 🟢\n"
+        else:
+            summary += f"📉 **Toplam Anlık PnL:** `{toplam_anlik_pnl:.2f} USDT` 🔴\n"
+            
         summary += f"📊 **Aktif Pozisyon Sayısı:** `{len(active_positions)}`\n"
         
         if active_positions:
@@ -121,8 +132,12 @@ def get_account_status_summary():
                 lev = p.get('leverage', 'Bilinmiyor')
                 pnl = float(p.get('unrealizedPnl', 0))
                 size = p.get('contracts', 0)
+                entry_p = float(p.get('entryPrice', 0))
+                
+                pnl_ikon = "🟢" if pnl >= 0 else "🔴"
                 summary += f"🔹 **{sym}** ({side} | {lev}x)\n"
-                summary += f"   Boyut: `{size}` | PnL: `{pnl:.2f} USDT`\n"
+                summary += f"   Giriş: `{entry_p}` | Boyut: `{size}`\n"
+                summary += f"   Anlık K/Z: `{pnl:.2f} USDT` {pnl_ikon}\n"
         
         return summary
     except Exception as e:
@@ -179,7 +194,7 @@ def otomatik_arkaplan_tarayici():
             # Yasaklı süreleri temizle
             for sym in list(HAFIZA_KAYITLARI["yasakli_yonler"].keys()):
                 if su_an > HAFIZA_KAYITLARI["yasakli_yonler"][sym]["bitis_zamani"]:
-                    del HAFIZA_KAYITLARI["yasakli_yonler"][sym]
+                    del HAFIZA_KAYITLARI["yasakli_yonler"][symbol]
 
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU:
@@ -246,28 +261,13 @@ def otomatik_arkaplan_tarayici():
                 ema7 = ta.trend.ema_indicator(df_15m['close'], window=7).iloc[-1]
                 ema21 = ta.trend.ema_indicator(df_15m['close'], window=21).iloc[-1]
                 rsi15m = ta.momentum.rsi(df_15m['close'], window=14).iloc[-1]
-                
-                bollinger = ta.volatility.BollingerBands(df_15m['close'], window=20, window_dev=2)
-                bb_upper = bollinger.bollinger_hband().iloc[-1]
-                bb_lower = bollinger.bollinger_lband().iloc[-1]
-                bb_mavg = bollinger.bollinger_mavg().iloc[-1]
-                
-                atr = ta.volatility.AverageTrueRange(df_15m['high'], df_15m['low'], df_15m['close'], window=14).average_true_range().iloc[-1]
-                fiyat_atr_orani = atr / guncel_fiyat * 100
-                bant_genisligi = (bb_upper - bb_lower) / bb_mavg * 100
 
                 grid_yonu = None
 
-                if bant_genisligi < 1.2 or fiyat_atr_orani < 0.15:
-                    if guncel_fiyat >= bb_upper * 0.998 and rsi15m > 62:
-                        grid_yonu = "SHORT"
-                    elif guncel_fiyat <= bb_lower * 1.002 and rsi15m < 38:
-                        grid_yonu = "LONG"
-                else:
-                    if ema7 > ema21 and rsi15m > 50 and rsi15m < 75:
-                        grid_yonu = "LONG"
-                    elif ema7 < ema21 and rsi15m < 50 and rsi15m > 25:
-                        grid_yonu = "SHORT"
+                if ema7 > ema21 and rsi15m > 48:
+                    grid_yonu = "LONG"
+                elif ema7 < ema21 and rsi15m < 52:
+                    grid_yonu = "SHORT"
 
                 if not grid_yonu:
                     continue
@@ -298,10 +298,10 @@ def otomatik_arkaplan_tarayici():
                         f"• Fiyat: `{guncel_fiyat:.2f}`"
                     )
                 except Exception as e:
-                    pass
+                    print(f"[EMİR AÇMA HATASI] {symbol}: {e}")
 
         except Exception as e:
-            pass
+            print(f"[DÖNGÜ HATASI]: {e}")
         
         time.sleep(15)
 
@@ -315,10 +315,10 @@ if __name__ == "__main__":
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
-    app_tg.add_handler(CommandHandler("pozisyonlar", durum_komutu)) # pozisyonlar yazınca da durum göstersin
+    app_tg.add_handler(CommandHandler("pozisyonlar", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     
     print("Telegram komut dinleyicisi aktif...")
     app_tg.run_polling()
-    
+            
