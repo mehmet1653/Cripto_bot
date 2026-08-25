@@ -17,7 +17,7 @@ exchange = ccxt.gate({
     'apiKey': '82cca880898a88d1a31e86d8eb474c57',
     'secret': '1ac479b9df5e6f2e89560b0d238a250694719b6fcae20da00ebc54ad6aeb8898',
     'enableRateLimit': True,
-    'timeout': 15000,  # 15 saniyede yanıt alamazsa isteği keser, donmayı önler
+    'timeout': 15000,
     'options': {
         'defaultType': 'swap'
     }
@@ -38,7 +38,6 @@ KALDIRAC = 10
 ILK_HEDEF_YUZDE = 1.5       
 FINAL_HEDEF_YUZDE = 2.5     
 ZARAR_KES_YUZDE = 1.5       
-KOMISYON_ORANI = 0.0005 
 
 def telegram_mesaj_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID:
@@ -57,34 +56,35 @@ def bakiye_al():
         balance = exchange.fetch_balance()
         return float(balance['total'].get('USDT', 0))
     except Exception as e:
-        print(f"[HATA] Bakiye okunamadı: {e}")
+        hata_mesaji = f"🚨 *Bakiye Okuma Hatası!*\n`{str(e)}`"
+        print(f"[HATA] {e}")
+        telegram_mesaj_gonder(hata_mesaji)
         return 0.0
 
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Gate.io Testnet Güvenli Bot | Durum: {durum_str}"
+    return f"Gate.io Testnet Raporlu Bot | Durum: {durum_str}"
 
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
-    print("🔄 Arka plan tarayıcı thread'i aktif ve döngüye girdi.")
+    print("🔄 Arka plan tarayıcı aktif.")
     
     while True:
         try:
             if BOT_CALISIYOR_MU:
-                print("🔍 Piyasa taranıyor...")
                 coklu_grid_yonetimi()
-            else:
-                time.sleep(2)
         except Exception as e:
-            print(f"[HATA] Tarama döngüsü hatası: {e}")
-        time.sleep(10)
+            hata_mesaji = f"🚨 *Genel Döngü Kritik Hata!*\n`{str(e)}`"
+            print(f"[KRİTİK HATA] {e}")
+            telegram_mesaj_gonder(hata_mesaji)
+        time.sleep(15)
 
 def kaldirac_ve_marjin_ayarla(symbol):
     try:
         exchange.set_margin_mode('isolated', symbol, {'leverage': KALDIRAC})
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Kaldıraç ayarlama uyarısı ({symbol}): {e}")
 
 def coklu_grid_yonetimi():
     global HAFIZA_KAYITLARI
@@ -103,7 +103,9 @@ def coklu_grid_yonetimi():
                 ticker = exchange.fetch_ticker(symbol)
                 guncel_fiyat = ticker['last']
             except Exception as e:
-                print(f"[HATA] {symbol} fiyatı alınamadı: {e}")
+                hata_metni = f"⚠️ *Fiyat Alma Hatası* (`{symbol}`):\n`{str(e)}`"
+                print(f"[HATA] {symbol} fiyat çekilemedi: {e}")
+                telegram_mesaj_gonder(hata_metni)
                 continue
 
             # 1. AÇIK POZİSYON KONTROLÜ
@@ -119,23 +121,23 @@ def coklu_grid_yonetimi():
                 kaldiracli_yuzde = fark_orani * KALDIRAC * 100
                 
                 if kaldiracli_yuzde >= ILK_HEDEF_YUZDE and not sistem.get("ilk_hedef_alindi", False):
-                    sistem["ilk_hedef_alindi"] = True
+                    sistem["ilk_hedef_alindi", True] if False else sistem.update({"ilk_hedef_alindi": True})
                     try:
                          miktar_cinsi = sistem['miktar'] / 2
                          kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
                          exchange.create_market_order(symbol, kapatma_yonu, miktar_cinsi, {'reduce_only': True})
-                         telegram_mesaj_gonder(f"🎯 *1. KADEME KÂR (Yarısı Kapandı)* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)")
+                         telegram_mesaj_gonder(f"🎯 *1. KADEME KÂR* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)")
                     except Exception as e:
-                        print(f"1. Hedef emir hatası: {e}")
+                        telegram_mesaj_gonder(f"🚨 *1. Hedef Emir Hatası* (`{symbol}`):\n`{str(e)}`")
 
                 if kaldiracli_yuzde >= FINAL_HEDEF_YUZDE:
                     try:
                         kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
                         exchange.create_market_order(symbol, kapatma_yonu, sistem['miktar'], {'reduce_only': True})
-                        telegram_mesaj_gonder(f"🚀 *FİNAL HEDEF TAMAMLANDI* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)")
+                        telegram_mesaj_gonder(f"🚀 *FİNAL HEDEF* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)")
                         del AKTIF_GRID_SISTEMLERI[symbol]
                     except Exception as e:
-                        print(f"Final hedef emir hatası: {e}")
+                        telegram_mesaj_gonder(f"🚨 *Final Hedef Emir Hatası* (`{symbol}`):\n`{str(e)}`")
                     
                 elif kaldiracli_yuzde <= -ZARAR_KES_YUZDE:
                     try:
@@ -145,7 +147,7 @@ def coklu_grid_yonetimi():
                         telegram_mesaj_gonder(f"🛑 *ZARAR KES (STOP)* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)")
                         del AKTIF_GRID_SISTEMLERI[symbol]
                     except Exception as e:
-                        print(f"Stop loss emir hatası: {e}")
+                        telegram_mesaj_gonder(f"🚨 *Stop Loss Emir Hatası* (`{symbol}`):\n`{str(e)}`")
                 continue
 
             # 2. YENİ POZİSYON TARAMA
@@ -161,7 +163,7 @@ def coklu_grid_yonetimi():
             try:
                 ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
             except Exception as e:
-                print(f"[HATA] {symbol} OHLCV verisi alınamadı: {e}")
+                telegram_mesaj_gonder(f"⚠️ *OHLCV Veri Hatası* (`{symbol}`):\n`{str(e)}`")
                 continue
 
             df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -229,7 +231,10 @@ def coklu_grid_yonetimi():
                     f"• Fiyat: `{guncel_fiyat:.2f}`"
                 )
             except Exception as e:
-                print(f"[HATA] Emir gönderilemedi ({symbol}): {e}")
+                # BURASI ÇOK ÖNEMLİ: Emir açılamazsa hatayı anında Telegram'a çat diye atacak
+                hata_detayi = f"🚨 *EMİR AÇILAMADI / TAKILDI!* (`{symbol}`)\n• Yön: `{emir_yonu}`\n• Hata: `{str(e)}`"
+                print(f"[EMİR HATASI] {symbol}: {e}")
+                telegram_mesaj_gonder(hata_detayi)
 
     except Exception as e:
         print(f"[HATA] Grid Yönetim Döngü Hatası: {e}")
@@ -237,7 +242,6 @@ def coklu_grid_yonetimi():
 def telegram_komutlari_dinle():
     global AKTIF_GRID_SISTEMLERI, BOT_CALISIYOR_MU
     son_id = 0
-    print("🎧 Telegram komut dinleyicisi aktif.")
     while True:
         try:
             if not TELEGRAM_TOKEN:
@@ -255,7 +259,7 @@ def telegram_komutlari_dinle():
                         
                         if metin == "/baslat":
                             BOT_CALISIYOR_MU = True
-                            telegram_mesaj_gonder("🚀 *Güvenli Bot Aktif Edildi!* Taramalar akıyor.")
+                            telegram_mesaj_gonder("🚀 *Raporlu Bot Aktif Edildi!* Takipteyiz.")
 
                         elif metin == "/kapat":
                             BOT_CALISIYOR_MU = False
@@ -263,8 +267,8 @@ def telegram_komutlari_dinle():
                                 try:
                                     kapatma_yonu = 'sell' if p['yon'] == 'LONG' else 'buy'
                                     exchange.create_market_order(sym, kapatma_yonu, p['miktar'], {'reduce_only': True})
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    print(f"Kapatma hatası: {e}")
                             AKTIF_GRID_SISTEMLERI.clear()
                             telegram_mesaj_gonder("🚨 *Tüm Pozisyonlar Kapatıldı!*")
 
@@ -289,14 +293,14 @@ def telegram_komutlari_dinle():
                                         pass
                                 telegram_mesaj_gonder(msg)
         except Exception as e:
-            print(f"[HATA] Telegram dinleme hatası: {e}")
+            print(f"Telegram dinleme hata: {e}")
         time.sleep(2)
 
 if __name__ == "__main__":
-    print(f"🚀 Güvenli Zaman Aşımı Korumalı Bot Başlatılıyor ({KALDIRAC}x)...")
+    print(f"🚀 Raporlu Güvenli Bot Başlatılıyor ({KALDIRAC}x)...")
     threading.Thread(target=telegram_komutlari_dinle, daemon=True).start()
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    telegram_mesaj_gonder(f"⚡ *Güvenli Bot Devrede ({KALDIRAC}x)!*")
+    telegram_mesaj_gonder(f"⚡ *Raporlu Bot Devrede ({KALDIRAC}x)! Herhangi bir takılmada haber vereceğim.*")
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
