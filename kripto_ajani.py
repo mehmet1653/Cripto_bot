@@ -443,4 +443,4 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-                    
+        
