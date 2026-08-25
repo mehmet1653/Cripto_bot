@@ -27,7 +27,8 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-TAKIP_EDILENLER = ['SOL/USDT:USDT', 'XRP/USDT:USDT', 'BNB/USDT:USDT']
+# BNB çıkarıldı; BTC, ETH, SOL ve XRP ile optimize edildi
+TAKIP_EDILENLER = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT']
 AKTIF_GRID_SISTEMLERI = {}
 BOT_CALISIYOR_MU = True
 
@@ -56,7 +57,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Esnek & Dolarlı Analitik Bot | Durum: {durum_str}"
+    return f"Optimizasyonlu Analitik Bot | Durum: {durum_str}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -125,7 +126,6 @@ def get_account_status_summary():
                 entry_p = float(p.get('entryPrice', 0))
                 margin_tutari = float(p.get('initialMargin', 0)) or (float(size) * entry_p / KALDIRAC)
                 
-                # Yüzdelik hesaplama
                 roe_yuzde = (pnl / margin_tutari * 100) if margin_tutari > 0 else 0.0
                 pnl_isaret = "+" if pnl >= 0 else ""
                 
@@ -182,7 +182,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🔄 Dolarlı & Esnek arkaplan tarayıcı aktif.")
+    print("🔄 Optimize edilmiş arkaplan tarayıcı aktif.")
     
     try:
         exchange.load_markets()
@@ -340,7 +340,7 @@ def otomatik_arkaplan_tarayici():
                         "giris_rsi": rsi
                     }
                     telegram_mesaj_gonder(
-                        f"🚀 *İŞLEM AÇILDI ({KALDIRAC}x İZOLE - ESNEK)*\n"
+                        f"🚀 *İŞLEM AÇILDI ({KALDIRAC}x İZOLE - OPTİMİZE)*\n"
                         f"• Parite: `{symbol}` ({grid_yonu})\n"
                         f"• Marjin: `~{hesaplanan_marjin:.2f} USDT`\n"
                         f"• Kontrat: `{miktar}`\n"
@@ -356,7 +356,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(15)
 
 if __name__ == "__main__":
-    print(f"🚀 Dolarlı & Esnek Analitik Bot Başlatılıyor...")
+    print(f"🚀 Optimize Edilmiş Analitik Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
@@ -375,4 +375,4 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-    
+                    
