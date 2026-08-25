@@ -144,40 +144,57 @@ def get_account_status_summary():
         total_usdt = float(balance['total'].get('USDT', 0))
         free_usdt = float(balance['free'].get('USDT', 0))
         
+        # Doğrudan borsadaki açık pozisyonları çekiyoruz (Tam senkronizasyon için)
+        try:
+            borsa_pozisyonlari = exchange.fetch_positions()
+        except Exception:
+            borsa_pozisyonlari = []
+
         toplam_anlik_pnl = 0.0
         aktif_ozet_listesi = []
+        aktif_symbol_kumesi = set()
 
-        for sym, sistem in list(AKTIF_GRID_SISTEMLERI.items()):
-            try:
-                ticker = exchange.fetch_ticker(sym)
-                guncel_fiyat = ticker['last']
-            except Exception:
-                guncel_fiyat = sistem['merkez_fiyat']
-
-            merkez = sistem['merkez_fiyat']
-            yon = sistem['yon']
-            marjin = sistem['marjin']
-            size = sistem['miktar']
-            
-            fark_orani = (guncel_fiyat - merkez) / merkez
-            if yon == "SHORT": 
-                fark_orani = -fark_orani
+        for pos in borsa_pozisyonlari:
+            contracts = float(pos.get('contracts', 0))
+            if contracts > 0:
+                sym = pos.get('symbol')
+                aktif_symbol_kumesi.add(sym)
                 
-            roe_yuzde = fark_orani * 100
-            pnl = (marjin * roe_yuzde) / 100
-            toplam_anlik_pnl += pnl
+                side = str(pos.get('side', '')).upper()
+                if not side:
+                    side = "LONG" if float(pos.get('notional', 0)) > 0 else "SHORT"
+                
+                entry_price = float(pos.get('entryPrice', 0))
+                pnl = float(pos.get('unrealizedPnl', 0))
+                
+                # Borsanın döndürdüğü yüzde (ROI) veya hesaplanan oran
+                roe = float(pos.get('percentage', 0))
+                if roe == 0 and entry_price > 0:
+                    mark_price = float(pos.get('markPrice', entry_price))
+                    fark = (mark_price - entry_price) / entry_price
+                    if side == 'SHORT':
+                        fark = -fark
+                    roe = fark * 100 * KALDIRAC
 
-            aktif_ozet_listesi.append({
-                'symbol': sym,
-                'side': yon,
-                'leverage': KALDIRAC,
-                'pnl': pnl,
-                'roe': roe_yuzde,
-                'contracts': size,
-                'entryPrice': merkez,
-                'margin': marjin
-            })
-            
+                margin = float(pos.get('initialMargin', 0))
+                if margin == 0:
+                    notional = float(pos.get('notional', 0))
+                    if notional > 0:
+                        margin = notional / KALDIRAC
+
+                toplam_anlik_pnl += pnl
+
+                aktif_ozet_listesi.append({
+                    'symbol': sym,
+                    'side': side,
+                    'leverage': int(pos.get('leverage', KALDIRAC)),
+                    'pnl': pnl,
+                    'roe': roe,
+                    'contracts': contracts,
+                    'entryPrice': entry_price,
+                    'margin': margin
+                })
+
         gunluk_pnl = ANALitik_HAFIZA['gunluk_net_kar_usd']
         
         summary = f"🧠 *ANALİTİK KASA & POZİSYON RAPORU*\n\n"
@@ -229,14 +246,16 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔄 *Tüm aktif işlemler kapatılıyor...*", parse_mode='Markdown')
     
     try:
-        if not AKTIF_GRID_SISTEMLERI:
-            await update.message.reply_text("ℹ️ Hafızada aktif pozisyon görünmüyor.", parse_mode='Markdown')
-            return
-
+        borsa_pozisyonlari = exchange.fetch_positions()
         kapatilanlar = 0
-        for sym, sistem in list(AKTIF_GRID_SISTEMLERI.items()):
-            pozisyonu_garantili_kapat(sym, sistem['yon'], sistem['miktar'], f"🛑 *MANUEL KAPATMA (/kapat)* - `{sym}`")
-            kapatilanlar += 1
+        for pos in borsa_pozisyonlari:
+            if float(pos.get('contracts', 0)) > 0:
+                sym = pos.get('symbol')
+                side = str(pos.get('side', '')).upper()
+                if not side:
+                    side = "LONG" if float(pos.get('notional', 0)) > 0 else "SHORT"
+                pozisyonu_garantili_kapat(sym, side, float(pos['contracts']), f"🛑 *MANUEL KAPATMA (/kapat)* - `{sym}`")
+                kapatilanlar += 1
 
         AKTIF_GRID_SISTEMLERI.clear()
         hafizayi_kaydet()
@@ -260,6 +279,27 @@ def otomatik_arkaplan_tarayici():
                 time.sleep(3)
                 continue
 
+            # Borsadaki mevcut pozisyonları canlı takip et
+            try:
+                borsa_pozisyonlari = exchange.fetch_positions()
+            except Exception:
+                borsa_pozisyonlari = []
+
+            aktif_borsa_map = {}
+            for pos in borsa_pozisyonlari:
+                if float(pos.get('contracts', 0)) > 0:
+                    sym = pos.get('symbol')
+                    side = str(pos.get('side', '')).upper()
+                    if not side:
+                        side = "LONG" if float(pos.get('notional', 0)) > 0 else "SHORT"
+                    aktif_borsa_map[sym] = {
+                        "side": side,
+                        "contracts": float(pos['contracts']),
+                        "entryPrice": float(pos.get('entryPrice', 0)),
+                        "unrealizedPnl": float(pos.get('unrealizedPnl', 0)),
+                        "percentage": float(pos.get('percentage', 0))
+                    }
+
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU:
                     break
@@ -270,28 +310,29 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
-                if symbol in AKTIF_GRID_SISTEMLERI:
-                    sistem = AKTIF_GRID_SISTEMLERI[symbol]
-                    merkez = sistem['merkez_fiyat']
-                    yon = sistem['yon']
+                # Eğer pozisyon borsada açıksa kâr/zarar kontrolü yap
+                if symbol in aktif_borsa_map:
+                    pos_bilgi = aktif_borsa_map[symbol]
+                    yon = pos_bilgi["side"]
+                    merkez = pos_bilgi["entryPrice"]
                     
                     fark_orani = (guncel_fiyat - merkez) / merkez
                     if yon == "SHORT": 
                         fark_orani = -fark_orani
                         
-                    net_kar_zarar_yuzdesi = fark_orani * 100
+                    net_kar_zarar_yuzdesi = fark_orani * 100 * KALDIRAC
                     
-                    if net_kar_zarar_yuzdesi >= HEDEF_YUZDE:
-                        tahmini_kar_usd = (sistem['marjin'] * net_kar_zarar_yuzdesi) / 100
+                    if net_kar_zarar_yuzdesi >= (HEDEF_YUZDE * KALDIRAC) or pos_bilgi["percentage"] >= (HEDEF_YUZDE * KALDIRAC):
+                        tahmini_kar_usd = abs(pos_bilgi["unrealizedPnl"]) if pos_bilgi["unrealizedPnl"] > 0 else 1.0
                         ANALitik_HAFIZA["gunluk_net_kar_usd"] += tahmini_kar_usd
                         ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
                         hafizayi_kaydet()
                         
-                        mesaj = f"🚀 *HEDEF BAŞARILI (KÂR ALINDI)* - `{symbol}` (`+{net_kar_zarar_yuzdesi:.2f}%` | `+{tahmini_kar_usd:.2f} USDT`)"
-                        pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
+                        mesaj = f"🚀 *HEDEF BAŞARILI (KÂR ALINDI)* - `{symbol}` (`+{net_kar_zarar_yuzdesi:.2f}%`)"
+                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj)
                         
-                    elif net_kar_zarar_yuzdesi <= -ZARAR_KES_YUZDE:
-                        tahmini_zarar_usd = (sistem['marjin'] * abs(net_kar_zarar_yuzdesi)) / 100
+                    elif net_kar_zarar_yuzdesi <= -(ZARAR_KES_YUZDE * KALDIRAC) or pos_bilgi["percentage"] <= -(ZARAR_KES_YUZDE * KALDIRAC):
+                        tahmini_zarar_usd = abs(pos_bilgi["unrealizedPnl"]) if pos_bilgi["unrealizedPnl"] < 0 else 1.0
                         ANALitik_HAFIZA["gunluk_net_kar_usd"] -= tahmini_zarar_usd
                         ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
                         
@@ -306,12 +347,13 @@ def otomatik_arkaplan_tarayici():
                         ANALitik_HAFIZA["basarisiz_analizler"].append(analitik_hata_notu)
                         hafizayi_kaydet()
                         
-                        mesaj = f"🛑 *ZARAR KES (STOP OLDU) & ANALİZE EKLENDİ* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%` | `-{tahmini_zarar_usd:.2f} USDT`)"
-                        pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
+                        mesaj = f"🛑 *ZARAR KES (STOP OLDU) & ANALİZE EKLENDİ* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%`)"
+                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj)
                         
                     continue
 
-                if symbol in AKTIF_GRID_SISTEMLERI:
+                # Zaten açık pozisyon varsa yeni açma
+                if symbol in aktif_borsa_map:
                     continue
 
                 try:
@@ -369,11 +411,7 @@ def otomatik_arkaplan_tarayici():
                 emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
                 
                 try:
-                    # 1. ADIM: Önce ana piyasa emrini tertemiz ve hatasız gönderiyoruz (Pozisyon açılıyor)
                     exchange.create_market_order(symbol, emir_yonu, miktar)
-                    
-                    # 2. ADIM: Pozisyon açıldıktan sonra kâr al ve zarar kes takibini bot kendi içinde yapacak 
-                    # (Testnet'in tetikleyici emir reddi sorununu tamamen çözmek için takibi ve kapatmayı Python döngüsü yönetiyor)
                     
                     hesaplanan_marjin = (miktar * contract_size * guncel_fiyat) / KALDIRAC if 'contract_size' in locals() else hedef_marjin
                     
@@ -431,4 +469,4 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-            
+                                              
