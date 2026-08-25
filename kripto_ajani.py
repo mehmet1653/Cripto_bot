@@ -34,13 +34,13 @@ BOT_CALISIYOR_MU = True
 ANALitik_HAFIZA = {
     "basarisiz_analizler": [],
     "basarili_islem_sayisi": 0,
-    "basarisiz_islem_sayisi": 0
+    "basarisiz_islem_sayisi": 0,
+    "gunluk_net_kar_usd": 0.0
 }
 
 KALDIRAC = 10
-ILK_HEDEF_YUZDE = 1.5       
-FINAL_HEDEF_YUZDE = 2.5     
-ZARAR_KES_YUZDE = 1.5       
+HEDEF_YUZDE = 2.5         # Tek seferde temiz kâr hedefi
+ZARAR_KES_YUZDE = 1.5     # Sabit zarar kes
 # ==========================================================
 
 def telegram_mesaj_gonder(mesaj):
@@ -58,7 +58,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Stop-Market Korumalı Analitik Bot | Durum: {durum_str}"
+    return f"Komisyonsuz / Tek Hedefli Bot | Durum: {durum_str}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -114,14 +114,21 @@ def get_account_status_summary():
         for p in active_positions:
             toplam_anlik_pnl += float(p.get('unrealizedPnl', 0))
             
-        summary = f"🧠 *ANALİTİK BOT - KASA DURUMU (% ve $)*\n\n"
+        gunluk_pnl = ANALitik_HAFIZA['gunluk_net_kar_usd']
+        
+        summary = f"🧠 *ANALİTİK BOT - GÜNLÜK RAPOR & KASA*\n\n"
         summary += f"💰 **Toplam Kasa:** `{total_usdt:.2f} USDT`\n"
         summary += f"💵 **Kullanılabilir:** `{free_usdt:.2f} USDT`\n"
         
-        if toplam_anlik_pnl >= 0:
-            summary += f"📈 **Toplam PnL:** `+{toplam_anlik_pnl:.2f} USDT` 🟢\n"
+        if gunluk_pnl >= 0:
+            summary += f"📅 **Günlük Net Kâr:** `+{gunluk_pnl:.2f} USDT` 🟢\n"
         else:
-            summary += f"📉 **Toplam PnL:** `{toplam_anlik_pnl:.2f} USDT` 🔴\n"
+            summary += f"📅 **Günlük Net Zarar:** `{gunluk_pnl:.2f} USDT` 🔴\n"
+            
+        if toplam_anlik_pnl >= 0:
+            summary += f"📈 **Anlık Açık PnL:** `+{toplam_anlik_pnl:.2f} USDT` 🟢\n"
+        else:
+            summary += f"📉 **Anlık Açık PnL:** `{toplam_anlik_pnl:.2f} USDT` 🔴\n"
             
         summary += f"📊 **Aktif Pozisyon:** `{len(active_positions)}`\n"
         summary += f"🎯 **Başarılı İşlem:** `{ANALitik_HAFIZA['basarili_islem_sayisi']}` adet\n"
@@ -194,7 +201,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🔄 Stop-Market Korumalı arkaplan tarayıcı aktif.")
+    print("🔄 Komisyonsuz Tek Hedefli tarayıcı aktif.")
     
     try:
         exchange.load_markets()
@@ -222,7 +229,6 @@ def otomatik_arkaplan_tarayici():
                                 "merkez_fiyat": b_giris,
                                 "marjin": kontrat * b_giris / KALDIRAC,
                                 "miktar": kontrat,
-                                "ilk_hedef_alindi": False,
                                 "giris_rsi": 50.0
                             }
             except Exception:
@@ -248,71 +254,45 @@ def otomatik_arkaplan_tarayici():
                     if yon == "SHORT": 
                         fark_orani = -fark_orani
                         
-                    kaldiracli_yuzde = fark_orani * KALDIRAC * 100
+                    net_kar_zarar_yuzdesi = fark_orani * 100
                     
-                    # 1. KADEME KÂR ALMA
-                    if kaldiracli_yuzde >= ILK_HEDEF_YUZDE and not sistem.get("ilk_hedef_alindi", False):
-                        sistem.update({"ilk_hedef_alindi": True})
-                        try:
-                             market_info = exchange.market(symbol)
-                             min_amount = float(market_info['limits']['amount']['min'] or 1.0)
-                             
-                             yeni_miktar = sistem['miktar'] / 2
-                             if yeni_miktar < min_amount:
-                                 yeni_miktar = min_amount
-                             
-                             yeni_miktar = float(exchange.amount_to_precision(symbol, yeni_miktar))
-                             sistem['miktar'] = max(0, sistem['miktar'] - yeni_miktar)
-                             
-                             kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
-                             exchange.create_market_order(symbol, kapatma_yonu, yeni_miktar, {'reduce_only': True})
-                             
-                             telegram_mesaj_gonder(f"🎯 *1. KADEME KÂR (Kısmi Kapandı)* - `{symbol}` (`+{kaldiracli_yuzde:.2f}%`)")
-                        except Exception as e_kademe:
-                            print(f"1. Kademe Kâr Hatası ({symbol}): {e_kademe}")
-
-                    # FİNAL HEDEF
-                    if kaldiracli_yuzde >= FINAL_HEDEF_YUZDE or sistem['miktar'] <= 0:
-                        tahmini_kar_usd = (sistem['marjin'] * kaldiracli_yuzde) / 100
-                        mesaj = f"🚀 *FİNAL HEDEF (BAŞARILI)* - `{symbol}` (`+{kaldiracli_yuzde:.2f}%` | `+{tahmini_kar_usd:.2f} USDT`)"
-                        
-                        pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
+                    # FİNAL HEDEF (%2.5 kâr - Tek seferde temiz kapatma)
+                    if net_kar_zarar_yuzdesi >= HEDEF_YUZDE:
+                        tahmini_kar_usd = (sistem['marjin'] * net_kar_zarar_yuzdesi) / 100
+                        ANALitik_HAFIZA["gunluk_net_kar_usd"] += tahmini_kar_usd
                         ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
+                        
+                        mesaj = f"🚀 *HEDEF BAŞARILI (KÂR ALINDI)* - `{symbol}` (`+{net_kar_zarar_yuzdesi:.2f}%` | `+{tahmini_kar_usd:.2f} USDT`)"
+                        pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
                         
                         if symbol in AKTIF_GRID_SISTEMLERI:
                             del AKTIF_GRID_SISTEMLERI[symbol]
                         
-                    # ZARAR KES KONTROLÜ (Döngü yedek koruması)
-                    if kaldiracli_yuzde <= -ZARAR_KES_YUZDE:
-                        tahmini_zarar_usd = (sistem['marjin'] * abs(kaldiracli_yuzde)) / 100
-                        
-                        mesaj = f"🛑 *ZARAR KES & ANALİTİK DERS* - `{symbol}` (`{kaldiracli_yuzde:.2f}%` | `-{tahmini_zarar_usd:.2f} USDT`)"
+                    # ZARAR KES KONTROLÜ (%1.5 stop)
+                    elif net_kar_zarar_yuzdesi <= -ZARAR_KES_YUZDE:
+                        tahmini_zarar_usd = (sistem['marjin'] * abs(net_kar_zarar_yuzdesi)) / 100
+                        ANALitik_HAFIZA["gunluk_net_kar_usd"] -= tahmini_zarar_usd
                         ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
+                        
+                        mesaj = f"🛑 *ZARAR KES (STOP OLDU)* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%` | `-{tahmini_zarar_usd:.2f} USDT`)"
                         
                         analitik_hata_notu = {
                             "symbol": symbol,
                             "yanlis_yon": yon,
                             "giris_fiyati": merkez,
-                            "zarar_orani": kaldiracli_yuzde,
+                            "zarar_orani": net_kar_zarar_yuzdesi,
                             "zarar_usd": tahmini_zarar_usd,
                             "zaman": time.strftime('%H:%M:%S')
                         }
                         ANALitik_HAFIZA["basarisiz_analizler"].append(analitik_hata_notu)
                         
-                        telegram_mesaj_gonder(
-                            f"🧬 *Hafıza Güncellendi (Analitik Ders):*\n"
-                            f"• Parite: `{symbol}`\n"
-                            f"• Yanılan Yön: `{yon}`\n"
-                            f"• Çıkarılan Ders: Hata not edilerek sonraki döngüye aktarıldı."
-                        )
-
                         pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
                         
                         if symbol in AKTIF_GRID_SISTEMLERI:
                             del AKTIF_GRID_SISTEMLERI[symbol]
                     continue
 
-                # 3. YENİ POZİSYON AÇMA TARAMASI (RSI FİLTRELİ + STOP-MARKET)
+                # 3. YENİ POZİSYON AÇMA TARAMASI
                 try:
                     balance = exchange.fetch_balance()
                     toplam_bakiye = float(balance['total'].get('USDT', 0))
@@ -367,28 +347,22 @@ def otomatik_arkaplan_tarayici():
                 emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
                 
                 try:
-                    # Ana Pozisyonu Aç
                     exchange.create_market_order(symbol, emir_yonu, miktar)
                     
-                    # 🛑 BORSAYA DOĞRUDAN STOP-MARKET (TETİKLENEN ZARAR KES) EMRİ İLİŞTİRME
-                    # Long için fiyat düşünce (girişin 1.5% altı), Short için fiyat çıkınca (girişin 1.5% üstü) tetiklenir
-                    stop_yonu = 'sell' if grid_yonu == 'LONG' else 'buy'
+                    # Stop-Market emrini kusursuz kuruyoruz
                     if grid_yonu == 'LONG':
-                        stop_fiyati = guncel_fiyat * (1.0 - (ZARAR_KES_YUZDE / 100.0 / KALDIRAC))
+                        stop_fiyati = guncel_fiyat * (1.0 - (ZARAR_KES_YUZDE / 100.0))
                     else:
-                        stop_fiyati = guncel_fiyat * (1.0 + (ZARAR_KES_YUZDE / 100.0 / KALDIRAC))
+                        stop_fiyati = guncel_fiyat * (1.0 + (ZARAR_KES_YUZDE / 100.0))
                     
                     stop_fiyati = float(exchange.price_to_precision(symbol, stop_fiyati))
+                    stop_yonu = 'sell' if grid_yonu == 'LONG' else 'buy'
                     
                     try:
-                        # Gate.io veya ccxt destekli stop-market parametreleri
-                        params = {
-                            'stopPrice': stop_fiyati,
-                            'reduceOnly': True
-                        }
+                        params = {'stopPrice': stop_fiyati, 'reduceOnly': True}
                         exchange.create_order(symbol, 'stop', stop_yonu, miktar, stop_fiyati, params)
                     except Exception as stop_err:
-                        print(f"Borsa bazlı stop emri kurulamadı (yedek döngü devrede): {stop_err}")
+                        print(f"Stop-market kurulamadı: {stop_err}")
 
                     hesaplanan_marjin = (miktar * contract_size * guncel_fiyat) / KALDIRAC if 'contract_size' in locals() else hedef_marjin
                     
@@ -397,13 +371,12 @@ def otomatik_arkaplan_tarayici():
                         "merkez_fiyat": guncel_fiyat,
                         "marjin": hesaplanan_marjin,
                         "miktar": miktar,
-                        "ilk_hedef_alindi": False,
                         "giris_rsi": rsi
                     }
                     telegram_mesaj_gonder(
                         f"🚀 *İŞLEM AÇILDI & STOP EKLENDİ ({KALDIRAC}x)*\n"
                         f"• Parite: `{symbol}` ({grid_yonu})\n"
-                        f"• Giriş: `{guncel_fiyat}` | Hedef Stop: `{stop_fiyati}`\n"
+                        f"• Giriş: `{guncel_fiyat}` | Stop: `{stop_fiyati}`\n"
                         f"• Marjin: `~{hesaplanan_marjin:.2f} USDT`\n"
                         f"• Giriş RSI: `{rsi:.1f}`"
                     )
@@ -417,7 +390,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(10)
 
 if __name__ == "__main__":
-    print(f"🚀 Stop-Market Korumalı Analitik Bot Başlatılıyor...")
+    print(f"🚀 Komisyonsuz Tek Hedefli Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
@@ -436,4 +409,4 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-                
+                    
