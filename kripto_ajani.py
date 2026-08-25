@@ -40,7 +40,7 @@ ANALitik_HAFIZA = {
 KALDIRAC = 10
 ILK_HEDEF_YUZDE = 1.5       
 FINAL_HEDEF_YUZDE = 2.5     
-ZARAR_KES_YUZDE = 1.5       
+ZARAR_KES_YUZDE = 1.5       # Sabit stop oranı (Başa baş stop yok)
 # ==========================================================
 
 def telegram_mesaj_gonder(mesaj):
@@ -77,7 +77,6 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
     basarili = False
     
     try:
-        # Borsa kurallarına göre miktar hassasiyetini ayarla
         try:
             market_info = exchange.market(symbol)
             min_amount = float(market_info['limits']['amount']['min'] or 1.0)
@@ -91,7 +90,7 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
         basarili = True
     except Exception:
         try:
-            time.sleep(0.5)
+            time.sleep(0.3)
             ticker = exchange.fetch_ticker(symbol)
             guvenli_fiyat = ticker['ask'] if kapatma_yonu == 'buy' else ticker['bid']
             exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, guvenli_fiyat, {'timeInForce': 'IOC', 'reduce_only': True})
@@ -260,7 +259,7 @@ def otomatik_arkaplan_tarayici():
                              
                              yeni_miktar = sistem['miktar'] / 2
                              if yeni_miktar < min_amount:
-                                 yeni_miktar = min_amount  # Minimum sınıra takılmaması için
+                                 yeni_miktar = min_amount
                              
                              yeni_miktar = float(exchange.amount_to_precision(symbol, yeni_miktar))
                              sistem['miktar'] = max(0, sistem['miktar'] - yeni_miktar)
@@ -283,34 +282,29 @@ def otomatik_arkaplan_tarayici():
                         if symbol in AKTIF_GRID_SISTEMLERI:
                             del AKTIF_GRID_SISTEMLERI[symbol]
                         
-                    # ZARAR KES KONTROLÜ (1. Kademe alındıysa stopu giriş fiyatına (0%) sabitliyoruz)
-                    aktif_zarar_siniri = 0.0 if sistem.get("ilk_hedef_alindi", False) else -ZARAR_KES_YUZDE
-                    
-                    if kaldiracli_yuzde <= aktif_zarar_siniri:
-                        tahmini_zarar_usd = (sistem['marjin'] * abs(kaldiracli_yuzde)) / 100 if kaldiracli_yuzde < 0 else 0.0
+                    # ZARAR KES KONTROLÜ (Başa baş stop iptal, doğrudan sabit ZARAR_KES_YUZDE geçerli)
+                    if kaldiracli_yuzde <= -ZARAR_KES_YUZDE:
+                        tahmini_zarar_usd = (sistem['marjin'] * abs(kaldiracli_yuzde)) / 100
                         
-                        if sistem.get("ilk_hedef_alindi", False):
-                            mesaj = f"🛡️ *BAŞA BAŞ (BREAK-EVEN) STOP* - `{symbol}` (`+{kaldiracli_yuzde:.2f}%` | Kâr korundu)"
-                        else:
-                            mesaj = f"🛑 *ZARAR KES & ANALİTİK DERS* - `{symbol}` (`{kaldiracli_yuzde:.2f}%` | `-{tahmini_zarar_usd:.2f} USDT`)"
-                            ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
-                            
-                            analitik_hata_notu = {
-                                "symbol": symbol,
-                                "yanlis_yon": yon,
-                                "giris_fiyati": merkez,
-                                "zarar_orani": kaldiracli_yuzde,
-                                "zarar_usd": tahmini_zarar_usd,
-                                "zaman": time.strftime('%H:%M:%S')
-                            }
-                            ANALitik_HAFIZA["basarisiz_analizler"].append(analitik_hata_notu)
-                            
-                            telegram_mesaj_gonder(
-                                f"🧬 *Hafıza Güncellendi (Analitik Ders):*\n"
-                                f"• Parite: `{symbol}`\n"
-                                f"• Yanılan Yön: `{yon}`\n"
-                                f"• Çıkarılan Ders: Hata not edilerek sonraki döngüye aktarıldı."
-                            )
+                        mesaj = f"🛑 *ZARAR KES & ANALİTİK DERS* - `{symbol}` (`{kaldiracli_yuzde:.2f}%` | `-{tahmini_zarar_usd:.2f} USDT`)"
+                        ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
+                        
+                        analitik_hata_notu = {
+                            "symbol": symbol,
+                            "yanlis_yon": yon,
+                            "giris_fiyati": merkez,
+                            "zarar_orani": kaldiracli_yuzde,
+                            "zarar_usd": tahmini_zarar_usd,
+                            "zaman": time.strftime('%H:%M:%S')
+                        }
+                        ANALitik_HAFIZA["basarisiz_analizler"].append(analitik_hata_notu)
+                        
+                        telegram_mesaj_gonder(
+                            f"🧬 *Hafıza Güncellendi (Analitik Ders):*\n"
+                            f"• Parite: `{symbol}`\n"
+                            f"• Yanılan Yön: `{yon}`\n"
+                            f"• Çıkarılan Ders: Hata not edilerek sonraki döngüye aktarıldı."
+                        )
 
                         pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
                         
@@ -380,7 +374,7 @@ def otomatik_arkaplan_tarayici():
                         "giris_rsi": rsi
                     }
                     telegram_mesaj_gonder(
-                        f"🚀 *İŞLEM AÇILDI ({KALDIRAC}x İZOLE - OPTİMİZE)*\n"
+                        f"🚀 *İŞLEM AÇILDI ({KALDIRAC}x İZOLE - SABİT STOP)*\n"
                         f"• Parite: `{symbol}` ({grid_yonu})\n"
                         f"• Marjin: `~{hesaplanan_marjin:.2f} USDT`\n"
                         f"• Kontrat: `{miktar}`\n"
@@ -393,10 +387,10 @@ def otomatik_arkaplan_tarayici():
         except Exception as loop_err:
             print(f"Döngü hatası: {loop_err}")
         
-        time.sleep(15)
+        time.sleep(10)
 
 if __name__ == "__main__":
-    print(f"🚀 Optimize Edilmiş Analitik Bot Başlatılıyor...")
+    print(f"🚀 Sabit Stoplu Analitik Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
@@ -415,4 +409,4 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-                    
+                            
