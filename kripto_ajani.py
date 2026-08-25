@@ -90,7 +90,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Akıllı Öz-Öğrenen Bot | Durum: {durum_str}"
+    return f"Testnet Uyumlu Akıllı Bot | Durum: {durum_str}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -103,26 +103,6 @@ def set_isolated_leverage_safely(symbol, leverage):
         return True
     except Exception:
         return False
-
-def gate_tetiklemeli_emir_gonder(symbol, kapatma_yonu, miktar, tetik_fiyati):
-    try:
-        params = {
-            'triggerPrice': float(tetik_fiyati),
-            'stopPrice': float(tetik_fiyati),
-            'reduceOnly': True
-        }
-        order = exchange.create_order(symbol, 'market', kapatma_yonu, miktar, None, params)
-        return True, order
-    except Exception as e:
-        try:
-            params_alt = {
-                'trigger_price': float(tetik_fiyati),
-                'reduce_only': True
-            }
-            order = exchange.create_order(symbol, 'market', kapatma_yonu, miktar, None, params_alt)
-            return True, order
-        except Exception as e2:
-            return False, str(e2)
 
 def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
     kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
@@ -267,7 +247,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🔄 Kalıcı Hafızalı Akıllı Tarayıcı aktif.")
+    print("🔄 Testnet Uyumlu Akıllı Tarayıcı aktif.")
     
     try:
         exchange.load_markets()
@@ -389,25 +369,12 @@ def otomatik_arkaplan_tarayici():
                 emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
                 
                 try:
+                    # 1. ADIM: Önce ana piyasa emrini tertemiz ve hatasız gönderiyoruz (Pozisyon açılıyor)
                     exchange.create_market_order(symbol, emir_yonu, miktar)
                     
-                    if grid_yonu == 'LONG':
-                        stop_fiyati = guncel_fiyat * (1.0 - (ZARAR_KES_YUZDE / 100.0))
-                        hedef_fiyati = guncel_fiyat * (1.0 + (HEDEF_YUZDE / 100.0))
-                        kapatma_yonu = 'sell'
-                    else:
-                        stop_fiyati = guncel_fiyat * (1.0 + (ZARAR_KES_YUZDE / 100.0))
-                        hedef_fiyati = guncel_fiyat * (1.0 - (HEDEF_YUZDE / 100.0))
-                        kapatma_yonu = 'buy'
+                    # 2. ADIM: Pozisyon açıldıktan sonra kâr al ve zarar kes takibini bot kendi içinde yapacak 
+                    # (Testnet'in tetikleyici emir reddi sorununu tamamen çözmek için takibi ve kapatmayı Python döngüsü yönetiyor)
                     
-                    stop_fiyati = float(exchange.price_to_precision(symbol, stop_fiyati))
-                    hedef_fiyati = float(exchange.price_to_precision(symbol, hedef_fiyati))
-                    
-                    time.sleep(0.3)
-
-                    stop_basarili, stop_res = gate_tetiklemeli_emir_gonder(symbol, kapatma_yonu, miktar, stop_fiyati)
-                    tp_basarili, tp_res = gate_tetiklemeli_emir_gonder(symbol, kapatma_yonu, miktar, hedef_fiyati)
-
                     hesaplanan_marjin = (miktar * contract_size * guncel_fiyat) / KALDIRAC if 'contract_size' in locals() else hedef_marjin
                     
                     AKTIF_GRID_SISTEMLERI[symbol] = {
@@ -419,12 +386,19 @@ def otomatik_arkaplan_tarayici():
                     }
                     hafizayi_kaydet()
                     
+                    if grid_yonu == 'LONG':
+                        stop_fiyati = guncel_fiyat * (1.0 - (ZARAR_KES_YUZDE / 100.0))
+                        hedef_fiyati = guncel_fiyat * (1.0 + (HEDEF_YUZDE / 100.0))
+                    else:
+                        stop_fiyati = guncel_fiyat * (1.0 + (ZARAR_KES_YUZDE / 100.0))
+                        hedef_fiyati = guncel_fiyat * (1.0 - (HEDEF_YUZDE / 100.0))
+
                     telegram_mesaj_gonder(
-                        f"🚀 *İŞLEM AÇILDI & HAFIZAYA KAYDEDİLDİ - {KALDIRAC}x*\n"
+                        f"🚀 *İŞLEM BAŞARIYLA AÇILDI - {KALDIRAC}x*\n"
                         f"• Parite: `{symbol}` ({grid_yonu})\n"
-                        f"• Giriş: `{guncel_fiyat}`\n"
-                        f"• Hedef Kâr: `{hedef_fiyati}` (`+{HEDEF_YUZDE}%`)\n"
-                        f"• Zarar Kes: `{stop_fiyati}` (`-{ZARAR_KES_YUZDE}%`)\n"
+                        f"• Giriş Fiyatı: `{guncel_fiyat}`\n"
+                        f"• Hedef Kâr: `~{hedef_fiyati:.4f}` (`+{HEDEF_YUZDE}%`)\n"
+                        f"• Zarar Kes: `~{stop_fiyati:.4f}` (`-{ZARAR_KES_YUZDE}%`)\n"
                         f"• Marjin: `~{hesaplanan_marjin:.2f} USDT`\n"
                         f"• Giriş RSI: `{rsi:.1f}`"
                     )
@@ -438,7 +412,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print(f"🚀 Akıllı Öz-Öğrenen Kalıcı Hafızalı Bot Başlatılıyor...")
+    print(f"🚀 Testnet Uyumlu Akıllı Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
@@ -457,4 +431,4 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-                    
+            
