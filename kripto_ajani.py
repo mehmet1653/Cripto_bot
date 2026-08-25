@@ -5,6 +5,7 @@ import ccxt
 import pandas as pd
 import ta
 import os
+import json
 from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
@@ -28,15 +29,46 @@ exchange = ccxt.gate({
 exchange.set_sandbox_mode(True)
 
 TAKIP_EDILENLER = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT']
-AKTIF_GRID_SISTEMLERI = {}
 BOT_CALISIYOR_MU = True
 
-ANALitik_HAFIZA = {
+HAFIZA_DOSYASI = "bot_kalici_hafiza.json"
+
+def hafizayi_yukle():
+    if os.path.exists(HAFIZA_DOSYASI):
+        try:
+            with open(HAFIZA_DOSYASI, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
+        "aktif_sistemler": {},
+        "analitik": {
+            "basarisiz_analizler": [],
+            "basarili_islem_sayisi": 0,
+            "basarisiz_islem_sayisi": 0,
+            "gunluk_net_kar_usd": 0.0
+        }
+    }
+
+def hafizayi_kaydet():
+    try:
+        data = {
+            "aktif_sistemler": AKTIF_GRID_SISTEMLERI,
+            "analitik": ANALitik_HAFIZA
+        }
+        with open(HAFIZA_DOSYASI, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"Hafıza kaydetme hatası: {e}")
+
+kalici_veri = hafizayi_yukle()
+AKTIF_GRID_SISTEMLERI = kalici_veri.get("aktif_sistemler", {})
+ANALitik_HAFIZA = kalici_veri.get("analitik", {
     "basarisiz_analizler": [],
     "basarili_islem_sayisi": 0,
     "basarisiz_islem_sayisi": 0,
     "gunluk_net_kar_usd": 0.0
-}
+})
 
 KALDIRAC = 10
 HEDEF_YUZDE = 2.5         
@@ -58,7 +90,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Net Senkronize Bot | Durum: {durum_str}"
+    return f"Akıllı Öz-Öğrenen Bot | Durum: {durum_str}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -121,6 +153,7 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
 
     if symbol in AKTIF_GRID_SISTEMLERI:
         del AKTIF_GRID_SISTEMLERI[symbol]
+        hafizayi_kaydet()
 
     if sebep_mesaji:
         telegram_mesaj_gonder(sebep_mesaji)
@@ -134,7 +167,6 @@ def get_account_status_summary():
         toplam_anlik_pnl = 0.0
         aktif_ozet_listesi = []
 
-        # Hafızadaki aktif sistemleri tek tek işleme al
         for sym, sistem in list(AKTIF_GRID_SISTEMLERI.items()):
             try:
                 ticker = exchange.fetch_ticker(sym)
@@ -168,7 +200,7 @@ def get_account_status_summary():
             
         gunluk_pnl = ANALitik_HAFIZA['gunluk_net_kar_usd']
         
-        summary = f"🧠 *ANALİTİK BOT - GÜNLÜK RAPOR & KASA*\n\n"
+        summary = f"🧠 *ANALİTİK KASA & POZİSYON RAPORU*\n\n"
         summary += f"💰 **Toplam Kasa:** `{total_usdt:.2f} USDT`\n"
         summary += f"💵 **Kullanılabilir:** `{free_usdt:.2f} USDT`\n"
         
@@ -206,7 +238,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 *Bot aktif edildi!*", parse_mode='Markdown')
+    await update.message.reply_text("🟢 *Bot aktif edildi ve izlemeye başladı!*", parse_mode='Markdown')
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -227,6 +259,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kapatilanlar += 1
 
         AKTIF_GRID_SISTEMLERI.clear()
+        hafizayi_kaydet()
         await update.message.reply_text(f"✅ İşlem tamamlandı. Toplam `{kapatilanlar}` pozisyon kapatıldı.", parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f"❌ Kapatma sırasında hata: `{str(e)}`", parse_mode='Markdown')
@@ -234,7 +267,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🔄 Net Senkronize Tarayıcı aktif.")
+    print("🔄 Kalıcı Hafızalı Akıllı Tarayıcı aktif.")
     
     try:
         exchange.load_markets()
@@ -272,6 +305,7 @@ def otomatik_arkaplan_tarayici():
                         tahmini_kar_usd = (sistem['marjin'] * net_kar_zarar_yuzdesi) / 100
                         ANALitik_HAFIZA["gunluk_net_kar_usd"] += tahmini_kar_usd
                         ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
+                        hafizayi_kaydet()
                         
                         mesaj = f"🚀 *HEDEF BAŞARILI (KÂR ALINDI)* - `{symbol}` (`+{net_kar_zarar_yuzdesi:.2f}%` | `+{tahmini_kar_usd:.2f} USDT`)"
                         pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
@@ -280,8 +314,6 @@ def otomatik_arkaplan_tarayici():
                         tahmini_zarar_usd = (sistem['marjin'] * abs(net_kar_zarar_yuzdesi)) / 100
                         ANALitik_HAFIZA["gunluk_net_kar_usd"] -= tahmini_zarar_usd
                         ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
-                        
-                        mesaj = f"🛑 *ZARAR KES (STOP OLDU)* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%` | `-{tahmini_zarar_usd:.2f} USDT`)"
                         
                         analitik_hata_notu = {
                             "symbol": symbol,
@@ -292,7 +324,9 @@ def otomatik_arkaplan_tarayici():
                             "zaman": time.strftime('%H:%M:%S')
                         }
                         ANALitik_HAFIZA["basarisiz_analizler"].append(analitik_hata_notu)
+                        hafizayi_kaydet()
                         
+                        mesaj = f"🛑 *ZARAR KES (STOP OLDU) & ANALİZE EKLENDİ* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%` | `-{tahmini_zarar_usd:.2f} USDT`)"
                         pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
                         
                     continue
@@ -327,6 +361,7 @@ def otomatik_arkaplan_tarayici():
                 if grid_yonu == "LONG" and rsi > 60:
                     continue 
 
+                # Öğrenme filtresi: Geçmiş hatalı işlemleri tekrar etme
                 son_hatalar = [h for h in ANALitik_HAFIZA["basarisiz_analizler"] if h["symbol"] == symbol]
                 if son_hatalar:
                     son_hata = son_hatalar[-1]
@@ -382,9 +417,10 @@ def otomatik_arkaplan_tarayici():
                         "miktar": miktar,
                         "giris_rsi": rsi
                     }
+                    hafizayi_kaydet()
                     
                     telegram_mesaj_gonder(
-                        f"🚀 *İŞLEM AÇILDI - {KALDIRAC}x*\n"
+                        f"🚀 *İŞLEM AÇILDI & HAFIZAYA KAYDEDİLDİ - {KALDIRAC}x*\n"
                         f"• Parite: `{symbol}` ({grid_yonu})\n"
                         f"• Giriş: `{guncel_fiyat}`\n"
                         f"• Hedef Kâr: `{hedef_fiyati}` (`+{HEDEF_YUZDE}%`)\n"
@@ -402,7 +438,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print(f"🚀 Net Senkronize Bot Başlatılıyor...")
+    print(f"🚀 Akıllı Öz-Öğrenen Kalıcı Hafızalı Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
@@ -421,4 +457,4 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-    
+                    
