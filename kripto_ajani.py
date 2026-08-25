@@ -12,8 +12,8 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 app = Flask(__name__)
 
 # ==================== AYARLAR VE ANAHTARLAR ====================
-TELEGRAM_TOKEN = "7917711488:AAF_ornek_token_buraya"
-CHAT_ID = "6929517567"  # Telegram ID'n buraya işlendi abi
+TELEGRAM_TOKEN = "8870934003:AAGIpiwdgpnQVW7nbJIRcR0dOLOzj-MOZsA"
+CHAT_ID = "6929517567"
 
 # Gate.io Testnet (Demo) Bağlantısı ve Test Keyleri
 exchange = ccxt.gate({
@@ -282,4 +282,4 @@ if __name__ == "__main__":
     
     print("Telegram komut dinleyicisi (/durum) aktif...")
     app_tg.run_polling()
-    
+                
