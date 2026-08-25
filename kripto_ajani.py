@@ -73,7 +73,6 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
 KALDIRAC = 10
 
 # ==================== KASA KORUMA & RİSK YÖNETİMİ ====================
-# Komisyonları ve iğneleri tolere eden geniş, sürdürülebilir oranlar (1:2 Risk/Ödül)
 HEDEF_ROESINI_ISTENEN = 20.0     # Pozisyonda hedeflenen net getiri (%20 Kâr ROI -> Fiyat %2 lehimize)
 ZARAR_KES_ROESINI_ISTENEN = 10.0 # Pozisyonda göze alınan net zarar (%10 Stop ROI -> Fiyat %1 aleyhimize)
 MIN_ADX_GUCU = 20.0              # Yatay piyasayı filtrelemek için minimum trend gücü
@@ -370,13 +369,11 @@ def otomatik_arkaplan_tarayici():
                     ema21 = ta.trend.ema_indicator(df['close'], window=21).iloc[-1]
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
                     
-                    # ADX (Trend Gücü) Hesaplama Filtresi
                     adx_indicator = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14)
                     adx_degeri = adx_indicator.adx().iloc[-1]
                 except Exception:
                     continue
 
-                # 1. Filtre: Yatay piyasadaysa (ADX zayıfsa) kesinlikle işlem açma
                 if adx_degeri < MIN_ADX_GUCU:
                     continue
 
@@ -427,7 +424,6 @@ def otomatik_arkaplan_tarayici():
                     }
                     hafizayi_kaydet()
                     
-                    # Sağlam Kasa Koruma Fiyat Aralıkları (10x Kaldıraç için %10 Stop, %20 Kâr)
                     fiyat_hedef_orani = HEDEF_ROESINI_ISTENEN / (100.0 * KALDIRAC)
                     fiyat_stop_orani = ZARAR_KES_ROESINI_ISTENEN / (100.0 * KALDIRAC)
 
@@ -472,4 +468,9 @@ if __name__ == "__main__":
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
-    print("Telegram komut dinleyicisi a
+    print("Telegram komut dinleyicisi aktif...")
+    try:
+        app_tg.run_polling(drop_pending_updates=True)
+    except Exception as e:
+        print(f"Telegram polling hatası: {e}")
+                    
