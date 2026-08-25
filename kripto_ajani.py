@@ -27,12 +27,10 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-# Dolar bütçemize ve min lot sınırımıza uygun mantıklı pariteler
 TAKIP_EDILENLER = ['SOL/USDT:USDT', 'XRP/USDT:USDT', 'BNB/USDT:USDT']
 AKTIF_GRID_SISTEMLERI = {}
 BOT_CALISIYOR_MU = True
 
-# ÖĞRENEN HAFIZA SİSTEMİ
 HAFIZA_KAYITLARI = {
     "zarar_gecmisi": {},
     "ogrenilen_yasaklar": {}
@@ -59,19 +57,19 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Gate.io Kapat Komutlu Bot | Durum: {durum_str}"
+    return f"Gate.io Net İzole Marjin Bot | Durum: {durum_str}"
 
-def set_leverage_safely(symbol, leverage):
+def set_isolated_leverage_safely(symbol, leverage):
     try:
-        exchange.set_margin_mode('cross', symbol, {'leverage': leverage})
+        exchange.set_margin_mode('isolated', symbol, {'leverage': leverage})
+    except Exception:
+        pass
+        
+    try:
         exchange.set_leverage(leverage, symbol)
         return True
     except Exception:
-        try:
-            exchange.set_leverage(leverage, symbol)
-            return True
-        except Exception:
-            return False
+        return False
 
 def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
     kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
@@ -106,7 +104,7 @@ def get_account_status_summary():
         for p in active_positions:
             toplam_anlik_pnl += float(p.get('unrealizedPnl', 0))
             
-        summary = f"🧠 *DOLAR BAZLI BOT - KASA DURUMU*\n\n"
+        summary = f"🧠 *NET İZOLE MARJİN BOT - KASA DURUMU*\n\n"
         summary += f"💰 **Toplam Kasa:** `{total_usdt:.2f} USDT`\n"
         summary += f"💵 **Kullanılabilir:** `{free_usdt:.2f} USDT`\n"
         
@@ -126,9 +124,10 @@ def get_account_status_summary():
                 pnl = float(p.get('unrealizedPnl', 0))
                 size = p.get('contracts', 0)
                 entry_p = float(p.get('entryPrice', 0))
+                margin_tutari = float(p.get('initialMargin', 0)) or (float(size) * entry_p / KALDIRAC)
                 
-                summary += f"🔹 **{sym}** ({side} | {lev}x)\n"
-                summary += f"   Giriş: `{entry_p}` | Boyut: `{size}` | K/Z: `{pnl:.2f} USDT`\n"
+                summary += f"🔹 **{sym}** ({side} | {lev}x İzole)\n"
+                summary += f"   Giriş: `{entry_p}` | Kontrat: `{size}` | Marjin: `{margin_tutari:.2f}$` | K/Z: `{pnl:.2f} USDT`\n"
         
         return summary
     except Exception as e:
@@ -150,7 +149,6 @@ async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏸️ *Bot durduruldu.*", parse_mode='Markdown')
 
 async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Borsadaki tüm açık pozisyonları manuel olarak kapatır"""
     global AKTIF_GRID_SISTEMLERI
     await update.message.reply_text("🔄 *Tüm açık pozisyonlar kapatılıyor...*", parse_mode='Markdown')
     
@@ -180,7 +178,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, HAFIZA_KAYITLARI
-    print("🔄 Dolar bazlı arkaplan tarayıcı aktif.")
+    print("🔄 Net İzole Marjinli arkaplan tarayıcı aktif.")
     
     try:
         exchange.load_markets()
@@ -279,15 +277,16 @@ def otomatik_arkaplan_tarayici():
                             del AKTIF_GRID_SISTEMLERI[symbol]
                     continue
 
-                # 4. YENİ POZİSYON AÇMA TARAMASI
+                # 4. YENİ POZİSYON AÇMA TARAMASI (KASANIN 1/4'Ü NET MARJİN)
                 try:
                     balance = exchange.fetch_balance()
                     toplam_bakiye = float(balance['total'].get('USDT', 0))
                 except Exception:
                     continue
 
-                sabit_islem_butcesi = toplam_bakiye / 4.0
-                if toplam_bakiye < sabit_islem_butcesi:
+                # Kasanın tam 4'te 1'i doğrudan İZOLE MARJİN (Örn: 1000 USDT kasa için 250 USDT marjin)
+                hedef_marjin = toplam_bakiye / 4.0
+                if toplam_bakiye < hedef_marjin:
                     continue
 
                 try:
@@ -307,11 +306,13 @@ def otomatik_arkaplan_tarayici():
                     if HAFIZA_KAYITLARI["ogrenilen_yasaklar"][symbol]["yon"] == grid_yonu:
                         continue
 
-                set_leverage_safely(symbol, KALDIRAC)
-                toplam_pozisyon_usdt = sabit_islem_butcesi * KALDIRAC
-                ham_miktar = toplam_pozisyon_usdt / guncel_fiyat
+                # Kesin İzole Mod ve Kaldıraç Ayarı
+                set_isolated_leverage_safely(symbol, KALDIRAC)
+                
+                # 250$ Marjin * 10x Kaldıraç = 2500$ Toplam Pozisyon Büyüklüğü
+                hedef_pozisyon_usdt = hedef_marjin * KALDIRAC
+                ham_miktar = hedef_pozisyon_usdt / guncel_fiyat
 
-                # Kesin Min Miktar ve Bütçe Koruma Filtresi
                 try:
                     market_info = exchange.market(symbol)
                     min_amount = market_info['limits']['amount']['min'] or 1.0
@@ -319,10 +320,7 @@ def otomatik_arkaplan_tarayici():
                     min_amount = 1.0
 
                 if ham_miktar < min_amount:
-                    gereken_dolar = min_amount * guncel_fiyat / KALDIRAC
-                    if gereken_dolar > sabit_islem_butcesi * 1.5:
-                        continue 
-                    miktar = min_amount
+                    continue 
                 else:
                     miktar = float(exchange.amount_to_precision(symbol, ham_miktar))
 
@@ -333,14 +331,15 @@ def otomatik_arkaplan_tarayici():
                     AKTIF_GRID_SISTEMLERI[symbol] = {
                         "yon": grid_yonu,
                         "merkez_fiyat": guncel_fiyat,
-                        "marjin": sabit_islem_butcesi,
+                        "marjin": hedef_marjin,
                         "miktar": float(miktar),
                         "ilk_hedef_alindi": False
                     }
                     telegram_mesaj_gonder(
-                        f"🚀 *İŞLEM AÇILDI ({KALDIRAC}x)*\n"
+                        f"🚀 *İŞLEM AÇILDI ({KALDIRAC}x İZOLE)*\n"
                         f"• Parite: `{symbol}` ({grid_yonu})\n"
-                        f"• Miktar: `{miktar}`"
+                        f"• Hedef Marjin: `~{hedef_marjin:.0f} USDT`\n"
+                        f"• Kontrat Miktarı: `{miktar}`"
                     )
                     time.sleep(20)
                 except Exception as order_err:
@@ -352,7 +351,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(15)
 
 if __name__ == "__main__":
-    print(f"🚀 Kapat Komutlu Bot Başlatılıyor...")
+    print(f"🚀 Net İzole Marjinli Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
@@ -364,7 +363,7 @@ if __name__ == "__main__":
     app_tg.add_handler(CommandHandler("pozisyonlar", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
-    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))  # Yeni eklenen komut
+    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
     print("Telegram komut dinleyicisi aktif...")
     try:
