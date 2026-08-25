@@ -40,7 +40,7 @@ ANALitik_HAFIZA = {
 KALDIRAC = 10
 ILK_HEDEF_YUZDE = 1.5       
 FINAL_HEDEF_YUZDE = 2.5     
-ZARAR_KES_YUZDE = 1.5       # Sabit stop oranı (Başa baş stop yok)
+ZARAR_KES_YUZDE = 1.5       
 # ==========================================================
 
 def telegram_mesaj_gonder(mesaj):
@@ -194,7 +194,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🔄 Optimize edilmiş arkaplan tarayıcı aktif.")
+    print("🔄 Filtreli ve optimize arkaplan tarayıcı aktif.")
     
     try:
         exchange.load_markets()
@@ -282,7 +282,7 @@ def otomatik_arkaplan_tarayici():
                         if symbol in AKTIF_GRID_SISTEMLERI:
                             del AKTIF_GRID_SISTEMLERI[symbol]
                         
-                    # ZARAR KES KONTROLÜ (Başa baş stop iptal, doğrudan sabit ZARAR_KES_YUZDE geçerli)
+                    # ZARAR KES KONTROLÜ (Sabit ZARAR_KES_YUZDE)
                     if kaldiracli_yuzde <= -ZARAR_KES_YUZDE:
                         tahmini_zarar_usd = (sistem['marjin'] * abs(kaldiracli_yuzde)) / 100
                         
@@ -312,7 +312,7 @@ def otomatik_arkaplan_tarayici():
                             del AKTIF_GRID_SISTEMLERI[symbol]
                     continue
 
-                # 3. YENİ POZİSYON AÇMA TARAMASI
+                # 3. YENİ POZİSYON AÇMA TARAMASI (RSI FİLTRELİ)
                 try:
                     balance = exchange.fetch_balance()
                     toplam_bakiye = float(balance['total'].get('USDT', 0))
@@ -333,7 +333,14 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
+                # Temel Yön Tayini
                 grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
+
+                # 🛑 KRİTİK RSI FİLTRESİ (Dipte Short, Tepede Long açmayı engeller)
+                if grid_yonu == "SHORT" and rsi < 40:
+                    continue  # Zaten aşırı satıma gelmiş piyasada short açma!
+                if grid_yonu == "LONG" and rsi > 60:
+                    continue  # Zaten aşırı alıma gelmiş piyasada long açma!
 
                 son_hatalar = [h for h in ANALitik_HAFIZA["basarisiz_analizler"] if h["symbol"] == symbol]
                 if son_hatalar:
@@ -374,7 +381,7 @@ def otomatik_arkaplan_tarayici():
                         "giris_rsi": rsi
                     }
                     telegram_mesaj_gonder(
-                        f"🚀 *İŞLEM AÇILDI ({KALDIRAC}x İZOLE - SABİT STOP)*\n"
+                        f"🚀 *İŞLEM AÇILDI ({KALDIRAC}x İZOLE - FİLTRELİ)*\n"
                         f"• Parite: `{symbol}` ({grid_yonu})\n"
                         f"• Marjin: `~{hesaplanan_marjin:.2f} USDT`\n"
                         f"• Kontrat: `{miktar}`\n"
@@ -390,7 +397,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(10)
 
 if __name__ == "__main__":
-    print(f"🚀 Sabit Stoplu Analitik Bot Başlatılıyor...")
+    print(f"🚀 RSI Filtreli Analitik Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
@@ -409,4 +416,4 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-                            
+            
