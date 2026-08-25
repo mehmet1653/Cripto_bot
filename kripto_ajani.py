@@ -15,7 +15,6 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = "8870934003:AAGIpiwdgpnQVW7nbJIRcR0dOLOzj-MOZsA"
 CHAT_ID = "6929517567"
 
-# Gate.io Testnet (Demo) Bağlantısı
 exchange = ccxt.gate({
     'apiKey': '82cca880898a88d1a31e86d8eb474c57',
     'secret': '1ac479b9df5e6f2e89560b0d238a250694719b6fcae20da00ebc54ad6aeb8898',
@@ -32,8 +31,10 @@ TAKIP_EDILENLER = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'BNB/USDT:
 AKTIF_GRID_SISTEMLERI = {}
 BOT_CALISIYOR_MU = True
 
+# ÖĞRENEN HAFIZA SİSTEMİ (Hataları ve cezaları burada tutar)
 HAFIZA_KAYITLARI = {
-    "yasakli_yonler": {}
+    "zarar_gecmisi": {},  # Hangi parite hangi yönde kaç kez patladı
+    "ogrenilen_yasaklar": {} # Hatalardan dolayı geçici yasaklanan yönler
 }
 
 KALDIRAC = 10
@@ -59,13 +60,12 @@ def bakiye_al():
         balance = exchange.fetch_balance()
         return float(balance['total'].get('USDT', 0))
     except Exception as e:
-        print(f"[HATA] Bakiye Okunamadı: {e}")
         return 0.0
 
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Gate.io Testnet Tam Bot | Durum: {durum_str}"
+    return f"Gate.io Öğrenen Bot | Durum: {durum_str}"
 
 def set_leverage_safely(symbol, leverage):
     try:
@@ -105,7 +105,6 @@ def get_account_status_summary():
         total_usdt = float(balance['total'].get('USDT', 0))
         free_usdt = float(balance['free'].get('USDT', 0))
         
-        # Borsadan güncel açık pozisyonları ve anlık PnL verilerini çekiyoruz
         positions = exchange.fetch_positions()
         active_positions = [p for p in positions if float(p.get('contracts', 0)) > 0]
         
@@ -113,16 +112,17 @@ def get_account_status_summary():
         for p in active_positions:
             toplam_anlik_pnl += float(p.get('unrealizedPnl', 0))
             
-        summary = f"🧠 *CÜZDAN VE KASA DURUMU*\n\n"
+        summary = f"🧠 *ÖĞRENEN BOT - KASA DURUMU*\n\n"
         summary += f"💰 **Toplam Kasa:** `{total_usdt:.2f} USDT`\n"
-        summary += f"💵 **Kullanılabilir Para:** `{free_usdt:.2f} USDT`\n"
+        summary += f"💵 **Kullanılabilir:** `{free_usdt:.2f} USDT`\n"
         
         if toplam_anlik_pnl >= 0:
-            summary += f"📈 **Toplam Anlık PnL:** `+{toplam_anlik_pnl:.2f} USDT` 🟢\n"
+            summary += f"📈 **Toplam PnL:** `+{toplam_anlik_pnl:.2f} USDT` 🟢\n"
         else:
-            summary += f"📉 **Toplam Anlık PnL:** `{toplam_anlik_pnl:.2f} USDT` 🔴\n"
+            summary += f"📉 **Toplam PnL:** `{toplam_anlik_pnl:.2f} USDT` 🔴\n"
             
-        summary += f"📊 **Aktif Pozisyon Sayısı:** `{len(active_positions)}`\n"
+        summary += f"📊 **Aktif Pozisyon:** `{len(active_positions)}`\n"
+        summary += f"🧬 **Hafızadaki Cezalı Pariteler:** `{len(HAFIZA_KAYITLARI['ogrenilen_yasaklar'])}`\n"
         
         if active_positions:
             summary += f"\n-----------------------------------\n"
@@ -151,7 +151,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 *Bot aktif edildi, tarama ve işlemler başlatıldı!*", parse_mode='Markdown')
+    await update.message.reply_text("🟢 *Bot aktif edildi, öğrenen motor devrede!*", parse_mode='Markdown')
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -161,7 +161,7 @@ async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, HAFIZA_KAYITLARI
-    print("🔄 Arka plan tarayıcı ve strateji motoru aktif.")
+    print("🔄 Öğrenen arkaplan tarayıcı aktif.")
     
     while True:
         try:
@@ -171,7 +171,7 @@ def otomatik_arkaplan_tarayici():
                 
             su_an = time.time()
             
-            # Borsadaki açık pozisyonları senkronize et
+            # 1. Borsa Senkronizasyonu
             try:
                 b_positions = exchange.fetch_positions()
                 for bp in b_positions:
@@ -191,10 +191,10 @@ def otomatik_arkaplan_tarayici():
             except Exception as sync_err:
                 pass
 
-            # Yasaklı süreleri temizle
-            for sym in list(HAFIZA_KAYITLARI["yasakli_yonler"].keys()):
-                if su_an > HAFIZA_KAYITLARI["yasakli_yonler"][sym]["bitis_zamani"]:
-                    del HAFIZA_KAYITLARI["yasakli_yonler"][symbol]
+            # 2. Öğrenilen Yasak Sürelerinin Kontrolü ve Esnetilmesi
+            for sym in list(HAFIZA_KAYITLARI["ogrenilen_yasaklar"].keys()):
+                if su_an > HAFIZA_KAYITLARI["ogrenilen_yasaklar"][sym]["bitis_zamani"]:
+                    del HAFIZA_KAYITLARI["ogrenilen_yasaklar"][sym]
 
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU:
@@ -206,7 +206,7 @@ def otomatik_arkaplan_tarayici():
                 except Exception as e:
                     continue
 
-                # 1. AÇIK POZİSYON KONTROLÜ
+                # 3. AÇIK POZİSYON KONTROLÜ VE ÖĞRENME KAYDI
                 if symbol in AKTIF_GRID_SISTEMLERI:
                     sistem = AKTIF_GRID_SISTEMLERI[symbol]
                     merkez = sistem['merkez_fiyat']
@@ -229,20 +229,36 @@ def otomatik_arkaplan_tarayici():
                             pass
 
                     if kaldiracli_yuzde >= FINAL_HEDEF_YUZDE:
-                        mesaj = f"🚀 *FİNAL HEDEF* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)"
+                        mesaj = f"🚀 *FİNAL HEDEF (BAŞARILI)* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)"
                         pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
+                        # Başarılı olunca hafızadaki ceza puanını hafiflet
+                        if symbol in HAFIZA_KAYITLARI["zarar_gecmisi"]:
+                            HAFIZA_KAYITLARI["zarar_gecmisi"][symbol] = max(0, HAFIZA_KAYITLARI["zarar_gecmisi"][symbol] - 1)
                         if symbol in AKTIF_GRID_SISTEMLERI:
                             del AKTIF_GRID_SISTEMLERI[symbol]
                         
                     elif kaldiracli_yuzde <= -ZARAR_KES_YUZDE:
-                        mesaj = f"🛑 *ZARAR KES (STOP)* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)"
+                        mesaj = f"🛑 *ZARAR KES (HATA ÖĞRENİldİ)* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)"
                         pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
-                        HAFIZA_KAYITLARI["yasakli_yonler"][symbol] = {"yon": yon, "bitis_zamani": su_an + 1200}
+                        
+                        # --- HATA KAYDETME VE ÖĞRENME MEKANİZMASI ---
+                        if symbol not in HAFIZA_KAYITLARI["zarar_gecmisi"]:
+                            HAFIZA_KAYITLARI["zarar_gecmisi"][symbol] = 0
+                        HAFIZA_KAYITLARI["zarar_gecmisi"][symbol] += 1
+                        
+                        # Zarar tekrar ettikçe cezalı kalma süresini katlayarak artır (Akıllı öğrenme)
+                        ceza_suresi = 900 * HAFIZA_KAYITLARI["zarar_gecmisi"][symbol] # 15dk * hata sayısı
+                        HAFIZA_KAYITLARI["ogrenilen_yasaklar"][symbol] = {
+                            "yon": yon, 
+                            "bitis_zamani": su_an + ceza_suresi
+                        }
+                        telegram_mesaj_gonder(f"🧬 *Hafıza Güncellendi:* `{symbol}` `{yon}` yönünde yanıldı. Bu yönde {ceza_suresi/60:.0f} dakika boyunca işlem açılmayacak.")
+                        
                         if symbol in AKTIF_GRID_SISTEMLERI:
                             del AKTIF_GRID_SISTEMLERI[symbol]
                     continue
 
-                # 2. YENİ POZİSYON AÇMA TARAMASI
+                # 4. YENİ POZİSYON TARAMASI (Hafıza Filtreli)
                 toplam_bakiye = bakiye_al()
                 bagli_marjin = sum([p['marjin'] for p in AKTIF_GRID_SISTEMLERI.values()])
                 anlik_portfoy = toplam_bakiye + bagli_marjin
@@ -264,17 +280,19 @@ def otomatik_arkaplan_tarayici():
 
                 grid_yonu = None
 
-                if ema7 > ema21 and rsi15m > 48:
+                if ema7 > ema21 and rsi15m > 45:
                     grid_yonu = "LONG"
-                elif ema7 < ema21 and rsi15m < 52:
+                elif ema7 < ema21 and rsi15m < 55:
                     grid_yonu = "SHORT"
 
                 if not grid_yonu:
                     continue
 
-                if symbol in HAFIZA_KAYITLARI["yasakli_yonler"]:
-                    if HAFIZA_KAYITLARI["yasakli_yonler"][symbol]["yon"] == grid_yonu:
-                        continue
+                # Hafıza Kontrolü: Bot daha önce burada bu yönde zarar ettiyse bu sinyali reddeder!
+                if symbol in HAFIZA_KAYITLARI["ogrenilen_yasaklar"]:
+                    yasak_bilgi = HAFIZA_KAYITLARI["ogrenilen_yasaklar"][symbol]
+                    if yasak_bilgi["yon"] == grid_yonu:
+                        continue # Hafıza engelledi, bu yönde işlem açmıyor
 
                 set_leverage_safely(symbol, KALDIRAC)
                 toplam_pozisyon_usdt = sabit_islem_butcesi * KALDIRAC
@@ -292,13 +310,13 @@ def otomatik_arkaplan_tarayici():
                         "ilk_hedef_alindi": False
                     }
                     telegram_mesaj_gonder(
-                        f"🧠 *BORSADA İŞLEM AÇILDI ({KALDIRAC}x)*\n"
+                        f"🧠 *ÖĞRENEN BOT İŞLEM AÇTI ({KALDIRAC}x)*\n"
                         f"• Parite: `{symbol}` ({grid_yonu})\n"
                         f"• Marjin: `{sabit_islem_butcesi:.2f} USD`\n"
                         f"• Fiyat: `{guncel_fiyat:.2f}`"
                     )
                 except Exception as e:
-                    print(f"[EMİR AÇMA HATASI] {symbol}: {e}")
+                    print(f"[EMİR HATASI]: {e}")
 
         except Exception as e:
             print(f"[DÖNGÜ HATASI]: {e}")
@@ -306,7 +324,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(15)
 
 if __name__ == "__main__":
-    print(f"🚀 Bot Başlatılıyor...")
+    print(f"🚀 Öğrenen Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
@@ -321,4 +339,4 @@ if __name__ == "__main__":
     
     print("Telegram komut dinleyicisi aktif...")
     app_tg.run_polling()
-            
+    
