@@ -1,21 +1,25 @@
 import ccxt
 
-# Demo bağlantısı
+# Gate.io Testnet (Demo) Bağlantısı
 exchange = ccxt.gate({
-    'apiKey': 'c0e36a4b95d010e8d7f28726547dde8c',
-    'secret': '67b6d79ceb1f18d7492d630e7e178b444202130bb4985506dd77dc8063d23330',
+    'apiKey': '82cca880898a88d1a31e86d8eb474c57',
+    'secret': '82cca880898a88d1a31e86d8eb474c57',  # Secret Key'ini buraya tam olarak ekliyoruz
     'enableRateLimit': True,
-    'options': {'defaultType': 'swap'}
+    'options': {
+        'defaultType': 'swap'  # Vadeli işlemler için
+    }
 })
+
+# Testnet / Sandbox modunu aktif et
 exchange.set_sandbox_mode(True)
 
 try:
-    # 1. Bakiye Testi
+    # Bakiye Testi
     bakiye = exchange.fetch_balance()
     usdt = bakiye['total'].get('USDT', 0)
-    print(f"[BAŞARILI] Demo Cüzdan Bakiyesi: {usdt} USDT")
+    print(f"[BAŞARILI] Testnet Demo Cüzdan Bakiyesi: {usdt} USDT")
 
-    # 2. Fiyat Testi
+    # Fiyat Testi
     fiyat = exchange.fetch_ticker('SOL/USDT:USDT')
     print(f"[BAŞARILI] SOL Güncel Fiyat: {fiyat['last']}")
 
