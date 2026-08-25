@@ -31,12 +31,6 @@ TAKIP_EDILENLER = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'BNB/USDT:
 AKTIF_GRID_SISTEMLERI = {}
 BOT_CALISIYOR_MU = True
 
-# ÖĞRENEN HAFIZA SİSTEMİ (Hataları ve cezaları burada tutar)
-HAFIZA_KAYITLARI = {
-    "zarar_gecmisi": {},  # Hangi parite hangi yönde kaç kez patladı
-    "ogrenilen_yasaklar": {} # Hatalardan dolayı geçici yasaklanan yönler
-}
-
 KALDIRAC = 10
 ILK_HEDEF_YUZDE = 1.5       
 FINAL_HEDEF_YUZDE = 2.5     
@@ -55,49 +49,10 @@ def telegram_mesaj_gonder(mesaj):
     except Exception as e:
         print(f"Telegram Gönderme Hatası: {e}")
 
-def bakiye_al():
-    try:
-        balance = exchange.fetch_balance()
-        return float(balance['total'].get('USDT', 0))
-    except Exception as e:
-        return 0.0
-
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Gate.io Öğrenen Bot | Durum: {durum_str}"
-
-def set_leverage_safely(symbol, leverage):
-    try:
-        exchange.set_margin_mode('cross', symbol, {'leverage': leverage})
-        exchange.set_leverage(leverage, symbol)
-        return True
-    except Exception as e:
-        try:
-            exchange.set_leverage(leverage, symbol)
-            return True
-        except Exception as e2:
-            return False
-
-def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
-    kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
-    basarili = False
-    
-    try:
-        exchange.create_market_order(symbol, kapatma_yonu, miktar, {'reduce_only': True})
-        basarili = True
-    except Exception as e1:
-        try:
-            time.sleep(0.5)
-            ticker = exchange.fetch_ticker(symbol)
-            guvenli_fiyat = ticker['ask'] if kapatma_yonu == 'buy' else ticker['bid']
-            exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, guvenli_fiyat, {'timeInForce': 'IOC'})
-            basarili = True
-        except Exception as e2:
-            telegram_mesaj_gonder(f"🚨 *POZİSYON KAPATILAMADI!* (`{symbol}`)\nHata: `{str(e2)}`")
-
-    if basarili:
-        telegram_mesaj_gonder(sebep_mesaji)
+    return f"Gate.io Şeffaf Bot | Durum: {durum_str}"
 
 def get_account_status_summary():
     try:
@@ -112,7 +67,7 @@ def get_account_status_summary():
         for p in active_positions:
             toplam_anlik_pnl += float(p.get('unrealizedPnl', 0))
             
-        summary = f"🧠 *ÖĞRENEN BOT - KASA DURUMU*\n\n"
+        summary = f"🧠 *ŞEFFAF BOT - KASA DURUMU*\n\n"
         summary += f"💰 **Toplam Kasa:** `{total_usdt:.2f} USDT`\n"
         summary += f"💵 **Kullanılabilir:** `{free_usdt:.2f} USDT`\n"
         
@@ -121,8 +76,7 @@ def get_account_status_summary():
         else:
             summary += f"📉 **Toplam PnL:** `{toplam_anlik_pnl:.2f} USDT` 🔴\n"
             
-        summary += f"📊 **Aktif Pozisyon:** `{len(active_positions)}`\n"
-        summary += f"🧬 **Hafızadaki Cezalı Pariteler:** `{len(HAFIZA_KAYITLARI['ogrenilen_yasaklar'])}`\n"
+        summary += f"📊 **Aktif Pozisyon Sayısı:** `{len(active_positions)}`\n"
         
         if active_positions:
             summary += f"\n-----------------------------------\n"
@@ -134,10 +88,8 @@ def get_account_status_summary():
                 size = p.get('contracts', 0)
                 entry_p = float(p.get('entryPrice', 0))
                 
-                pnl_ikon = "🟢" if pnl >= 0 else "🔴"
                 summary += f"🔹 **{sym}** ({side} | {lev}x)\n"
-                summary += f"   Giriş: `{entry_p}` | Boyut: `{size}`\n"
-                summary += f"   Anlık K/Z: `{pnl:.2f} USDT` {pnl_ikon}\n"
+                summary += f"   Giriş: `{entry_p}` | Boyut: `{size}` | K/Z: `{pnl:.2f} USDT`\n"
         
         return summary
     except Exception as e:
@@ -151,7 +103,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 *Bot aktif edildi, öğrenen motor devrede!*", parse_mode='Markdown')
+    await update.message.reply_text("🟢 *Bot aktif edildi!*", parse_mode='Markdown')
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -160,8 +112,8 @@ async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
-    global BOT_CALISIYOR_MU, HAFIZA_KAYITLARI
-    print("🔄 Öğrenen arkaplan tarayıcı aktif.")
+    global BOT_CALISIYOR_MU
+    print("🔄 Arka plan motoru başlatıldı, piyasa taranıyor...")
     
     while True:
         try:
@@ -169,132 +121,66 @@ def otomatik_arkaplan_tarayici():
                 time.sleep(5)
                 continue
                 
-            su_an = time.time()
-            
-            # 1. Borsa Senkronizasyonu
+            # 1. Bakiye kontrolü
             try:
-                b_positions = exchange.fetch_positions()
-                for bp in b_positions:
-                    kontrat = float(bp.get('contracts', 0))
-                    sym = bp['symbol']
-                    if kontrat > 0:
-                        b_yon = bp['side'].upper()
-                        b_giris = float(bp.get('entryPrice', 0))
-                        if sym not in AKTIF_GRID_SISTEMLERI:
-                            AKTIF_GRID_SISTEMLERI[sym] = {
-                                "yon": b_yon,
-                                "merkez_fiyat": b_giris,
-                                "marjin": kontrat * b_giris / KALDIRAC,
-                                "miktar": kontrat,
-                                "ilk_hedef_alindi": False
-                            }
-            except Exception as sync_err:
-                pass
+                balance = exchange.fetch_balance()
+                toplam_bakiye = float(balance['total'].get('USDT', 0))
+            except Exception as e:
+                print(f"[KRİTİK HATA] Bakiye çekilemedi: {e}")
+                time.sleep(10)
+                continue
 
-            # 2. Öğrenilen Yasak Sürelerinin Kontrolü ve Esnetilmesi
-            for sym in list(HAFIZA_KAYITLARI["ogrenilen_yasaklar"].keys()):
-                if su_an > HAFIZA_KAYITLARI["ogrenilen_yasaklar"][sym]["bitis_zamani"]:
-                    del HAFIZA_KAYITLARI["ogrenilen_yasaklar"][sym]
+            sabit_islem_butcesi = toplam_bakiye / 4.0
+            print(f"ℹ️ Mevcut Kasa: {toplam_bakiye} USDT | İşlem Bütçesi: {sabit_islem_butcesi} USDT")
 
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU:
                     break
                     
+                print(f"🔍 İncelenen Parite: {symbol}")
+                
                 try:
                     ticker = exchange.fetch_ticker(symbol)
                     guncel_fiyat = ticker['last']
                 except Exception as e:
+                    print(f"   -> Fiyat alınamadı ({symbol}): {e}")
                     continue
 
-                # 3. AÇIK POZİSYON KONTROLÜ VE ÖĞRENME KAYDI
-                if symbol in AKTIF_GRID_SISTEMLERI:
-                    sistem = AKTIF_GRID_SISTEMLERI[symbol]
-                    merkez = sistem['merkez_fiyat']
-                    yon = sistem['yon']
-                    
-                    fark_orani = (guncel_fiyat - merkez) / merkez
-                    if yon == "SHORT": 
-                        fark_orani = -fark_orani
-                        
-                    kaldiracli_yuzde = fark_orani * KALDIRAC * 100
-                    
-                    if kaldiracli_yuzde >= ILK_HEDEF_YUZDE and not sistem.get("ilk_hedef_alindi", False):
-                        sistem.update({"ilk_hedef_alindi": True})
-                        try:
-                             miktar_cinsi = sistem['miktar'] / 2
-                             kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
-                             exchange.create_market_order(symbol, kapatma_yonu, miktar_cinsi, {'reduce_only': True})
-                             telegram_mesaj_gonder(f"🎯 *1. KADEME KÂR* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)")
-                        except Exception as e:
-                            pass
-
-                    if kaldiracli_yuzde >= FINAL_HEDEF_YUZDE:
-                        mesaj = f"🚀 *FİNAL HEDEF (BAŞARILI)* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)"
-                        pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
-                        # Başarılı olunca hafızadaki ceza puanını hafiflet
-                        if symbol in HAFIZA_KAYITLARI["zarar_gecmisi"]:
-                            HAFIZA_KAYITLARI["zarar_gecmisi"][symbol] = max(0, HAFIZA_KAYITLARI["zarar_gecmisi"][symbol] - 1)
-                        if symbol in AKTIF_GRID_SISTEMLERI:
-                            del AKTIF_GRID_SISTEMLERI[symbol]
-                        
-                    elif kaldiracli_yuzde <= -ZARAR_KES_YUZDE:
-                        mesaj = f"🛑 *ZARAR KES (HATA ÖĞRENİldİ)* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)"
-                        pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
-                        
-                        # --- HATA KAYDETME VE ÖĞRENME MEKANİZMASI ---
-                        if symbol not in HAFIZA_KAYITLARI["zarar_gecmisi"]:
-                            HAFIZA_KAYITLARI["zarar_gecmisi"][symbol] = 0
-                        HAFIZA_KAYITLARI["zarar_gecmisi"][symbol] += 1
-                        
-                        # Zarar tekrar ettikçe cezalı kalma süresini katlayarak artır (Akıllı öğrenme)
-                        ceza_suresi = 900 * HAFIZA_KAYITLARI["zarar_gecmisi"][symbol] # 15dk * hata sayısı
-                        HAFIZA_KAYITLARI["ogrenilen_yasaklar"][symbol] = {
-                            "yon": yon, 
-                            "bitis_zamani": su_an + ceza_suresi
-                        }
-                        telegram_mesaj_gonder(f"🧬 *Hafıza Güncellendi:* `{symbol}` `{yon}` yönünde yanıldı. Bu yönde {ceza_suresi/60:.0f} dakika boyunca işlem açılmayacak.")
-                        
-                        if symbol in AKTIF_GRID_SISTEMLERI:
-                            del AKTIF_GRID_SISTEMLERI[symbol]
-                    continue
-
-                # 4. YENİ POZİSYON TARAMASI (Hafıza Filtreli)
-                toplam_bakiye = bakiye_al()
-                bagli_marjin = sum([p['marjin'] for p in AKTIF_GRID_SISTEMLERI.values()])
-                anlik_portfoy = toplam_bakiye + bagli_marjin
-                sabit_islem_butcesi = anlik_portfoy / 4.0
-
-                if toplam_bakiye < sabit_islem_butcesi:
-                    continue
-
+                # OHLCV verisi çekme
                 try:
-                    ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
+                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=30)
+                    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 except Exception as e:
+                    print(f"   -> Mum verisi alınamadı ({symbol}): {e}")
                     continue
 
-                df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                
-                ema7 = ta.trend.ema_indicator(df_15m['close'], window=7).iloc[-1]
-                ema21 = ta.trend.ema_indicator(df_15m['close'], window=21).iloc[-1]
-                rsi15m = ta.momentum.rsi(df_15m['close'], window=14).iloc[-1]
+                # Göstergeler
+                try:
+                    ema7 = ta.trend.ema_indicator(df['close'], window=7).iloc[-1]
+                    ema21 = ta.trend.ema_indicator(df['close'], window=21).iloc[-1]
+                    rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
+                except Exception as e:
+                    print(f"   -> Gösterge hesaplama hatası ({symbol}): {e}")
+                    continue
 
+                print(f"   -> EMA7: {ema7:.2f} | EMA21: {ema21:.2f} | RSI: {rsi:.2f}")
+
+                # Çok esnek işlem şartı (Hemen test için)
                 grid_yonu = None
-
-                if ema7 > ema21 and rsi15m > 45:
+                if ema7 > ema21:
                     grid_yonu = "LONG"
-                elif ema7 < ema21 and rsi15m < 55:
+                else:
                     grid_yonu = "SHORT"
 
-                if not grid_yonu:
-                    continue
+                print(f"   -> Karar verilen yön: {grid_yonu}. Emir gönderiliyor...")
 
-                # Hafıza Kontrolü: Bot daha önce burada bu yönde zarar ettiyse bu sinyali reddeder!
-                if symbol in HAFIZA_KAYITLARI["ogrenilen_yasaklar"]:
-                    yasak_bilgi = HAFIZA_KAYITLARI["ogrenilen_yasaklar"][symbol]
-                    if yasak_bilgi["yon"] == grid_yonu:
-                        continue # Hafıza engelledi, bu yönde işlem açmıyor
+                # Kaldıraç ve Emir Gönderimi
+                try:
+                    exchange.set_margin_mode('cross', symbol, {'leverage': KALDIRAC})
+                    exchange.set_leverage(KALDIRAC, symbol)
+                except Exception as lev_err:
+                    print(f"   -> Kaldıraç ayarlama uyarısı (Devam ediliyor): {lev_err}")
 
-                set_leverage_safely(symbol, KALDIRAC)
                 toplam_pozisyon_usdt = sabit_islem_butcesi * KALDIRAC
                 miktar = toplam_pozisyon_usdt / guncel_fiyat
                 miktar = exchange.amount_to_precision(symbol, miktar)
@@ -302,29 +188,20 @@ def otomatik_arkaplan_tarayici():
                 
                 try:
                     order = exchange.create_market_order(symbol, emir_yonu, float(miktar))
-                    AKTIF_GRID_SISTEMLERI[symbol] = {
-                        "yon": grid_yonu,
-                        "merkez_fiyat": guncel_fiyat,
-                        "marjin": sabit_islem_butcesi,
-                        "miktar": float(miktar),
-                        "ilk_hedef_alindi": False
-                    }
-                    telegram_mesaj_gonder(
-                        f"🧠 *ÖĞRENEN BOT İŞLEM AÇTI ({KALDIRAC}x)*\n"
-                        f"• Parite: `{symbol}` ({grid_yonu})\n"
-                        f"• Marjin: `{sabit_islem_butcesi:.2f} USD`\n"
-                        f"• Fiyat: `{guncel_fiyat:.2f}`"
-                    )
-                except Exception as e:
-                    print(f"[EMİR HATASI]: {e}")
+                    print(f"✅ BAŞARILI! İşlem açıldı: {symbol} {grid_yonu}")
+                    telegram_mesaj_gonder(f"🚀 *TEST İŞLEMİ AÇILDI*\n• Parite: `{symbol}` ({grid_yonu})")
+                    time.sleep(30) # İlk işlemi açtıktan sonra biraz soluklan
+                except Exception as order_err:
+                    print(f"❌ EMİR REDDEDİLDİ ({symbol}): {order_err}")
+                    telegram_mesaj_gonder(f"🚨 *EMİR HATASI* (`{symbol}`): `{order_err}`")
 
-        except Exception as e:
-            print(f"[DÖNGÜ HATASI]: {e}")
+        except Exception as loop_err:
+            print(f"🔥 ANA DÖNGÜ KRİTİK HATA: {loop_err}")
         
         time.sleep(15)
 
 if __name__ == "__main__":
-    print(f"🚀 Öğrenen Bot Başlatılıyor...")
+    print(f"🚀 Şeffaf Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
