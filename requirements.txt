@@ -1,6 +1,7 @@
 ccxt
 pandas
 ta
-flask
 requests
+flask
 gunicorn
+python-telegram-bot
