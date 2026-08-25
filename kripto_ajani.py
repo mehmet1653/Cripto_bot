@@ -77,6 +77,16 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
     basarili = False
     
     try:
+        # Borsa kurallarına göre miktar hassasiyetini ayarla
+        try:
+            market_info = exchange.market(symbol)
+            min_amount = float(market_info['limits']['amount']['min'] or 1.0)
+            if miktar < min_amount:
+                miktar = min_amount
+            miktar = float(exchange.amount_to_precision(symbol, miktar))
+        except Exception:
+            pass
+
         exchange.create_market_order(symbol, kapatma_yonu, miktar, {'reduce_only': True})
         basarili = True
     except Exception:
@@ -84,7 +94,7 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
             time.sleep(0.5)
             ticker = exchange.fetch_ticker(symbol)
             guvenli_fiyat = ticker['ask'] if kapatma_yonu == 'buy' else ticker['bid']
-            exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, guvenli_fiyat, {'timeInForce': 'IOC'})
+            exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, guvenli_fiyat, {'timeInForce': 'IOC', 'reduce_only': True})
             basarili = True
         except Exception as e2:
             telegram_mesaj_gonder(f"🚨 *POZİSYON KAPATILAMADI!* (`{symbol}`)\nHata: `{str(e2)}`")
@@ -245,18 +255,25 @@ def otomatik_arkaplan_tarayici():
                     if kaldiracli_yuzde >= ILK_HEDEF_YUZDE and not sistem.get("ilk_hedef_alindi", False):
                         sistem.update({"ilk_hedef_alindi": True})
                         try:
+                             market_info = exchange.market(symbol)
+                             min_amount = float(market_info['limits']['amount']['min'] or 1.0)
+                             
                              yeni_miktar = sistem['miktar'] / 2
-                             sistem['miktar'] = yeni_miktar
+                             if yeni_miktar < min_amount:
+                                 yeni_miktar = min_amount  # Minimum sınıra takılmaması için
+                             
+                             yeni_miktar = float(exchange.amount_to_precision(symbol, yeni_miktar))
+                             sistem['miktar'] = max(0, sistem['miktar'] - yeni_miktar)
                              
                              kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
                              exchange.create_market_order(symbol, kapatma_yonu, yeni_miktar, {'reduce_only': True})
                              
-                             telegram_mesaj_gonder(f"🎯 *1. KADEME KÂR (Miktar Yarılandı)* - `{symbol}` (`+{kaldiracli_yuzde:.2f}%`)")
-                        except Exception:
-                            pass
+                             telegram_mesaj_gonder(f"🎯 *1. KADEME KÂR (Kısmi Kapandı)* - `{symbol}` (`+{kaldiracli_yuzde:.2f}%`)")
+                        except Exception as e_kademe:
+                            print(f"1. Kademe Kâr Hatası ({symbol}): {e_kademe}")
 
                     # FİNAL HEDEF
-                    if kaldiracli_yuzde >= FINAL_HEDEF_YUZDE:
+                    if kaldiracli_yuzde >= FINAL_HEDEF_YUZDE or sistem['miktar'] <= 0:
                         tahmini_kar_usd = (sistem['marjin'] * kaldiracli_yuzde) / 100
                         mesaj = f"🚀 *FİNAL HEDEF (BAŞARILI)* - `{symbol}` (`+{kaldiracli_yuzde:.2f}%` | `+{tahmini_kar_usd:.2f} USDT`)"
                         
