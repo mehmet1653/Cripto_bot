@@ -39,8 +39,8 @@ ANALitik_HAFIZA = {
 }
 
 KALDIRAC = 10
-HEDEF_YUZDE = 2.5         # Kâr Al Hedefi
-ZARAR_KES_YUZDE = 1.5     # Zarar Kes Stopu
+HEDEF_YUZDE = 2.5         
+ZARAR_KES_YUZDE = 1.5     
 # ==========================================================
 
 def telegram_mesaj_gonder(mesaj):
@@ -58,7 +58,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Senkronize Gerçekçi Bot | Durum: {durum_str}"
+    return f"Net Senkronize Bot | Durum: {durum_str}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -94,7 +94,6 @@ def gate_tetiklemeli_emir_gonder(symbol, kapatma_yonu, miktar, tetik_fiyati):
 
 def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
     kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
-    basarili = False
     
     try:
         open_orders = exchange.fetch_open_orders(symbol)
@@ -111,18 +110,19 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
         miktar = float(exchange.amount_to_precision(symbol, miktar))
 
         exchange.create_market_order(symbol, kapatma_yonu, miktar, {'reduce_only': True})
-        basarili = True
     except Exception as e:
         try:
             time.sleep(0.2)
             ticker = exchange.fetch_ticker(symbol)
             guvenli_fiyat = ticker['ask'] if kapatma_yonu == 'buy' else ticker['bid']
             exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, guvenli_fiyat, {'timeInForce': 'IOC', 'reduce_only': True})
-            basarili = True
         except Exception as e2:
             print(f"Pozisyon kapatma hatası: {e2}")
 
-    if basarili and sebep_mesaji:
+    if symbol in AKTIF_GRID_SISTEMLERI:
+        del AKTIF_GRID_SISTEMLERI[symbol]
+
+    if sebep_mesaji:
         telegram_mesaj_gonder(sebep_mesaji)
 
 def get_account_status_summary():
@@ -131,28 +131,28 @@ def get_account_status_summary():
         total_usdt = float(balance['total'].get('USDT', 0))
         free_usdt = float(balance['free'].get('USDT', 0))
         
-        # Gerçek borsa pozisyonlarını çekerek hayalet pozisyonları engelle
-        b_positions = exchange.fetch_positions()
-        active_positions = [p for p in b_positions if float(p.get('contracts', 0)) > 0]
-        
-        # Hafızayı borsa ile senkronize et (Borsada kapandıysa hafızadan da sil)
-        aktif_syms = [p['symbol'] for p in active_positions]
-        for sym in list(AKTIF_GRID_SISTEMLERI.keys()):
-            if sym not in aktif_syms:
-                del AKTIF_GRID_SISTEMLERI[sym]
-
         toplam_anlik_pnl = 0.0
         aktif_ozet_listesi = []
 
-        for p in active_positions:
-            sym = p['symbol']
-            yon = p['side'].upper()
-            size = float(p.get('contracts', 0))
-            entry_p = float(p.get('entryPrice', 0))
-            pnl = float(p.get('unrealizedPnl', 0))
-            margin = float(p.get('initialMargin', 0)) or (size * entry_p / KALDIRAC)
+        # Hafızadaki aktif sistemleri tek tek işleme al
+        for sym, sistem in list(AKTIF_GRID_SISTEMLERI.items()):
+            try:
+                ticker = exchange.fetch_ticker(sym)
+                guncel_fiyat = ticker['last']
+            except Exception:
+                guncel_fiyat = sistem['merkez_fiyat']
+
+            merkez = sistem['merkez_fiyat']
+            yon = sistem['yon']
+            marjin = sistem['marjin']
+            size = sistem['miktar']
             
-            roe_yuzde = (pnl / margin * 100) if margin > 0 else 0.0
+            fark_orani = (guncel_fiyat - merkez) / merkez
+            if yon == "SHORT": 
+                fark_orani = -fark_orani
+                
+            roe_yuzde = fark_orani * 100
+            pnl = (marjin * roe_yuzde) / 100
             toplam_anlik_pnl += pnl
 
             aktif_ozet_listesi.append({
@@ -162,8 +162,8 @@ def get_account_status_summary():
                 'pnl': pnl,
                 'roe': roe_yuzde,
                 'contracts': size,
-                'entryPrice': entry_p,
-                'margin': margin
+                'entryPrice': merkez,
+                'margin': marjin
             })
             
         gunluk_pnl = ANALitik_HAFIZA['gunluk_net_kar_usd']
@@ -214,37 +214,27 @@ async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏸️ *Bot durduruldu.*", parse_mode='Markdown')
 
 async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global AKTIF_GRID_SISTEMLERI
-    await update.message.reply_text("🔄 *Tüm açık pozisyonlar ve bekleyen emirler kapatılıyor...*", parse_mode='Markdown')
+    await update.message.reply_text("🔄 *Tüm aktif işlemler kapatılıyor...*", parse_mode='Markdown')
     
     try:
-        b_positions = exchange.fetch_positions()
-        active_positions = [p for p in b_positions if float(p.get('contracts', 0)) > 0]
-        
-        if not active_positions:
-            AKTIF_GRID_SISTEMLERI.clear()
-            await update.message.reply_text("ℹ️ Zaten açık hiçbir pozisyon bulunmuyor.", parse_mode='Markdown')
+        if not AKTIF_GRID_SISTEMLERI:
+            await update.message.reply_text("ℹ️ Hafızada aktif pozisyon görünmüyor.", parse_mode='Markdown')
             return
 
         kapatilanlar = 0
-        for p in active_positions:
-            sym = p['symbol']
-            yon = p['side'].upper()
-            kontrat = float(p['contracts'])
-            
-            mesaj = f"🛑 *MANUEL KAPATMA (/kapat)* - `{sym}`"
-            pozisyonu_garantili_kapat(sym, yon, kontrat, mesaj)
+        for sym, sistem in list(AKTIF_GRID_SISTEMLERI.items()):
+            pozisyonu_garantili_kapat(sym, sistem['yon'], sistem['miktar'], f"🛑 *MANUEL KAPATMA (/kapat)* - `{sym}`")
             kapatilanlar += 1
 
         AKTIF_GRID_SISTEMLERI.clear()
         await update.message.reply_text(f"✅ İşlem tamamlandı. Toplam `{kapatilanlar}` pozisyon kapatıldı.", parse_mode='Markdown')
     except Exception as e:
-        await update.message.reply_text(f"❌ Pozisyonlar kapatılırken hata oluştu: `{str(e)}`", parse_mode='Markdown')
+        await update.message.reply_text(f"❌ Kapatma sırasında hata: `{str(e)}`", parse_mode='Markdown')
 
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🔄 Gerçekçi Senkronize Tarayıcı aktif.")
+    print("🔄 Net Senkronize Tarayıcı aktif.")
     
     try:
         exchange.load_markets()
@@ -256,16 +246,6 @@ def otomatik_arkaplan_tarayici():
             if not BOT_CALISIYOR_MU:
                 time.sleep(3)
                 continue
-
-            # Her döngü başında borsa pozisyonlarını kontrol et, kapananları hafızadan temizle
-            try:
-                b_positions = exchange.fetch_positions()
-                gercek_aktif_syms = [p['symbol'] for p in b_positions if float(p.get('contracts', 0)) > 0]
-                for sym in list(AKTIF_GRID_SISTEMLERI.keys()):
-                    if sym not in gercek_aktif_syms:
-                        del AKTIF_GRID_SISTEMLERI[sym]
-            except Exception:
-                pass
 
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU:
@@ -296,9 +276,6 @@ def otomatik_arkaplan_tarayici():
                         mesaj = f"🚀 *HEDEF BAŞARILI (KÂR ALINDI)* - `{symbol}` (`+{net_kar_zarar_yuzdesi:.2f}%` | `+{tahmini_kar_usd:.2f} USDT`)"
                         pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
                         
-                        if symbol in AKTIF_GRID_SISTEMLERI:
-                            del AKTIF_GRID_SISTEMLERI[symbol]
-                        
                     elif net_kar_zarar_yuzdesi <= -ZARAR_KES_YUZDE:
                         tahmini_zarar_usd = (sistem['marjin'] * abs(net_kar_zarar_yuzdesi)) / 100
                         ANALitik_HAFIZA["gunluk_net_kar_usd"] -= tahmini_zarar_usd
@@ -318,8 +295,6 @@ def otomatik_arkaplan_tarayici():
                         
                         pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
                         
-                        if symbol in AKTIF_GRID_SISTEMLERI:
-                            del AKTIF_GRID_SISTEMLERI[symbol]
                     continue
 
                 if symbol in AKTIF_GRID_SISTEMLERI:
@@ -408,10 +383,8 @@ def otomatik_arkaplan_tarayici():
                         "giris_rsi": rsi
                     }
                     
-                    emir_durum_str = "✅ (Stop & Hedef Aktif)" if (stop_basarili or tp_basarili) else "⚠️ (Hızlı Takipte)"
-                    
                     telegram_mesaj_gonder(
-                        f"🚀 *İŞLEM AÇILDI {emir_durum_str} - {KALDIRAC}x*\n"
+                        f"🚀 *İŞLEM AÇILDI - {KALDIRAC}x*\n"
                         f"• Parite: `{symbol}` ({grid_yonu})\n"
                         f"• Giriş: `{guncel_fiyat}`\n"
                         f"• Hedef Kâr: `{hedef_fiyati}` (`+{HEDEF_YUZDE}%`)\n"
@@ -429,7 +402,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print(f"🚀 Gerçekçi Senkronize Bot Başlatılıyor...")
+    print(f"🚀 Net Senkronize Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
@@ -448,4 +421,4 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-        
+    
