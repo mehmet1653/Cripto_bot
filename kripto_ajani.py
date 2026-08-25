@@ -34,20 +34,7 @@ HAFIZA_KAYITLARI = {
     "yasakli_yonler": {}
 }
 
-KASA = {
-    "baslangic": 1000.0,  # Testnet demo başlangıç bakiyesi 1000 USDT
-    "guncel": 1000.0, 
-    "toplam_islem": 0,
-    "basarili_islem": 0,
-    "zararli_islem": 0,
-    "gunluk_kar_zarar": 0.0,
-    "toplam_odenen_komisyon": 0.0,
-    "toplam_odenmis_funding": 0.0
-}
-
-KALDIRAC = 10  # İstediğin gibi 10x olarak ayarlandı
-
-# KADEMELİ HEDEFLER
+KALDIRAC = 10  # İstediğin gibi 10x
 ILK_HEDEF_YUZDE = 1.5       
 FINAL_HEDEF_YUZDE = 2.5     
 ZARAR_KES_YUZDE = 1.5       
@@ -65,10 +52,20 @@ def telegram_mesaj_gonder(mesaj):
     except Exception as e:
         print(f"Telegram Gönderme Hatası: {e}")
 
+def bakiye_al():
+    """Gate.io Testnet hesabından güncel USDT bakiyesini çeker"""
+    try:
+        balance = exchange.fetch_balance()
+        # Vadeli (swap) cüzdanındaki serbest USDT bakiyesi
+        return float(balance['total'].get('USDT', 0))
+    except Exception as e:
+        print(f"Bakiye okuma hatası: {e}")
+        return 0.0
+
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Gate.io Testnet Sabit 4'e Bölünmüş Scalp Bot | Durum: {durum_str}"
+    return f"Gate.io Testnet Gerçek Emir Botu | Durum: {durum_str}"
 
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
@@ -81,44 +78,23 @@ def otomatik_arkaplan_tarayici():
                 
                 su_an = time.time()
                 if su_an - son_funding_zamani >= 14400:
-                    fonlama_ucretlerini_uygula()
                     son_funding_zamani = su_an
                     
         except Exception as e:
             print(f"Tarama Hatası: {e}")
         time.sleep(10)
 
-def fonlama_ucretlerini_uygula():
-    global KASA
-    if not AKTIF_GRID_SISTEMLERI:
-        return
-        
-    toplam_kesinti = 0.0
-    for symbol, sistem in AKTIF_GRID_SISTEMLERI.items():
-        try:
-            funding_orani = 0.0001 
-            try:
-                fr_data = exchange.fetch_funding_rate(symbol)
-                if 'fundingRate' in fr_data and fr_data['fundingRate'] is not None:
-                    funding_orani = float(fr_data['fundingRate'])
-            except:
-                pass
-                
-            pozisyon_buyuklugu = sistem['marjin'] * KALDIRAC
-            kesinti = pozisyon_buyuklugu * funding_orani
-            net_kesinti = kesinti if sistem['yon'] == "LONG" else -kesinti
-                
-            KASA["guncel"] -= net_kesinti
-            KASA["toplam_odenmis_funding"] += net_kesinti
-            toplam_kesinti += net_kesinti
-        except Exception as e:
-            print(f"Funding hata ({symbol}): {e}")
-            
-    if abs(toplam_kesinti) > 0.001:
-        telegram_mesaj_gonder(f"💸 *4 Saatlik Fonlama İşlendi (Testnet)*\n• Toplam: `{toplam_kesinti:+.4f} USD`\n• Güncel Kasa: `{KASA['guncel']:.2f} USD`")
+def kaldirac_ve_marjin_ayarla(symbol):
+    """Gate.io borsasında parite için kaldıracı ve izole modu ayarlar"""
+    try:
+        # İzole mod ayarı (Gate.io'da cross: false = izole)
+        exchange.set_margin_mode('isolated', symbol, {'leverage': KALDIRAC})
+    except Exception as e:
+        # Zaten ayarlıysa hata verebilir, yoksayabiliriz
+        pass
 
 def coklu_grid_yonetimi():
-    global KASA, HAFIZA_KAYITLARI
+    global HAFIZA_KAYITLARI
     try:
         su_an = time.time()
         
@@ -133,10 +109,10 @@ def coklu_grid_yonetimi():
             ticker = exchange.fetch_ticker(symbol)
             guncel_fiyat = ticker['last']
 
+            # 1. ZATEN AÇIK BİR POZİSYON VARSA HEDEFLERİ KONTROL ET
             if symbol in AKTIF_GRID_SISTEMLERI:
                 sistem = AKTIF_GRID_SISTEMLERI[symbol]
                 merkez = sistem['merkez_fiyat']
-                marjin = sistem['marjin']
                 yon = sistem['yon']
                 
                 fark_orani = (guncel_fiyat - merkez) / merkez
@@ -145,82 +121,62 @@ def coklu_grid_yonetimi():
                     
                 kaldiracli_yuzde = fark_orani * KALDIRAC * 100
                 
-                # 1. KADEMELİ KÂR AL
+                # İLK HEDEF (%1.5 kâr -> Yarısını Kapat)
                 if kaldiracli_yuzde >= ILK_HEDEF_YUZDE and not sistem.get("ilk_hedef_alindi", False):
                     sistem["ilk_hedef_alindi"] = True
-                    
-                    yari_marjin = marjin / 2
-                    toplam_deger = yari_marjin * KALDIRAC
-                    komisyon = toplam_deger * KOMISYON_ORANI * 2
-                    brut_kar = yari_marjin * (kaldiracli_yuzde / 100)
-                    net_kz = brut_kar - komisyon
-                    
-                    KASA["guncel"] += yari_marjin + net_kz
-                    KASA["gunluk_kar_zarar"] += net_kz
-                    KASA["toplam_odenen_komisyon"] += komisyon
-                    KASA["toplam_islem"] += 1
-                    KASA["basarili_islem"] += 1
-                    
-                    sistem['marjin'] = yari_marjin
+                    try:
+                         miktar_cinsi = sistem['miktar'] / 2
+                         kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
+                         exchange.create_market_order(symbol, kapatma_yonu, miktar_cinsi, {'reduce_only': True})
+                         
+                         telegram_mesaj_gonder(
+                             f"🎯 *1. KADEME KÂR (Yarısı Kapandı)* - `{symbol}`\n"
+                             f"• Hedef: `%{kaldiracli_yuzde:.2f}`"
+                         )
+                    except Exception as e:
+                        print(f"1. Hedef emir hatası: {e}")
 
-                    telegram_mesaj_gonder(
-                        f"🎯 *1. KADEME KÂR CEBE ATILDI (Testnet)* - `{symbol}`\n"
-                        f"• Net K/Z: `{net_kz:+.2f} USD` (`%{kaldiracli_yuzde:.2f}`)"
-                    )
-
-                # 2. FİNAL HEDEF
+                # FİNAL HEDEF (%2.5 kâr -> Hepsini Kapat)
                 if kaldiracli_yuzde >= FINAL_HEDEF_YUZDE:
-                    toplam_deger = marjin * KALDIRAC
-                    komisyon = toplam_deger * KOMISYON_ORANI * 2 
-                    brut_kar = marjin * (kaldiracli_yuzde / 100)
-                    net_kz = brut_kar - komisyon
+                    try:
+                        kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
+                        exchange.create_market_order(symbol, kapatma_yonu, sistem['miktar'], {'reduce_only': True})
+                        
+                        telegram_mesaj_gonder(
+                            f"🚀 *FİNAL HEDEF TAMAMLANDI (Pozisyon Kapandı)* - `{symbol}`\n"
+                            f"• Kâr Oranı: `%{kaldiracli_yuzde:.2f}`"
+                        )
+                        del AKTIF_GRID_SISTEMLERI[symbol]
+                    except Exception as e:
+                        print(f"Final hedef emir hatası: {e}")
                     
-                    KASA["guncel"] = KASA["guncel"] + marjin + net_kz
-                    KASA["gunluk_kar_zarar"] += net_kz
-                    KASA["toplam_odenen_komisyon"] += komisyon
-                    KASA["toplam_islem"] += 1
-                    KASA["basarili_islem"] += 1
-
-                    telegram_mesaj_gonder(
-                        f"🚀 *FİNAL HEDEF TAMAMLANDI! (Testnet)* - `{symbol}`\n"
-                        f"• Kalan Yarı Net K/Z: `{net_kz:+.2f} USD` (`%{kaldiracli_yuzde:.2f}`)\n"
-                        f"• Güncel Kasa: `{KASA['guncel']:.2f} USD`"
-                    )
-                    del AKTIF_GRID_SISTEMLERI[symbol]
-                    
-                # ZARAR KES (STOP)
+                # ZARAR KES (STOP LOSS - %1.5 zarar)
                 elif kaldiracli_yuzde <= -ZARAR_KES_YUZDE:
-                    toplam_deger = marjin * KALDIRAC
-                    komisyon = toplam_deger * KOMISYON_ORANI * 2
-                    zarar = marjin * (ZARAR_KES_YUZDE / 100)
-                    net_kz = -zarar - komisyon
-                    
-                    KASA["guncel"] = KASA["guncel"] + marjin + net_kz
-                    KASA["gunluk_kar_zarar"] += net_kz
-                    KASA["toplam_odenen_komisyon"] += komisyon
-                    KASA["toplam_islem"] += 1
-                    KASA["zararli_islem"] += 1
+                    try:
+                        kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
+                        exchange.create_market_order(symbol, kapatma_yonu, sistem['miktar'], {'reduce_only': True})
+                        
+                        HAFIZA_KAYITLARI["yasakli_yonler"][symbol] = {
+                            "yon": yon,
+                            "bitis_zamani": su_an + 1200 
+                        }
 
-                    HAFIZA_KAYITLARI["zararli_islemler"].append({"symbol": symbol, "yon": yon, "zaman": su_an})
-                    HAFIZA_KAYITLARI["yasakli_yonler"][symbol] = {
-                        "yon": yon,
-                        "bitis_zamani": su_an + 1200 
-                    }
-
-                    telegram_mesaj_gonder(
-                        f"🛑 *KONTROLLÜ STOP (Testnet)* - `{symbol}`\n"
-                        f"• Zarar: `{net_kz:+.2f} USD`\n"
-                        f"• Kesilen Komisyon: `{komisyon:.4f} USD`"
-                    )
-                    del AKTIF_GRID_SISTEMLERI[symbol]
+                        telegram_mesaj_gonder(
+                            f"🛑 *KONTROLLÜ STOP (Zarar Kes)* - `{symbol}`\n"
+                            f"• Oran: `%{kaldiracli_yuzde:.2f}`"
+                        )
+                        del AKTIF_GRID_SISTEMLERI[symbol]
+                    except Exception as e:
+                        print(f"Stop loss emir hatası: {e}")
                 continue
 
-            # TOPLAM PORTFÖYÜ HESAPLA VE 4'E BÖL
+            # 2. YENİ POZİSYON AÇMA MANTIĞI (Borsaya Gerçek Emir)
+            toplam_bakiye = bakiye_al()
             bagli_marjin = sum([p['marjin'] for p in AKTIF_GRID_SISTEMLERI.values()])
-            anlik_portfoy = KASA["guncel"] + bagli_marjin
+            anlik_portfoy = toplam_bakiye + bagli_marjin
             sabit_islem_butcesi = anlik_portfoy / 4.0
 
-            if symbol not in AKTIF_GRID_SISTEMLERI and KASA["guncel"] >= sabit_islem_butcesi:
+            if symbol not in AKTIF_GRID_SISTEMLERI and toplam_bakiye >= sabit_islem_butcesi:
                 ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                 df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 
@@ -261,31 +217,48 @@ def coklu_grid_yonetimi():
                     continue
 
                 if symbol in HAFIZA_KAYITLARI["yasakli_yonler"]:
-                    yasakli_bilgi = HAFIZA_KAYITLARI["yasakli_yonler"][symbol]
-                    if yasakli_bilgi["yon"] == grid_yonu:
+                    if HAFIZA_KAYITLARI["yasakli_yonler"][symbol]["yon"] == grid_yonu:
                         continue
 
-                KASA["guncel"] -= sabit_islem_butcesi
-                AKTIF_GRID_SISTEMLERI[symbol] = {
-                    "yon": grid_yonu,
-                    "merkez_fiyat": guncel_fiyat,
-                    "marjin": sabit_islem_butcesi,
-                    "ilk_hedef_alindi": False
-                }
+                # BORSADA GERÇEK İŞLEM AÇMA ADIMI
+                kaldirac_ve_marjin_ayarla(symbol)
                 
-                telegram_mesaj_gonder(
-                    f"🧠 *TESTNET İŞLEM AÇILDI ({KALDIRAC}x İzole)*\n"
-                    f"• Parite: `{symbol}` ({grid_yonu})\n"
-                    f"• Piyasa Modu: `{piyasa_durumu}`\n"
-                    f"• İzole Marjin: `{sabit_islem_butcesi:.2f} USD` (1/4)\n"
-                    f"• Fiyat: `{guncel_fiyat:.2f}` | RSI: `{rsi15m:.1f}`"
-                )
+                # Pozisyon büyüklüğü hesaplama (Marjin * Kaldıraç / Fiyat)
+                toplam_pozisyon_usdt = sabit_islem_butcesi * KALDIRAC
+                miktar = toplam_pozisyon_usdt / guncel_fiyat
+                
+                # Gate.io kontrat birimine göre miktarı yuvarla / ayarla
+                market_info = exchange.market(symbol)
+                miktar = exchange.amount_to_precision(symbol, miktar)
+                
+                emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
+                
+                try:
+                    # Gate.io'ya gerçek piyasa emri gönder
+                    order = exchange.create_market_order(symbol, emir_yonu, float(miktar))
+                    
+                    AKTIF_GRID_SISTEMLERI[symbol] = {
+                        "yon": grid_yonu,
+                        "merkez_fiyat": guncel_fiyat,
+                        "marjin": sabit_islem_butcesi,
+                        "miktar": float(miktar),
+                        "ilk_hedef_alindi": False
+                    }
+                    
+                    telegram_mesaj_gonder(
+                        f"🧠 *BORSADA GERÇEK İŞLEM AÇILDI ({KALDIRAC}x)*\n"
+                        f"• Parite: `{symbol}` ({grid_yonu})\n"
+                        f"• İzole Marjin: `{sabit_islem_butcesi:.2f} USD` (1/4)\n"
+                        f"• Fiyat: `{guncel_fiyat:.2f}`"
+                    )
+                except Exception as e:
+                    print(f"Emir gönderme hatası ({symbol}): {e}")
 
     except Exception as e:
         print(f"Grid Yönetim Hata: {e}")
 
 def telegram_komutlari_dinle():
-    global KASA, AKTIF_GRID_SISTEMLERI, BOT_CALISIYOR_MU, HAFIZA_KAYITLARI
+    global AKTIF_GRID_SISTEMLERI, BOT_CALISIYOR_MU
     son_id = 0
     while True:
         try:
@@ -304,91 +277,44 @@ def telegram_komutlari_dinle():
                         
                         if metin == "/baslat":
                             BOT_CALISIYOR_MU = True
-                            telegram_mesaj_gonder("🚀 *Testnet Botu Aktif Edildi (10x Kaldıraç)!*")
+                            telegram_mesaj_gonder("🚀 *Testnet Canlı Emir Botu Aktif Edildi!*")
 
                         elif metin == "/kapat":
                             BOT_CALISIYOR_MU = False
-                            toplam_gercek_iade = 0.0
-                            
-                            for sym, p in AKTIF_GRID_SISTEMLERI.items():
+                            # Açık tüm pozisyonları borsada piyasa fiyatından kapat
+                            for sym, p in list(AKTIF_GRID_SISTEMLERI.items()):
                                 try:
-                                    t = exchange.fetch_ticker(sym)
-                                    curr = t['last']
-                                    merkez = p['merkez_fiyat']
-                                    marjin = p['marjin']
-                                    
-                                    fark_orani = (curr - merkez) / merkez
-                                    if p['yon'] == "SHORT": fark_orani = -fark_orani
-                                        
-                                    kaldiracli_yuzde = fark_orani * KALDIRAC * 100
-                                    brut_tutar = marjin * (kaldiracli_yuzde / 100)
-                                    
-                                    toplam_deger = marjin * KALDIRAC
-                                    komisyon = toplam_deger * KOMISYON_ORANI * 2
-                                    net_durum = brut_tutar - komisyon
-                                    
-                                    gercek_tutar = marjin + net_durum
-                                    toplam_gercek_iade += max(0, gercek_tutar)
-                                    
-                                    KASA["gunluk_kar_zarar"] += net_durum
-                                    KASA["toplam_odenen_komisyon"] += komisyon
-                                    KASA["toplam_islem"] += 1
-                                    if net_durum >= 0: KASA["basarili_islem"] += 1
-                                    else: KASA["zararli_islem"] += 1
-                                except:
-                                    toplam_gercek_iade += p['marjin']
-                                    
-                            KASA["guncel"] += toplam_gercek_iade
+                                    kapatma_yonu = 'sell' if p['yon'] == 'LONG' else 'buy'
+                                    exchange.create_market_order(sym, kapatma_yonu, p['miktar'], {'reduce_only': True})
+                                except Exception as e:
+                                    print(f"Kapatma hatası {sym}: {e}")
                             AKTIF_GRID_SISTEMLERI.clear()
-                            telegram_mesaj_gonder(f"🚨 *Tüm Pozisyonlar Kapatıldı (Testnet)*\n• Nakit Kasa: `{KASA['guncel']:.2f} USD`")
+                            telegram_mesaj_gonder("🚨 *Tüm Pozisyonlar Borsada Kapatıldı!*")
 
                         elif metin == "/durum":
-                            bagli = sum([p['marjin'] for p in AKTIF_GRID_SISTEMLERI.values()])
-                            anlik_acik_kz = 0.0
-                            for sym, p in AKTIF_GRID_SISTEMLERI.items():
-                                try:
-                                    t = exchange.fetch_ticker(sym)
-                                    curr = t['last']
-                                    fark = (curr - p['merkez_fiyat']) / p['merkez_fiyat']
-                                    if p['yon'] == "SHORT": fark = -fark
-                                    anlik_acik_kz += p['marjin'] * (fark * KALDIRAC)
-                                except:
-                                    pass
-
-                            toplam_varlik = KASA['guncel'] + bagli + anlik_acik_kz
+                            bakiye = bakiye_al()
                             durum_str = "Çalışıyor 🟢" if BOT_CALISIYOR_MU else "Beklemede ⏸️"
-                            
                             durum = (
-                                f"📊 *TESTNET DURUM RAPORU ({KALDIRAC}x)*\n"
+                                f"📊 *GATE.IO TESTNET DURUM*\n"
                                 f"• Durum: `{durum_str}`\n"
-                                f"• Nakit Kasa: `{KASA['guncel']:.2f} USD`\n"
-                                f"• Bağlı İzole Marjin: `{bagli:.2f} USD`\n"
-                                f"• Anlık Açık K/Z: `{anlik_acik_kz:+.2f} USD`\n"
-                                f"💰 *Toplam Portföy: `{toplam_varlik:.2f} USD`*\n"
-                                f"• 💸 Komisyon: `{KASA['toplam_odenen_komisyon']:.4f} USD`\n"
-                                f"• Günlük Net K/Z: `{KASA['gunluk_kar_zarar']:+.2f} USD`\n"
-                                f"• Başarılı: `{KASA['basarili_islem']}` | Zararlı: `{KASA['zararli_islem']}`"
+                                f"• Cüzdan Bakiyesi: `{bakiye:.2f} USDT`\n"
+                                f"• Aktif Pozisyon Sayısı: `{len(AKTIF_GRID_SISTEMLERI)}`"
                             )
                             telegram_mesaj_gonder(durum)
 
                         elif metin == "/pozisyonlar":
                             if not AKTIF_GRID_SISTEMLERI:
-                                telegram_mesaj_gonder("📭 Testnet'te aktif pozisyon bulunmuyor.")
+                                telegram_mesaj_gonder("📭 Borsada aktif pozisyon bulunmuyor.")
                             else:
-                                msg = f"⚡ *TESTNET AKTİF POZİSYONLAR ({KALDIRAC}x)*\n\n"
+                                msg = f"⚡ *BORSADAKİ AKTİF POZİSYONLAR ({KALDIRAC}x)*\n\n"
                                 for sym, p in AKTIF_GRID_SISTEMLERI.items():
                                     try:
                                         t = exchange.fetch_ticker(sym)
                                         curr = t['last']
-                                        fark_orani = (curr - p['merkez_fiyat']) / p['merkez_fiyat']
-                                        if p['yon'] == "SHORT": fark_orani = -fark_orani
-                                            
-                                        kaldiracli_yuzde = fark_orani * KALDIRAC * 100
-                                        tahmini_dolar = p['marjin'] * (kaldiracli_yuzde / 100)
-                                        ikon = "🟢" if tahmini_dolar >= 0 else "🔴"
-                                        asama = "2. Aşama (Final)" if p.get("ilk_hedef_alindi") else "1. Aşama (Yolcu)"
-                                        
-                                        msg += f"{ikon} *{sym}* ({p['yon']} {KALDIRAC}x İzole) - `{asama}`\n• Marjin: `{p['marjin']:.2f} USD` | Merkez: `{p['merkez_fiyat']:.2f}`\n• K/Z: `%{kaldiracli_yuzde:+.2f}` (`{tahmini_dolar:+.2f} USD`)\n-------------------\n"
+                                        fark = (curr - p['merkez_fiyat']) / p['merkez_fiyat']
+                                        if p['yon'] == "SHORT": fark = -fark
+                                        kaldiracli_yuzde = fark * KALDIRAC * 100
+                                        msg += f"• *{sym}* ({p['yon']}) | Merkez: `{p['merkez_fiyat']:.2f}` | K/Z: `%{kaldiracli_yuzde:+.2f}`\n"
                                     except:
                                         pass
                                 telegram_mesaj_gonder(msg)
@@ -398,11 +324,11 @@ def telegram_komutlari_dinle():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print(f"🚀 Gate.io Testnet Sabit 4'e Bölünmüş Bot Başlatılıyor ({KALDIRAC}x)...")
+    print(f"🚀 Gate.io Canlı Emir Botu Başlatılıyor ({KALDIRAC}x)...")
     threading.Thread(target=telegram_komutlari_dinle, daemon=True).start()
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    telegram_mesaj_gonder(f"⚡ *Gate.io Testnet Botu Başlatıldı ({KALDIRAC}x Kaldıraç)!* 1000 USDT demo bakiye ile sistem aktif.")
+    telegram_mesaj_gonder(f"⚡ *Gate.io Gerçek Emir Botu Başlatıldı ({KALDIRAC}x)!*")
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
-                
+                                        
