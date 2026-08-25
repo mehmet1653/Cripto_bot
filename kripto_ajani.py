@@ -58,7 +58,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Çift Emirli (Standart CCXT Stop & Hedef) Bot | Durum: {durum_str}"
+    return f"Hızlı Çift Emirli (2sn Tarama) Bot | Durum: {durum_str}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -73,22 +73,16 @@ def set_isolated_leverage_safely(symbol, leverage):
         return False
 
 def gate_tetiklemeli_emir_gonder(symbol, kapatma_yonu, miktar, tetik_fiyati):
-    """
-    Gate.io ve diğer borsalarla tam uyumlu, CCXT standart parametrelerini kullanan 
-    güvenli stop / tetiklemeli emir fonksiyonu.
-    """
     try:
         params = {
             'triggerPrice': float(tetik_fiyati),
             'stopPrice': float(tetik_fiyati),
             'reduceOnly': True
         }
-        # CCXT üzerinden standart tetiklemeli (stop/tp) emir gönderimi
         order = exchange.create_order(symbol, 'market', kapatma_yonu, miktar, None, params)
         return True, order
     except Exception as e:
         try:
-            # Alternatif parametre denemesi
             params_alt = {
                 'trigger_price': float(tetik_fiyati),
                 'reduce_only': True
@@ -102,7 +96,6 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
     kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
     basarili = False
     
-    # Açık olabilecek tüm bekleyen tetiklemeli emirleri temizle
     try:
         open_orders = exchange.fetch_open_orders(symbol)
         for ord_item in open_orders:
@@ -121,7 +114,7 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
         basarili = True
     except Exception as e:
         try:
-            time.sleep(0.3)
+            time.sleep(0.2)
             ticker = exchange.fetch_ticker(symbol)
             guvenli_fiyat = ticker['ask'] if kapatma_yonu == 'buy' else ticker['bid']
             exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, guvenli_fiyat, {'timeInForce': 'IOC', 'reduce_only': True})
@@ -232,7 +225,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🔄 Standart Güvenli Çift Emirli tarayıcı aktif.")
+    print("🔄 Hızlı Tarayıcı (2 saniye aralıklı) aktif.")
     
     try:
         exchange.load_markets()
@@ -242,7 +235,7 @@ def otomatik_arkaplan_tarayici():
     while True:
         try:
             if not BOT_CALISIYOR_MU:
-                time.sleep(5)
+                time.sleep(3)
                 continue
                 
             try:
@@ -387,9 +380,8 @@ def otomatik_arkaplan_tarayici():
                     stop_fiyati = float(exchange.price_to_precision(symbol, stop_fiyati))
                     hedef_fiyati = float(exchange.price_to_precision(symbol, hedef_fiyati))
                     
-                    time.sleep(0.5)
+                    time.sleep(0.3)
 
-                    # Doğru yönde kapatma emirleri (Sell for Long, Buy for Short)
                     stop_basarili, stop_res = gate_tetiklemeli_emir_gonder(symbol, kapatma_yonu, miktar, stop_fiyati)
                     tp_basarili, tp_res = gate_tetiklemeli_emir_gonder(symbol, kapatma_yonu, miktar, hedef_fiyati)
 
@@ -403,7 +395,7 @@ def otomatik_arkaplan_tarayici():
                         "giris_rsi": rsi
                     }
                     
-                    emir_durum_str = "✅ (Stop & Hedef Borsaya İletildi)" if (stop_basarili or tp_basarili) else "⚠️ (Bot İç Döngü Takibinde)"
+                    emir_durum_str = "✅ (Stop & Hedef Aktif)" if (stop_basarili or tp_basarili) else "⚠️ (Hızlı Takipte)"
                     
                     telegram_mesaj_gonder(
                         f"🚀 *İŞLEM AÇILDI {emir_durum_str} - {KALDIRAC}x*\n"
@@ -414,17 +406,17 @@ def otomatik_arkaplan_tarayici():
                         f"• Marjin: `~{hesaplanan_marjin:.2f} USDT`\n"
                         f"• Giriş RSI: `{rsi:.1f}`"
                     )
-                    time.sleep(20)
+                    time.sleep(10)
                 except Exception as order_err:
                     print(f"Emir hatası ({symbol}): {order_err}")
 
         except Exception as loop_err:
             print(f"Döngü hatası: {loop_err}")
         
-        time.sleep(10)
+        time.sleep(2)  # Döngü hızı 2 saniyeye düşürüldü (Anlık tarama için)
 
 if __name__ == "__main__":
-    print(f"🚀 Standart Çift Emirli Bot Başlatılıyor...")
+    print(f"🚀 Hızlı Çift Emirli Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
@@ -443,4 +435,4 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-        
+                    
