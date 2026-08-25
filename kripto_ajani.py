@@ -77,7 +77,7 @@ HEDEF_ROESINI_ISTENEN = 20.0         # Normal Büyük Hedef (%20 Kâr ROI)
 ZARAR_KES_ROESINI_ISTENEN = 10.0     # Stop-Loss (%10 Zarar ROI)
 MIN_ADX_GUCU = 20.0                  # Minimum trend gücü
 
-# YENİ AKILLI DİNAMİK KÂR AL KURALLARI (2 Saat + Toplam Portföyde %3 Kâr)
+# AKILLI DİNAMİK KÂR AL KURALLARI (2 Saat + Toplam Portföyde %3 Kâr)
 AKILLI_BEKLEME_SANIYESI = 7200        # 2 Saat (2 * 60 * 60 saniye)
 AKILLI_PORTFOY_KAR_YUZDESI = 3.0     # Toplam portföyde %3 kâr eşiği
 # ======================================================================
@@ -469,4 +469,4 @@ def otomatik_arkaplan_tarayici():
                     hesaplanan_marjin = (miktar * contract_size * guncel_fiyat) / KALDIRAC
                     
                     AKTIF_GRID_SISTEMLERI[symbol] = {
-  
+       
