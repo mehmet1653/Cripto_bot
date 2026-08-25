@@ -58,7 +58,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Senkronize Takip Botu | Durum: {durum_str}"
+    return f"Senkronize Gerçekçi Bot | Durum: {durum_str}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -120,9 +120,9 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
             exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, guvenli_fiyat, {'timeInForce': 'IOC', 'reduce_only': True})
             basarili = True
         except Exception as e2:
-            telegram_mesaj_gonder(f"🚨 *POZİSYON KAPATILAMADI!* (`{symbol}`)\nHata: `{str(e2)}`")
+            print(f"Pozisyon kapatma hatası: {e2}")
 
-    if basarili:
+    if basarili and sebep_mesaji:
         telegram_mesaj_gonder(sebep_mesaji)
 
 def get_account_status_summary():
@@ -131,30 +131,28 @@ def get_account_status_summary():
         total_usdt = float(balance['total'].get('USDT', 0))
         free_usdt = float(balance['free'].get('USDT', 0))
         
-        # Testnet API gecikmesine takılmamak için aktif pozisyonları dahili hafızadan okunur
-        active_positions = list(AKTIF_GRID_SISTEMLERI.items())
+        # Gerçek borsa pozisyonlarını çekerek hayalet pozisyonları engelle
+        b_positions = exchange.fetch_positions()
+        active_positions = [p for p in b_positions if float(p.get('contracts', 0)) > 0]
         
+        # Hafızayı borsa ile senkronize et (Borsada kapandıysa hafızadan da sil)
+        aktif_syms = [p['symbol'] for p in active_positions]
+        for sym in list(AKTIF_GRID_SISTEMLERI.keys()):
+            if sym not in aktif_syms:
+                del AKTIF_GRID_SISTEMLERI[sym]
+
         toplam_anlik_pnl = 0.0
         aktif_ozet_listesi = []
 
-        for sym, sistem in active_positions:
-            try:
-                ticker = exchange.fetch_ticker(sym)
-                guncel_fiyat = ticker['last']
-            except Exception:
-                guncel_fiyat = sistem['merkez_fiyat']
-
-            merkez = sistem['merkez_fiyat']
-            yon = sistem['yon']
-            marjin = sistem['marjin']
-            size = sistem['miktar']
+        for p in active_positions:
+            sym = p['symbol']
+            yon = p['side'].upper()
+            size = float(p.get('contracts', 0))
+            entry_p = float(p.get('entryPrice', 0))
+            pnl = float(p.get('unrealizedPnl', 0))
+            margin = float(p.get('initialMargin', 0)) or (size * entry_p / KALDIRAC)
             
-            fark_orani = (guncel_fiyat - merkez) / merkez
-            if yon == "SHORT": 
-                fark_orani = -fark_orani
-                
-            roe_yuzde = fark_orani * 100
-            pnl = (marjin * roe_yuzde) / 100
+            roe_yuzde = (pnl / margin * 100) if margin > 0 else 0.0
             toplam_anlik_pnl += pnl
 
             aktif_ozet_listesi.append({
@@ -164,8 +162,8 @@ def get_account_status_summary():
                 'pnl': pnl,
                 'roe': roe_yuzde,
                 'contracts': size,
-                'entryPrice': merkez,
-                'margin': marjin
+                'entryPrice': entry_p,
+                'margin': margin
             })
             
         gunluk_pnl = ANALitik_HAFIZA['gunluk_net_kar_usd']
@@ -220,14 +218,19 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔄 *Tüm açık pozisyonlar ve bekleyen emirler kapatılıyor...*", parse_mode='Markdown')
     
     try:
-        if not AKTIF_GRID_SISTEMLERI:
-            await update.message.reply_text("ℹ️ Zaten takip edilen aktif pozisyon bulunmuyor.", parse_mode='Markdown')
+        b_positions = exchange.fetch_positions()
+        active_positions = [p for p in b_positions if float(p.get('contracts', 0)) > 0]
+        
+        if not active_positions:
+            AKTIF_GRID_SISTEMLERI.clear()
+            await update.message.reply_text("ℹ️ Zaten açık hiçbir pozisyon bulunmuyor.", parse_mode='Markdown')
             return
 
         kapatilanlar = 0
-        for sym, sistem in list(AKTIF_GRID_SISTEMLERI.items()):
-            yon = sistem['yon']
-            kontrat = sistem['miktar']
+        for p in active_positions:
+            sym = p['symbol']
+            yon = p['side'].upper()
+            kontrat = float(p['contracts'])
             
             mesaj = f"🛑 *MANUEL KAPATMA (/kapat)* - `{sym}`"
             pozisyonu_garantili_kapat(sym, yon, kontrat, mesaj)
@@ -241,7 +244,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🔄 Senkronize Hızlı Tarayıcı aktif.")
+    print("🔄 Gerçekçi Senkronize Tarayıcı aktif.")
     
     try:
         exchange.load_markets()
@@ -253,6 +256,16 @@ def otomatik_arkaplan_tarayici():
             if not BOT_CALISIYOR_MU:
                 time.sleep(3)
                 continue
+
+            # Her döngü başında borsa pozisyonlarını kontrol et, kapananları hafızadan temizle
+            try:
+                b_positions = exchange.fetch_positions()
+                gercek_aktif_syms = [p['symbol'] for p in b_positions if float(p.get('contracts', 0)) > 0]
+                for sym in list(AKTIF_GRID_SISTEMLERI.keys()):
+                    if sym not in gercek_aktif_syms:
+                        del AKTIF_GRID_SISTEMLERI[sym]
+            except Exception:
+                pass
 
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU:
@@ -309,7 +322,6 @@ def otomatik_arkaplan_tarayici():
                             del AKTIF_GRID_SISTEMLERI[symbol]
                     continue
 
-                # Zaten açık pozisyon varsa yeni işlem açma
                 if symbol in AKTIF_GRID_SISTEMLERI:
                     continue
 
@@ -417,7 +429,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print(f"🚀 Senkronize Bot Başlatılıyor...")
+    print(f"🚀 Gerçekçi Senkronize Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
