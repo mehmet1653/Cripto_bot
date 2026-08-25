@@ -13,7 +13,7 @@ app = Flask(__name__)
 
 # ==================== AYARLAR VE ANAHTARLAR ====================
 TELEGRAM_TOKEN = "7917711488:AAF_ornek_token_buraya"
-CHAT_ID = "123456789"
+CHAT_ID = "6929517567"  # Telegram ID'n buraya işlendi abi
 
 # Gate.io Testnet (Demo) Bağlantısı ve Test Keyleri
 exchange = ccxt.gate({
@@ -231,7 +231,6 @@ def otomatik_arkaplan_tarayici():
                         grid_yonu = "SHORT"
 
                 if not grid_yonu:
-                    # Şart sağlanmadı, Telegram spam olmasın diye sadece konsola yazıyoruz
                     print(f"[TARAMA] {symbol} | Fiyat: {guncel_fiyat} | RSI: {rsi15m:.1f} -> Bekleniyor...")
                     continue
 
@@ -239,7 +238,6 @@ def otomatik_arkaplan_tarayici():
                     if HAFIZA_KAYITLARI["yasakli_yonler"][symbol]["yon"] == grid_yonu:
                         continue
 
-                # KESİN KALDIRACIN SABİTLENMESİ VE İŞLEM AÇMA
                 set_leverage_safely(symbol, KALDIRAC)
                 toplam_pozisyon_usdt = sabit_islem_butcesi * KALDIRAC
                 miktar = toplam_pozisyon_usdt / guncel_fiyat
@@ -274,17 +272,14 @@ def otomatik_arkaplan_tarayici():
 if __name__ == "__main__":
     print(f"🚀 Tam Donanımlı Bot Başlatılıyor ({KALDIRAC}x)...")
     
-    # Arka plan strateji motorunu başlat
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
-    # Flask sunucusunu başlat (Render vb. platformlar port isterse kapanmasın diye)
     port = int(os.environ.get("PORT", 5000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
     
-    # Telegram Komut Dinleyicisini Başlat (/durum için)
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     
     print("Telegram komut dinleyicisi (/durum) aktif...")
     app_tg.run_polling()
-                    
+    
