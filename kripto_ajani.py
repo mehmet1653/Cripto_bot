@@ -39,8 +39,8 @@ ANALitik_HAFIZA = {
 }
 
 KALDIRAC = 10
-HEDEF_YUZDE = 2.5         # Tek seferde temiz kâr hedefi
-ZARAR_KES_YUZDE = 1.5     # Sabit zarar kes
+HEDEF_YUZDE = 2.5         # Kâr Al Hedefi
+ZARAR_KES_YUZDE = 1.5     # Zarar Kes Stopu
 # ==========================================================
 
 def telegram_mesaj_gonder(mesaj):
@@ -58,7 +58,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Komisyonsuz / Tek Hedefli Bot | Durum: {durum_str}"
+    return f"Çift Emirli (Stop & Hedef) Bot | Durum: {durum_str}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -77,18 +77,15 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
     basarili = False
     
     try:
-        try:
-            market_info = exchange.market(symbol)
-            min_amount = float(market_info['limits']['amount']['min'] or 1.0)
-            if miktar < min_amount:
-                miktar = min_amount
-            miktar = float(exchange.amount_to_precision(symbol, miktar))
-        except Exception:
-            pass
+        market_info = exchange.market(symbol)
+        min_amount = float(market_info['limits']['amount']['min'] or 1.0)
+        if miktar < min_amount:
+            miktar = min_amount
+        miktar = float(exchange.amount_to_precision(symbol, miktar))
 
         exchange.create_market_order(symbol, kapatma_yonu, miktar, {'reduce_only': True})
         basarili = True
-    except Exception:
+    except Exception as e:
         try:
             time.sleep(0.3)
             ticker = exchange.fetch_ticker(symbol)
@@ -201,7 +198,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🔄 Komisyonsuz Tek Hedefli tarayıcı aktif.")
+    print("🔄 Çift Emirli (Stop & Hedef) tarayıcı aktif.")
     
     try:
         exchange.load_markets()
@@ -256,7 +253,7 @@ def otomatik_arkaplan_tarayici():
                         
                     net_kar_zarar_yuzdesi = fark_orani * 100
                     
-                    # FİNAL HEDEF (%2.5 kâr - Tek seferde temiz kapatma)
+                    # HEDEF KONTROLÜ (%2.5 Kâr)
                     if net_kar_zarar_yuzdesi >= HEDEF_YUZDE:
                         tahmini_kar_usd = (sistem['marjin'] * net_kar_zarar_yuzdesi) / 100
                         ANALitik_HAFIZA["gunluk_net_kar_usd"] += tahmini_kar_usd
@@ -268,7 +265,7 @@ def otomatik_arkaplan_tarayici():
                         if symbol in AKTIF_GRID_SISTEMLERI:
                             del AKTIF_GRID_SISTEMLERI[symbol]
                         
-                    # ZARAR KES KONTROLÜ (%1.5 stop)
+                    # ZARAR KES KONTROLÜ (%1.5 Stop)
                     elif net_kar_zarar_yuzdesi <= -ZARAR_KES_YUZDE:
                         tahmini_zarar_usd = (sistem['marjin'] * abs(net_kar_zarar_yuzdesi)) / 100
                         ANALitik_HAFIZA["gunluk_net_kar_usd"] -= tahmini_zarar_usd
@@ -347,22 +344,41 @@ def otomatik_arkaplan_tarayici():
                 emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
                 
                 try:
+                    # 1. Ana Pozisyonu Aç
                     exchange.create_market_order(symbol, emir_yonu, miktar)
                     
-                    # Stop-Market emrini kusursuz kuruyoruz
+                    # Fiyat Seviyelerini Hesapla
                     if grid_yonu == 'LONG':
                         stop_fiyati = guncel_fiyat * (1.0 - (ZARAR_KES_YUZDE / 100.0))
+                        hedef_fiyati = guncel_fiyat * (1.0 + (HEDEF_YUZDE / 100.0))
+                        kapatma_yonu = 'sell'
                     else:
                         stop_fiyati = guncel_fiyat * (1.0 + (ZARAR_KES_YUZDE / 100.0))
+                        hedef_fiyati = guncel_fiyat * (1.0 - (HEDEF_YUZDE / 100.0))
+                        kapatma_yonu = 'buy'
                     
                     stop_fiyati = float(exchange.price_to_precision(symbol, stop_fiyati))
-                    stop_yonu = 'sell' if grid_yonu == 'LONG' else 'buy'
+                    hedef_fiyati = float(exchange.price_to_precision(symbol, hedef_fiyati))
                     
+                    # 2. STOP EMRİNİ ANINDA GÖNDER
                     try:
-                        params = {'stopPrice': stop_fiyati, 'reduceOnly': True}
-                        exchange.create_order(symbol, 'stop', stop_yonu, miktar, stop_fiyati, params)
+                        exchange.create_order(symbol, 'stop', kapatma_yonu, miktar, stop_fiyati, {
+                            'stopPrice': stop_fiyati,
+                            'triggerPrice': stop_fiyati,
+                            'reduceOnly': True
+                        })
                     except Exception as stop_err:
-                        print(f"Stop-market kurulamadı: {stop_err}")
+                        print(f"Stop emri kurulamadı: {stop_err}")
+
+                    # 3. HEDEF (TAKE PROFIT) EMRİNİ ANINDA GÖNDER
+                    try:
+                        exchange.create_order(symbol, 'takeProfit', kapatma_yonu, miktar, hedef_fiyati, {
+                            'stopPrice': hedef_fiyati,
+                            'triggerPrice': hedef_fiyati,
+                            'reduceOnly': True
+                        })
+                    except Exception as tp_err:
+                        print(f"Hedef emri kurulamadı: {tp_err}")
 
                     hesaplanan_marjin = (miktar * contract_size * guncel_fiyat) / KALDIRAC if 'contract_size' in locals() else hedef_marjin
                     
@@ -374,9 +390,11 @@ def otomatik_arkaplan_tarayici():
                         "giris_rsi": rsi
                     }
                     telegram_mesaj_gonder(
-                        f"🚀 *İŞLEM AÇILDI & STOP EKLENDİ ({KALDIRAC}x)*\n"
+                        f"🚀 *İŞLEM AÇILDI (STOP & HEDEF EKLENDİ - {KALDIRAC}x)*\n"
                         f"• Parite: `{symbol}` ({grid_yonu})\n"
-                        f"• Giriş: `{guncel_fiyat}` | Stop: `{stop_fiyati}`\n"
+                        f"• Giriş: `{guncel_fiyat}`\n"
+                        f"• Hedef Kâr: `{hedef_fiyati}` (`+{HEDEF_YUZDE}%`)\n"
+                        f"• Zarar Kes: `{stop_fiyati}` (`-{ZARAR_KES_YUZDE}%`)\n"
                         f"• Marjin: `~{hesaplanan_marjin:.2f} USDT`\n"
                         f"• Giriş RSI: `{rsi:.1f}`"
                     )
@@ -390,7 +408,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(10)
 
 if __name__ == "__main__":
-    print(f"🚀 Komisyonsuz Tek Hedefli Bot Başlatılıyor...")
+    print(f"🚀 Çift Emirli Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
@@ -409,4 +427,4 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-                    
+        
