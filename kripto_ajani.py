@@ -27,13 +27,14 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-# BNB çıkarıldı; BTC, ETH, SOL ve XRP ile optimize edildi
 TAKIP_EDILENLER = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT']
 AKTIF_GRID_SISTEMLERI = {}
 BOT_CALISIYOR_MU = True
 
 ANALitik_HAFIZA = {
-    "basarisiz_analizler": []
+    "basarisiz_analizler": [],
+    "basarili_islem_sayisi": 0,
+    "basarisiz_islem_sayisi": 0
 }
 
 KALDIRAC = 10
@@ -114,6 +115,8 @@ def get_account_status_summary():
             summary += f"📉 **Toplam PnL:** `{toplam_anlik_pnl:.2f} USDT` 🔴\n"
             
         summary += f"📊 **Aktif Pozisyon:** `{len(active_positions)}`\n"
+        summary += f"🎯 **Başarılı İşlem:** `{ANALitik_HAFIZA['basarili_islem_sayisi']}` adet\n"
+        summary += f"🛑 **Başarısız (Zarar Kes):** `{ANALitik_HAFIZA['basarisiz_islem_sayisi']}` adet\n"
         
         if active_positions:
             summary += f"\n-----------------------------------\n"
@@ -189,7 +192,7 @@ def otomatik_arkaplan_tarayici():
     except Exception as e:
         print(f"Piyasalar yüklenemedi: {e}")
     
-    while True:
+    while while_durumu := True:
         try:
             if not BOT_CALISIYOR_MU:
                 time.sleep(5)
@@ -251,18 +254,27 @@ def otomatik_arkaplan_tarayici():
                     if kaldiracli_yuzde >= FINAL_HEDEF_YUZDE:
                         mesaj = f"🚀 *FİNAL HEDEF (BAŞARILI)* - `{symbol}` (`+{kaldiracli_yuzde:.2f}%`)"
                         pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
+                        
+                        ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
+                        
                         if symbol in AKTIF_GRID_SISTEMLERI:
                             del AKTIF_GRID_SISTEMLERI[symbol]
                         
                     elif kaldiracli_yuzde <= -ZARAR_KES_YUZDE:
-                        mesaj = f"🛑 *ZARAR KES & ANALİTİK DERS* - `{symbol}` (`{kaldiracli_yuzde:.2f}%`)"
+                        # Kapanış anındaki yaklaşık Dolar zararını hesaplıyoruz
+                        tahmini_zarar_usd = (sistem['marjin'] * abs(kaldiracli_yuzde)) / 100
+                        
+                        mesaj = f"🛑 *ZARAR KES & ANALİTİK DERS* - `{symbol}` (`{kaldiracli_yuzde:.2f}%` | `-{tahmini_zarar_usd:.2f} USDT`)"
                         pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
+                        
+                        ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
                         
                         analitik_hata_notu = {
                             "symbol": symbol,
                             "yanlis_yon": yon,
                             "giris_fiyati": merkez,
                             "zarar_orani": kaldiracli_yuzde,
+                            "zarar_usd": tahmini_zarar_usd,
                             "zaman": time.strftime('%H:%M:%S')
                         }
                         ANALitik_HAFIZA["basarisiz_analizler"].append(analitik_hata_notu)
@@ -375,4 +387,4 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-                    
+                
