@@ -96,7 +96,7 @@ def telegram_mesaj_gonder(mesaj):
 
 @app.route('/')
 def home():
-    durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
+    durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "KİLİTLENDİ / BEKLEMEDE ⏸️"
     return f"Testnet Akıllı Kasa Koruma Botu | Durum: {durum_str}"
 
 def set_isolated_leverage_safely(symbol, leverage):
@@ -198,8 +198,10 @@ def get_account_status_summary():
                 })
 
         gunluk_pnl = ANALitik_HAFIZA['gunluk_net_kar_usd']
+        bot_durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "KİLİTLENDİ / BEKLEMEDE ⏸️"
         
-        summary = f"🧠 *AKILLI KASA KORUMA RAPORU*\n\n"
+        summary = f"🧠 *AKILLI KASA KORUMA RAPORU*\n"
+        summary += f"• **Bot Durumu:** `{bot_durum_str}`\n\n"
         summary += f"💰 **Toplam Kasa:** `{total_usdt:.2f} USDT`\n"
         summary += f"💵 **Kullanılabilir:** `{free_usdt:.2f} USDT`\n"
         
@@ -237,15 +239,18 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 *Akıllı koruma botu aktif edildi!*", parse_mode='Markdown')
+    await update.message.reply_text("🟢 *Akıllı koruma botu yeniden aktifleştirildi! Yeni işlem açabilir.*", parse_mode='Markdown')
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = False
-    await update.message.reply_text("⏸️ *Bot durduruldu.*", parse_mode='Markdown')
+    await update.message.reply_text("⏸️ *Bot durduruldu. Yeni işlem açmayacak.*", parse_mode='Markdown')
 
 async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 *Tüm aktif işlemler kapatılıyor...*", parse_mode='Markdown')
+    global BOT_CALISIYOR_MU
+    BOT_CALISIYOR_MU = False  # Botu tamamen kilitliyor, yeniden /baslat denilene kadar işlem yapmaz!
+    
+    await update.message.reply_text("🔄 *Tüm aktif işlemler kapatılıyor ve bot KİLİTLENİYOR (Durduruldu)...*", parse_mode='Markdown')
     
     try:
         borsa_pozisyonlari = exchange.fetch_positions()
@@ -261,7 +266,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         AKTIF_GRID_SISTEMLERI.clear()
         hafizayi_kaydet()
-        await update.message.reply_text(f"✅ İşlem tamamlandı. Toplam `{kapatilanlar}` pozisyon kapatıldı.", parse_mode='Markdown')
+        await update.message.reply_text(f"✅ İşlem tamamlandı. Toplam `{kapatilanlar}` pozisyon kapatıldı.\n🔒 *Bot güvenli moda alındı.* Yeniden başlatmak için `/baslat` yazabilirsin.", parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f"❌ Kapatma sırasında hata: `{str(e)}`", parse_mode='Markdown')
 
@@ -328,12 +333,10 @@ def otomatik_arkaplan_tarayici():
             if aktif_borsa_map and toplam_kullanilan_marjin > 0:
                 toplam_portfoy_kar_yuzdesi = (toplam_acik_pnl / toplam_kullanilan_marjin) * 100
                 
-                # En eski pozisyonun açılış zamanını kontrol edelim
-                en_ erken_zaman = min([d.get("acilis_zamani", time.time()) for d in AKTIF_GRID_SISTEMLERI.values()], default=time.time())
-                gecen_sure = time.time() - en_ erken_zaman
+                en_erken_zaman = min([d.get("acilis_zamani", time.time()) for d in AKTIF_GRID_SISTEMLERI.values()], default=time.time())
+                gecen_sure = time.time() - en_erken_zaman
 
-                # Eğer en az 2 saat (7200 sn) geçtimi VE toplam portföy kârı %3 ve üzerine çıktıysa
-                if gecti_mi_zaman := (gecen_sure >= AKILLI_BEKLEME_SANIYESI) and (toplam_portfoy_kar_yuzdesi >= AKILLI_PORTFOY_KAR_YUZDESI):
+                if (gecen_sure >= AKILLI_BEKLEME_SANIYESI) and (toplam_portfoy_kar_yuzdesi >= AKILLI_PORTFOY_KAR_YUZDESI):
                     telegram_mesaj_gonder(
                         f"🎯 *AKILLI KÂR KİLİTLEME DEVREYE GİRDİ*\n"
                         f"• Yatay piyasa / bekleme süresi doldu (`{gecen_sure/3600:.1f} saat`).\n"
@@ -466,9 +469,4 @@ def otomatik_arkaplan_tarayici():
                     hesaplanan_marjin = (miktar * contract_size * guncel_fiyat) / KALDIRAC
                     
                     AKTIF_GRID_SISTEMLERI[symbol] = {
-                        "yon": grid_yonu,
-                        "merkez_fiyat": guncel_fiyat,
-                        "marjin": hesaplanan_marjin,
-                        "miktar": miktar,
-                        "giris_rsi": rsi,
-                        "acilis_zamani": t
+  
