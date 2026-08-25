@@ -73,35 +73,27 @@ def set_isolated_leverage_safely(symbol, leverage):
         return False
 
 def gate_tetiklemeli_emir_gonder(symbol, yon, miktar, tetik_fiyati):
-    """
-    Gate.io'nun native futures API'sini kullanarak kusursuz conditional (stop/TP) emir gönderir.
-    yon: 'buy' (short kapatır) veya 'sell' (long kapatır)
-    """
     try:
-        # ccxt sembolünü gate formatına çevir (örn: ETH/USDT:USDT -> ETH_USDT)
         market_id = exchange.market(symbol)['id']
         
-        # Gate.io futures price trigger body
         payload = {
             "contract": market_id,
             "size": float(miktar),
             "iceberg": 0,
-            "price": "0", # Piyasa fiyatından kapatması için 0 (Market Trigger)
+            "price": "0",
             "tif": "ioc",
-            "rule": 1,    # 1: tetik fiyatı >= son fiyat, 2: tetik fiyatı <= son fiyat (Gate otomatik algılar ama rule verilir)
+            "rule": 1,
             "trigger": {
-                "strategy_type": 0, # Fiyat bazlı tetik
+                "strategy_type": 0,
                 "price": str(tetik_fiyati),
-                "price_type": 1     # 1: Son fiyat (Last Price)
+                "price_type": 1
             }
         }
         
-        # Gate.io native endpoint: POST /futures/{settle}/price_orders
-        settle = symbol.split('/')[1].split(':')[1] # USDT
+        settle = symbol.split('/')[1].split(':')[1]
         response = exchange.private_futures_post_settle_price_orders(settle, payload)
         return True, response
     except Exception as e:
-        # Alternatif CCXT standart parametre denemesi
         try:
             params = {
                 'triggerPrice': float(tetik_fiyati),
@@ -119,7 +111,6 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
     basarili = False
     
     try:
-        # Açık olabilecek tüm bekleyen tetik emirlerini iptal et
         settle = symbol.split('/')[1].split(':')[1]
         market_id = exchange.market(symbol)['id']
         exchange.private_futures_delete_settle_price_orders(settle, {'contract': market_id})
@@ -261,7 +252,6 @@ def otomatik_arkaplan_tarayici():
                 time.sleep(5)
                 continue
                 
-            # 1. Pozisyon senkronizasyonu
             try:
                 b_positions = exchange.fetch_positions()
                 for bp in b_positions:
@@ -291,7 +281,6 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
-                # 2. AÇIK POZİSYON KONTROLÜ
                 if symbol in AKTIF_GRID_SISTEMLERI:
                     sistem = AKTIF_GRID_SISTEMLERI[symbol]
                     merkez = sistem['merkez_fiyat']
@@ -303,7 +292,6 @@ def otomatik_arkaplan_tarayici():
                         
                     net_kar_zarar_yuzdesi = fark_orani * 100
                     
-                    # HEDEF KONTROLÜ (%2.5 Kâr)
                     if net_kar_zarar_yuzdesi >= HEDEF_YUZDE:
                         tahmini_kar_usd = (sistem['marjin'] * net_kar_zarar_yuzdesi) / 100
                         ANALitik_HAFIZA["gunluk_net_kar_usd"] += tahmini_kar_usd
@@ -315,7 +303,6 @@ def otomatik_arkaplan_tarayici():
                         if symbol in AKTIF_GRID_SISTEMLERI:
                             del AKTIF_GRID_SISTEMLERI[symbol]
                         
-                    # ZARAR KES KONTROLÜ (%1.5 Stop)
                     elif net_kar_zarar_yuzdesi <= -ZARAR_KES_YUZDE:
                         tahmini_zarar_usd = (sistem['marjin'] * abs(net_kar_zarar_yuzdesi)) / 100
                         ANALitik_HAFIZA["gunluk_net_kar_usd"] -= tahmini_zarar_usd
@@ -339,7 +326,6 @@ def otomatik_arkaplan_tarayici():
                             del AKTIF_GRID_SISTEMLERI[symbol]
                     continue
 
-                # 3. YENİ POZİSYON AÇMA TARAMASI
                 try:
                     balance = exchange.fetch_balance()
                     toplam_bakiye = float(balance['total'].get('USDT', 0))
@@ -394,28 +380,23 @@ def otomatik_arkaplan_tarayici():
                 emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
                 
                 try:
-                    # 1. Ana Pozisyonu Aç
                     exchange.create_market_order(symbol, emir_yonu, miktar)
                     
-                    # Fiyat Seviyelerini Hesapla
                     if grid_yonu == 'LONG':
                         stop_fiyati = guncel_fiyat * (1.0 - (ZARAR_KES_YUZDE / 100.0))
                         hedef_fiyati = guncel_fiyat * (1.0 + (HEDEF_YUZDE / 100.0))
-                        kapatma_yonu = 'sell' # Long kapatmak için sell
+                        kapatma_yonu = 'sell'
                     else:
                         stop_fiyati = guncel_fiyat * (1.0 + (ZARAR_KES_YUZDE / 100.0))
                         hedef_fiyati = guncel_fiyat * (1.0 - (HEDEF_YUZDE / 100.0))
-                        kapatma_yonu = 'buy'  # Short kapatmak için buy
+                        kapatma_yonu = 'buy'
                     
                     stop_fiyati = float(exchange.price_to_precision(symbol, stop_fiyati))
                     hedef_fiyati = float(exchange.price_to_precision(symbol, hedef_fiyati))
                     
-                    time.sleep(0.5) # Pozisyonun borsaya işlenmesi için kısa bekleme
+                    time.sleep(0.5)
 
-                    # 2. STOP EMRİNİ GÖNDER
                     stop_basarili, stop_res = gate_tetiklemeli_emir_gonder(symbol, kapatma_yonu, miktar, stop_fiyati)
-                    
-                    # 3. HEDEF (TAKE PROFIT) EMRİNİ GÖNDER
                     tp_basarili, tp_res = gate_tetiklemeli_emir_gonder(symbol, kapatma_yonu, miktar, hedef_fiyati)
 
                     hesaplanan_marjin = (miktar * contract_size * guncel_fiyat) / KALDIRAC if 'contract_size' in locals() else hedef_marjin
@@ -460,4 +441,12 @@ if __name__ == "__main__":
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("pozisyonlar", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
-    ap
+    app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
+    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
+    
+    print("Telegram komut dinleyicisi aktif...")
+    try:
+        app_tg.run_polling(drop_pending_updates=True)
+    except Exception as e:
+        print(f"Telegram polling hatası: {e}")
+                    
