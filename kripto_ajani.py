@@ -27,8 +27,8 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-# Parite sıralaması: Küçük bütçe ve min lot dostu pariteler önde
-TAKIP_EDILENLER = ['SOL/USDT:USDT', 'XRP/USDT:USDT', 'BTC/USDT:USDT', 'ETH/USDT:USDT']
+# Dolar bütçemize ve min lot sınırımıza uygun mantıklı pariteler
+TAKIP_EDILENLER = ['SOL/USDT:USDT', 'XRP/USDT:USDT', 'BNB/USDT:USDT']
 AKTIF_GRID_SISTEMLERI = {}
 BOT_CALISIYOR_MU = True
 
@@ -59,7 +59,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Gate.io En Güncel Bot | Durum: {durum_str}"
+    return f"Gate.io Dolar Bazlı Bot | Durum: {durum_str}"
 
 def set_leverage_safely(symbol, leverage):
     try:
@@ -106,7 +106,7 @@ def get_account_status_summary():
         for p in active_positions:
             toplam_anlik_pnl += float(p.get('unrealizedPnl', 0))
             
-        summary = f"🧠 *GÜNCEL BOT - KASA DURUMU*\n\n"
+        summary = f"🧠 *DOLAR BAZLI BOT - KASA DURUMU*\n\n"
         summary += f"💰 **Toplam Kasa:** `{total_usdt:.2f} USDT`\n"
         summary += f"💵 **Kullanılabilir:** `{free_usdt:.2f} USDT`\n"
         
@@ -116,7 +116,6 @@ def get_account_status_summary():
             summary += f"📉 **Toplam PnL:** `{toplam_anlik_pnl:.2f} USDT` 🔴\n"
             
         summary += f"📊 **Aktif Pozisyon:** `{len(active_positions)}`\n"
-        summary += f"🧬 **Hafızadaki Cezalılar:** `{len(HAFIZA_KAYITLARI['ogrenilen_yasaklar'])}`\n"
         
         if active_positions:
             summary += f"\n-----------------------------------\n"
@@ -153,7 +152,7 @@ async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, HAFIZA_KAYITLARI
-    print("🔄 Güncel arkaplan tarayıcı aktif.")
+    print("🔄 Dolar bazlı arkaplan tarayıcı aktif.")
     
     try:
         exchange.load_markets()
@@ -284,14 +283,20 @@ def otomatik_arkaplan_tarayici():
                 toplam_pozisyon_usdt = sabit_islem_butcesi * KALDIRAC
                 ham_miktar = toplam_pozisyon_usdt / guncel_fiyat
 
-                # Akıllı Min Miktar Kontrolü
+                # Kesin Min Miktar ve Bütçe Koruma Filtresi
                 try:
                     market_info = exchange.market(symbol)
                     min_amount = market_info['limits']['amount']['min'] or 1.0
                 except Exception:
                     min_amount = 1.0
 
+                # Eğer bizim hesapladığımız miktar, borsanın zorunlu kıldığı min limitten küçükse 
+                # ve bu durum devasa bütçe aşımına yol açacaksa o pariteyi es gec (Yanlışlıkla 1 BTC açmasın)
                 if ham_miktar < min_amount:
+                    # Sadece min miktar tam bizim bütçemize uygunsa min_amount yap, değilse atla
+                    gereken_dolar = min_amount * guncel_fiyat / KALDIRAC
+                    if gereken_dolar > sabit_islem_butcesi * 1.5:
+                        continue # Bütçemizi aşıyor, bu pariteyi pas geç
                     miktar = min_amount
                 else:
                     miktar = float(exchange.amount_to_precision(symbol, ham_miktar))
@@ -322,7 +327,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(15)
 
 if __name__ == "__main__":
-    print(f"🚀 En Güncel Bot Başlatılıyor...")
+    print(f"🚀 Dolar Bazlı Hassas Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
@@ -337,4 +342,4 @@ if __name__ == "__main__":
     
     print("Telegram komut dinleyicisi aktif...")
     app_tg.run_polling()
-        
+    
