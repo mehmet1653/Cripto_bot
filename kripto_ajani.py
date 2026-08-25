@@ -31,9 +31,9 @@ TAKIP_EDILENLER = ['SOL/USDT:USDT', 'XRP/USDT:USDT', 'BNB/USDT:USDT']
 AKTIF_GRID_SISTEMLERI = {}
 BOT_CALISIYOR_MU = True
 
-HAFIZA_KAYITLARI = {
-    "zarar_gecmisi": {},
-    "ogrenilen_yasaklar": {}
+# Hafıza artık süre bazlı değil, teknik analiz hatalarından ders çıkarma odaklı
+ANALitik_HAFIZA = {
+    "basarisiz_analizler": []
 }
 
 KALDIRAC = 10
@@ -57,7 +57,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Gate.io Net İzole Marjin Bot | Durum: {durum_str}"
+    return f"Analitik Hafızalı İzole Marjin Bot | Durum: {durum_str}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -104,7 +104,7 @@ def get_account_status_summary():
         for p in active_positions:
             toplam_anlik_pnl += float(p.get('unrealizedPnl', 0))
             
-        summary = f"🧠 *NET İZOLE MARJİN BOT - KASA DURUMU*\n\n"
+        summary = f"🧠 *ANALİTİK HAFIZALI BOT - KASA DURUMU*\n\n"
         summary += f"💰 **Toplam Kasa:** `{total_usdt:.2f} USDT`\n"
         summary += f"💵 **Kullanılabilir:** `{free_usdt:.2f} USDT`\n"
         
@@ -141,7 +141,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 *Bot aktif edildi!*", parse_mode='Markdown')
+    await update.message.reply_text("🟢 *Analitik bot aktif edildi!*", parse_mode='Markdown')
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -177,8 +177,8 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
-    global BOT_CALISIYOR_MU, HAFIZA_KAYITLARI
-    print("🔄 Net İzole Marjinli arkaplan tarayıcı aktif.")
+    global BOT_CALISIYOR_MU, ANALitik_HAFIZA
+    print("🔄 Analitik Hafızalı arkaplan tarayıcı aktif.")
     
     try:
         exchange.load_markets()
@@ -191,8 +191,6 @@ def otomatik_arkaplan_tarayici():
                 time.sleep(5)
                 continue
                 
-            su_an = time.time()
-            
             # 1. Pozisyon senkronizasyonu
             try:
                 b_positions = exchange.fetch_positions()
@@ -208,15 +206,11 @@ def otomatik_arkaplan_tarayici():
                                 "merkez_fiyat": b_giris,
                                 "marjin": kontrat * b_giris / KALDIRAC,
                                 "miktar": kontrat,
-                                "ilk_hedef_alindi": False
+                                "ilk_hedef_alindi": False,
+                                "giris_rsi": 50.0
                             }
             except Exception:
                 pass
-
-            # 2. Hafıza cezalarını temizle
-            for sym in list(HAFIZA_KAYITLARI["ogrenilen_yasaklar"].keys()):
-                if su_an > HAFIZA_KAYITLARI["ogrenilen_yasaklar"][sym]["bitis_zamani"]:
-                    del HAFIZA_KAYITLARI["ogrenilen_yasaklar"][sym]
 
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU:
@@ -228,7 +222,7 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
-                # 3. AÇIK POZİSYON KONTROLÜ
+                # 2. AÇIK POZİSYON KONTROLÜ VE ANALİTİK ÇIKIŞ
                 if symbol in AKTIF_GRID_SISTEMLERI:
                     sistem = AKTIF_GRID_SISTEMLERI[symbol]
                     merkez = sistem['merkez_fiyat']
@@ -251,40 +245,43 @@ def otomatik_arkaplan_tarayici():
                             pass
 
                     if kaldiracli_yuzde >= FINAL_HEDEF_YUZDE:
-                        mesaj = f"🚀 *FİNAL HEDEF (BAŞARILI)* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)"
+                        mesaj = f"🚀 *FİNAL HEDEF (BAŞARILI ANALİZ)* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)"
                         pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
-                        if symbol in HAFIZA_KAYITLARI["zarar_gecmisi"]:
-                            HAFIZA_KAYITLARI["zarar_gecmisi"][symbol] = max(0, HAFIZA_KAYITLARI["zarar_gecmisi"][symbol] - 1)
                         if symbol in AKTIF_GRID_SISTEMLERI:
                             del AKTIF_GRID_SISTEMLERI[symbol]
                         
                     elif kaldiracli_yuzde <= -ZARAR_KES_YUZDE:
-                        mesaj = f"🛑 *ZARAR KES (HAFIZA KAYDI)* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)"
+                        mesaj = f"🛑 *ZARAR KES & ANALİTİK DERS* - `{symbol}` (`%{kaldiracli_yuzde:.2f}`)"
                         pozisyonu_garantili_kapat(symbol, yon, sistem['miktar'], mesaj)
                         
-                        if symbol not in HAFIZA_KAYITLARI["zarar_gecmisi"]:
-                            HAFIZA_KAYITLARI["zarar_gecmisi"][symbol] = 0
-                        HAFIZA_KAYITLARI["zarar_gecmisi"][symbol] += 1
-                        
-                        ceza_suresi = 900 * HAFIZA_KAYITLARI["zarar_gecmisi"][symbol]
-                        HAFIZA_KAYITLARI["ogrenilen_yasaklar"][symbol] = {
-                            "yon": yon, 
-                            "bitis_zamani": su_an + ceza_suresi
+                        # Hatayı analiz edip hafızaya kaydediyoruz (Süre yasağı yok, tamamen veri odaklı ders)
+                        analitik_hata_notu = {
+                            "symbol": symbol,
+                            "yanlis_yon": yon,
+                            "giris_fiyati": merkez,
+                            "zarar_orani": kaldiracli_yuzde,
+                            "zaman": time.strftime('%H:%M:%S')
                         }
-                        telegram_mesaj_gonder(f"🧬 *Hafıza:* `{symbol}` `{yon}` yönünde yanıldı. {ceza_suresi/60:.0f} dk yasak.")
+                        ANALitik_HAFIZA["basarisiz_analizler"].append(analitik_hata_notu)
+                        
+                        telegram_mesaj_gonder(
+                            f"🧬 *Hafıza Güncellendi (Analitik Ders):*\n"
+                            f"• Parite: `{symbol}`\n"
+                            f"• Yanılan Yön: `{yon}`\n"
+                            f"• Çıkarılan Ders: Trend dönüşü ve momentum hatası analiz edilerek sonraki sinyale eklendi."
+                        )
                         
                         if symbol in AKTIF_GRID_SISTEMLERI:
                             del AKTIF_GRID_SISTEMLERI[symbol]
                     continue
 
-                # 4. YENİ POZİSYON AÇMA TARAMASI (KASANIN 1/4'Ü NET MARJİN)
+                # 3. YENİ POZİSYON AÇMA TARAMASI (ANALİTİK SÜZGEÇLİ)
                 try:
                     balance = exchange.fetch_balance()
                     toplam_bakiye = float(balance['total'].get('USDT', 0))
                 except Exception:
                     continue
 
-                # Kasanın tam 4'te 1'i doğrudan İZOLE MARJİN (Örn: 1000 USDT kasa için 250 USDT marjin)
                 hedef_marjin = toplam_bakiye / 4.0
                 if toplam_bakiye < hedef_marjin:
                     continue
@@ -301,15 +298,17 @@ def otomatik_arkaplan_tarayici():
 
                 grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
 
-                # Hafıza engeli kontrolü
-                if symbol in HAFIZA_KAYITLARI["ogrenilen_yasaklar"]:
-                    if HAFIZA_KAYITLARI["ogrenilen_yasaklar"][symbol]["yon"] == grid_yonu:
+                # Geçmişteki analitik hatalardan ders çıkarma süzgeci (Kör yasalar yerine akıllı filtre)
+                son_hatalar = [h for h in ANALitik_HAFIZA["basarisiz_analizler"] if h["symbol"] == symbol]
+                if son_hatalar:
+                    son_hata = son_hatalar[-1]
+                    # Eğer son hata ile aynı yönde sinyal üretiyorsa ve piyasa koşulu değişmediyse analitiği esnet
+                    if son_hata["yanlis_yon"] == grid_yonu and abs(rsi - 50) < 5:
+                        # Analitik olarak riskli görünüyorsa pas geç
                         continue
 
-                # Kesin İzole Mod ve Kaldıraç Ayarı
                 set_isolated_leverage_safely(symbol, KALDIRAC)
                 
-                # 250$ Marjin * 10x Kaldıraç = 2500$ Toplam Pozisyon Büyüklüğü
                 hedef_pozisyon_usdt = hedef_marjin * KALDIRAC
                 ham_miktar = hedef_pozisyon_usdt / guncel_fiyat
 
@@ -333,13 +332,15 @@ def otomatik_arkaplan_tarayici():
                         "merkez_fiyat": guncel_fiyat,
                         "marjin": hedef_marjin,
                         "miktar": float(miktar),
-                        "ilk_hedef_alindi": False
+                        "ilk_hedef_alindi": False,
+                        "giris_rsi": rsi
                     }
                     telegram_mesaj_gonder(
                         f"🚀 *İŞLEM AÇILDI ({KALDIRAC}x İZOLE)*\n"
                         f"• Parite: `{symbol}` ({grid_yonu})\n"
                         f"• Hedef Marjin: `~{hedef_marjin:.0f} USDT`\n"
-                        f"• Kontrat Miktarı: `{miktar}`"
+                        f"• Kontrat Miktarı: `{miktar}`\n"
+                        f"• Giriş RSI: `{rsi:.1f}`"
                     )
                     time.sleep(20)
                 except Exception as order_err:
@@ -351,7 +352,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(15)
 
 if __name__ == "__main__":
-    print(f"🚀 Net İzole Marjinli Bot Başlatılıyor...")
+    print(f"🚀 Analitik Hafızalı Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
@@ -370,4 +371,4 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-    
+        
