@@ -18,7 +18,7 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = "8870934003:AAGIpiwdgpnQVW7nbJIRcR0dOLOzj-MOZsA"
 CHAT_ID = "6929517567"
 
-# Supabase Bilgilerin (Güncellendi)
+# Supabase Bilgilerin
 SUPABASE_URL = "https://cvsveozrpjgvpkdephkc.supabase.co"
 SUPABASE_KEY = "sb_publishable_zrz7kxGbskX6QUc_o9YS_A__qfUUk_D"
 
@@ -160,7 +160,7 @@ def set_isolated_leverage_safely(symbol, leverage):
     except Exception:
         return False
 
-def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=0, adx=0, ema_fark=0, basarili_ mi=True):
+def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=0, adx=0, ema_fark=0, basarili=True):
     kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
     
     try:
@@ -188,7 +188,7 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=0, adx=0, e
             print(f"Pozisyon kapatma hatası: {e2}")
 
     yon_kod = 1 if yon == 'LONG' else -1
-    sonuc_kod = 1 if basarili_ mi else 0
+    sonuc_kod = 1 if basarili else 0
     ANALitik_HAFIZA["egitim_verileri"].append([rsi, adx, ema_fark, yon_kod, sonuc_kod])
     if len(ANALitik_HAFIZA["egitim_verileri"]) > 100:
         ANALitik_HAFIZA["egitim_verileri"].pop(0)
@@ -318,7 +318,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 kayitli_veri = AKTIF_GRID_SISTEMLERI.get(sym, {})
                 rsi_val = kayitli_veri.get("giris_rsi", 50.0)
                 
-                pozisyonu_garantili_kapat(sym, side, float(pos['contracts']), f"🛑 *MANUEL KAPATMA (/kapat)* - `{sym}`", rsi=rsi_val, basarili_ mi=False)
+                pozisyonu_garantili_kapat(sym, side, float(pos['contracts']), f"🛑 *MANUEL KAPATMA (/kapat)* - `{sym}`", rsi=rsi_val, basarili=False)
                 kapatilanlar += 1
 
         AKTIF_GRID_SISTEMLERI.clear()
@@ -396,7 +396,7 @@ def otomatik_arkaplan_tarayici():
                         hafizayi_kaydet()
                         
                         mesaj = f"🚀 *YAPAY ZEKA KÂR ALDI* - `{symbol}` (`+{net_kar_zarar_yuzdesi:.2f}%`)"
-                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj, rsi=rsi_degeri, adx=adx_degeri, ema_fark=ema_fark_degeri, basarili_ mi=True)
+                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj, rsi=rsi_degeri, adx=adx_degeri, ema_fark=ema_fark_degeri, basarili=True)
                         
                     elif net_kar_zarar_yuzdesi <= -ZARAR_KES_ROESINI_ISTENEN or pos_bilgi["percentage"] <= -ZARAR_KES_ROESINI_ISTENEN:
                         tahmini_zarar_usd = abs(pos_bilgi["unrealizedPnl"]) if pos_bilgi["unrealizedPnl"] < 0 else 1.0
@@ -415,7 +415,7 @@ def otomatik_arkaplan_tarayici():
                         hafizayi_kaydet()
                         
                         mesaj = f"🛑 *ZARAR KES & SUPABASE'E ÖĞRETİLDİ* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%`)"
-                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj, rsi=rsi_degeri, adx=adx_degeri, ema_fark=ema_fark_degeri, basarili_ mi=False)
+                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj, rsi=rsi_degeri, adx=adx_degeri, ema_fark=ema_fark_degeri, basarili=False)
                         
                     continue
 
