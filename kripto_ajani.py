@@ -28,7 +28,8 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-TAKIP_EDILENLER = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT']
+# İstediğin yeni ve daha stabil testnet coinleri
+TAKIP_EDILENLER = ['SOL/USDT:USDT', 'AVAX/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT']
 BOT_CALISIYOR_MU = True
 
 HAFIZA_DOSYASI = "bot_kalici_hafiza.json"
@@ -70,11 +71,11 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
     "gunluk_net_kar_usd": 0.0
 })
 
-KALDIRAC = 5
+KALDIRAC = 10
 
 # ==================== KASA KORUMA & RİSK YÖNETİMİ ====================
-HEDEF_ROESINI_ISTENEN = 5.0     # Pozisyonda hedeflenen net getiri (%20 Kâr ROI -> Fiyat %2 lehimize)
-ZARAR_KES_ROESINI_ISTENEN = 10.0 # Pozisyonda göze alınan net zarar (%10 Stop ROI -> Fiyat %1 aleyhimize)
+HEDEF_ROESINI_ISTENEN = 50.0     # %5 Kâr Al (10x Kaldıraç ile %50 ROI)
+ZARAR_KES_ROESINI_ISTENEN = 100.0 # %10 Zarar Kes (10x Kaldıraç ile %100 ROI)
 MIN_ADX_GUCU = 20.0              # Yatay piyasayı filtrelemek için minimum trend gücü
 # ======================================================================
 
@@ -473,4 +474,3 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-                    
