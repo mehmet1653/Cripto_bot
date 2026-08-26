@@ -70,7 +70,7 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
     "gunluk_net_kar_usd": 0.0
 })
 
-KALDIRAC = 10
+KALDIRAC = 5
 
 # ==================== KASA KORUMA & RİSK YÖNETİMİ ====================
 HEDEF_ROESINI_ISTENEN = 5.0     # Pozisyonda hedeflenen net getiri (%20 Kâr ROI -> Fiyat %2 lehimize)
