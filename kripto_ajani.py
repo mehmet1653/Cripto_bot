@@ -431,18 +431,20 @@ def otomatik_arkaplan_tarayici():
                     stop_fiyati = float(exchange.price_to_precision(symbol, stop_fiyati))
                     hedef_fiyati = float(exchange.price_to_precision(symbol, hedef_fiyati))
 
-                    # 2. Borsaya Doğrudan Güvenlik Emirlerini (Stop-Loss ve Take-Profit) İlet
+                    # 2. Gate.io Swap API Uyumlu Tetiklemeli Emirler (Stop-Loss ve Take-Profit)
                     try:
-                        exchange.create_order(symbol, 'stop_market', stop_yonu, miktar, None, {
-                            'stop_price': stop_fiyati,
+                        exchange.create_order(symbol, 'market', stop_yonu, miktar, None, {
+                            'trigger_price': stop_fiyati,
+                            'price': stop_fiyati,
                             'reduce_only': True
                         })
                     except Exception as sl_err:
                         print(f"Stop emri borsaya iletilemedi ({symbol}): {sl_err}")
 
                     try:
-                        exchange.create_order(symbol, 'take_profit_market', stop_yonu, miktar, None, {
-                            'stop_price': hedef_fiyati,
+                        exchange.create_order(symbol, 'market', stop_yonu, miktar, None, {
+                            'trigger_price': hedef_fiyati,
+                            'price': hedef_fiyati,
                             'reduce_only': True
                         })
                     except Exception as tp_err:
