@@ -28,7 +28,7 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-# YENİ PARİTE LİSTESİ (SOL, AVAX, XRP, HYPE)
+# GÜNCELLENEN PARİTE LİSTESİ
 TAKIP_EDILENLER = ['SOL/USDT:USDT', 'AVAX/USDT:USDT', 'XRP/USDT:USDT', 'HYPE/USDT:USDT']
 BOT_CALISIYOR_MU = True
 
@@ -94,7 +94,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Testnet Kasa Koruma Modlu Bot (SOL, AVAX, XRP, HYPE) | Durum: {durum_str}"
+    return f"Testnet Kasa Koruma Modlu Bot | Durum: {durum_str}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -474,4 +474,4 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-    
+                    
