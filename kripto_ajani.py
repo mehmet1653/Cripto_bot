@@ -5,10 +5,33 @@ import ccxt
 import pandas as pd
 import ta
 import os
+import sys
 import json
 from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
+
+# ==================== TEKİL PROCESS KİLİDİ (ÇAKIŞMA ÖNLEYİCİ) ====================
+LOCK_FILE = "bot_calisiyor.lock"
+if os.path.exists(LOCK_FILE):
+    print("⚠️ UYARI: Botun başka bir örneği zaten çalışıyor! Çakışmayı önlemek için bu süreç sonlandırılıyor.")
+    sys.exit(0)
+
+try:
+    with open(LOCK_FILE, "w") as f:
+        f.write(str(os.getpid()))
+except Exception:
+    pass
+
+import atexit
+@atexit.register
+def kilidi_kaldir():
+    if os.path.exists(LOCK_FILE):
+        try:
+            os.remove(LOCK_FILE)
+        except Exception:
+            pass
+# ==============================================================================
 
 app = Flask(__name__)
 
@@ -43,7 +66,7 @@ def hafizayi_yukle():
         except Exception:
             pass
     return {
-        "bakiye": 100.0,  # Simülasyon başlangıç kasası (100 USDT)
+        "bakiye": 100.0,
         "aktif_pozisyonlar": {},
         "analitik": {
             "basarisiz_analizler": [],
@@ -76,10 +99,10 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
 })
 
 KALDIRAC = 10
-HEDEF_ROESINI_ISTENEN = 5.0      # %5 Kâr (ROI)
-ZARAR_KES_ROESINI_ISTENEN = 10.0 # %10 Zarar (ROI)
+HEDEF_ROESINI_ISTENEN = 5.0      
+ZARAR_KES_ROESINI_ISTENEN = 10.0 
 MIN_ADX_GUCU = 20.0              
-KOMISYON_ORANI = 0.0005          # Gerçekçi ortalama işlem komisyonu (%0.05 toplam)
+KOMISYON_ORANI = 0.0005          
 
 def telegram_mesaj_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID:
@@ -243,7 +266,6 @@ def otomatik_arkaplan_tarayici():
                 time.sleep(2)
                 continue
 
-            # 1. Açık pozisyonların Kâr Al / Zarar Kes kontrolü
             aktif_semboller = list(SANAL_POZISYONLAR.keys())
             for symbol in aktif_semboller:
                 pos = SANAL_POZISYONLAR[symbol]
@@ -263,7 +285,6 @@ def otomatik_arkaplan_tarayici():
                 elif roe <= -ZARAR_KES_ROESINI_ISTENEN:
                     pozisyonu_kapat_sanal(symbol, f"🛑 *ZARAR KES (STOP) & ANALİZE EKLENDİ* - `{symbol}` (`{roe:.2f}% ROI`)")
 
-            # 2. Yeni işlem arama (1/4 kasa kuralı)
             if len(SANAL_POZISYONLAR) == 0:
                 for symbol in TAKIP_EDILENLER:
                     if not BOT_CALISIYOR_MU or len(SANAL_POZISYONLAR) > 0:
@@ -309,7 +330,6 @@ def otomatik_arkaplan_tarayici():
                         if son_hata["yanlis_yon"] == grid_yonu and abs(rsi - 50) < 5:
                             continue
 
-                    # Sanal pozisyon açılışı
                     SANAL_BAKIYE -= hedef_marjin
                     SANAL_POZISYONLAR[symbol] = {
                         "yon": grid_yonu,
@@ -349,7 +369,6 @@ def otomatik_arkaplan_tarayici():
 if __name__ == "__main__":
     print(f"🛡️ Paper Trading (Sanal Simülasyon) Botu Başlatıldı. Telegram'dan /baslat komutu bekleniyor...")
     
-    # Başlamadan önce eski webhook kalıntılarını ve takılan kilitleri temizle
     try:
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=5)
     except Exception:
