@@ -73,9 +73,9 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
 KALDIRAC = 10
 
 # ==================== KASA KORUMA & RİSK YÖNETİMİ ====================
-HEDEF_ROESINI_ISTENEN = 5.0     # Pozisyonda hedeflenen net getiri (%20 Kâr ROI -> Fiyat %2 lehimize)
-ZARAR_KES_ROESINI_ISTENEN = 10.0 # Pozisyonda göze alınan net zarar (%10 Stop ROI -> Fiyat %1 aleyhimize)
-MIN_ADX_GUCU = 20.0              # Yatay piyasayı filtrelemek için minimum trend gücü
+HEDEF_ROESINI_ISTENEN = 5.0      # Hedeflenen ROI (%5)
+ZARAR_KES_ROESINI_ISTENEN = 10.0 # Göze alınan Zarar ROI (%10)
+MIN_ADX_GUCU = 20.0              # Minimum trend gücü
 # ======================================================================
 
 def telegram_mesaj_gonder(mesaj):
@@ -411,8 +411,43 @@ def otomatik_arkaplan_tarayici():
                 emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
                 
                 try:
+                    # 1. Ana Piyasa Emrini Gönder
                     exchange.create_market_order(symbol, emir_yonu, miktar)
                     
+                    # Stop ve Hedef Fiyat Hesaplamaları
+                    fiyat_hedef_orani = HEDEF_ROESINI_ISTENEN / (100.0 * KALDIRAC)
+                    fiyat_stop_orani = ZARAR_KES_ROESINI_ISTENEN / (100.0 * KALDIRAC)
+
+                    if grid_yonu == 'LONG':
+                        stop_fiyati = guncel_fiyat * (1.0 - fiyat_stop_orani)
+                        hedef_fiyati = guncel_fiyat * (1.0 + fiyat_hedef_orani)
+                        stop_yonu = 'sell'
+                    else:
+                        stop_fiyati = guncel_fiyat * (1.0 + fiyat_stop_orani)
+                        hedef_fiyati = guncel_fiyat * (1.0 - fiyat_hedef_orani)
+                        stop_yonu = 'buy'
+
+                    # Hassasiyet ayarları
+                    stop_fiyati = float(exchange.price_to_precision(symbol, stop_fiyati))
+                    hedef_fiyati = float(exchange.price_to_precision(symbol, hedef_fiyati))
+
+                    # 2. Borsaya Doğrudan Güvenlik Emirlerini (Stop-Loss ve Take-Profit) İlet
+                    try:
+                        exchange.create_order(symbol, 'stop_market', stop_yonu, miktar, None, {
+                            'stop_price': stop_fiyati,
+                            'reduce_only': True
+                        })
+                    except Exception as sl_err:
+                        print(f"Stop emri borsaya iletilemedi ({symbol}): {sl_err}")
+
+                    try:
+                        exchange.create_order(symbol, 'take_profit_market', stop_yonu, miktar, None, {
+                            'stop_price': hedef_fiyati,
+                            'reduce_only': True
+                        })
+                    except Exception as tp_err:
+                        print(f"Take Profit emri borsaya iletilemedi ({symbol}): {tp_err}")
+
                     hesaplanan_marjin = (miktar * contract_size * guncel_fiyat) / KALDIRAC if 'contract_size' in locals() else hedef_marjin
                     
                     AKTIF_GRID_SISTEMLERI[symbol] = {
@@ -423,23 +458,13 @@ def otomatik_arkaplan_tarayici():
                         "giris_rsi": rsi
                     }
                     hafizayi_kaydet()
-                    
-                    fiyat_hedef_orani = HEDEF_ROESINI_ISTENEN / (100.0 * KALDIRAC)
-                    fiyat_stop_orani = ZARAR_KES_ROESINI_ISTENEN / (100.0 * KALDIRAC)
-
-                    if grid_yonu == 'LONG':
-                        stop_fiyati = guncel_fiyat * (1.0 - fiyat_stop_orani)
-                        hedef_fiyati = guncel_fiyat * (1.0 + fiyat_hedef_orani)
-                    else:
-                        stop_fiyati = guncel_fiyat * (1.0 + fiyat_stop_orani)
-                        hedef_fiyati = guncel_fiyat * (1.0 - fiyat_hedef_orani)
 
                     telegram_mesaj_gonder(
-                        f"🛡️ *İŞLEM AÇILDI (KASA KORUMALI) - {KALDIRAC}x*\n"
+                        f"🛡️ *İŞLEM AÇILDI & BORSA GÜVENCELİ - {KALDIRAC}x*\n"
                         f"• Parite: `{symbol}` ({grid_yonu})\n"
                         f"• Giriş Fiyatı: `{guncel_fiyat}`\n"
-                        f"• Hedef Kâr: `~{hedef_fiyati:.4f}` (`+{HEDEF_ROESINI_ISTENEN}% ROI`)\n"
-                        f"• Zarar Kes: `~{stop_fiyati:.4f}` (`-{ZARAR_KES_ROESINI_ISTENEN}% ROI`)\n"
+                        f"• Borsa Stop-Loss: `{stop_fiyati}` (`-{ZARAR_KES_ROESINI_ISTENEN}% ROI`)\n"
+                        f"• Borsa Hedef Kâr: `{hedef_fiyati}` (`+{HEDEF_ROESINI_ISTENEN}% ROI`)\n"
                         f"• Trend Gücü (ADX): `{adx_degeri:.1f}`\n"
                         f"• Marjin: `~{hesaplanan_marjin:.2f} USDT`\n"
                         f"• Giriş RSI: `{rsi:.1f}`"
@@ -473,4 +498,3 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-                    
