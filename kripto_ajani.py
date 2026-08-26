@@ -93,7 +93,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Testnet Kasa Koruma Modlu Bot | Durum: {durum_str}"
+    return f"Testnet Kararlı Bot | Durum: {durum_str}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -233,7 +233,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 *Kasa koruma botu aktif edildi!*", parse_mode='Markdown')
+    await update.message.reply_text("🟢 *Bot aktif edildi!*", parse_mode='Markdown')
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -264,7 +264,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🔄 Kasa Koruma Modlu Akıllı Tarayıcı aktif.")
+    print("🔄 Kararlı Takip ve Koruma Döngüsü aktif.")
     
     try:
         exchange.load_markets()
@@ -343,7 +343,7 @@ def otomatik_arkaplan_tarayici():
                         ANALitik_HAFIZA["basarisiz_analizler"].append(analitik_hata_notu)
                         hafizayi_kaydet()
                         
-                        mesaj = f"🛑 *ZARAR KES (KASA KORUMA STOP) & ANALİZE EKLENDİ* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%`)"
+                        mesaj = f"🛑 *ZARAR KES (STOP) & ANALİZE EKLENDİ* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%`)"
                         pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj)
                         
                     continue
@@ -411,44 +411,20 @@ def otomatik_arkaplan_tarayici():
                 emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
                 
                 try:
-                    # 1. Ana Piyasa Emrini Gönder
                     exchange.create_market_order(symbol, emir_yonu, miktar)
-                    
-                    # Stop ve Hedef Fiyat Hesaplamaları
+
                     fiyat_hedef_orani = HEDEF_ROESINI_ISTENEN / (100.0 * KALDIRAC)
                     fiyat_stop_orani = ZARAR_KES_ROESINI_ISTENEN / (100.0 * KALDIRAC)
 
                     if grid_yonu == 'LONG':
                         stop_fiyati = guncel_fiyat * (1.0 - fiyat_stop_orani)
                         hedef_fiyati = guncel_fiyat * (1.0 + fiyat_hedef_orani)
-                        stop_yonu = 'sell'
                     else:
                         stop_fiyati = guncel_fiyat * (1.0 + fiyat_stop_orani)
                         hedef_fiyati = guncel_fiyat * (1.0 - fiyat_hedef_orani)
-                        stop_yonu = 'buy'
 
-                    # Hassasiyet ayarları
                     stop_fiyati = float(exchange.price_to_precision(symbol, stop_fiyati))
                     hedef_fiyati = float(exchange.price_to_precision(symbol, hedef_fiyati))
-
-                    # 2. Gate.io Swap API Uyumlu Tetiklemeli Emirler (Stop-Loss ve Take-Profit)
-                    try:
-                        exchange.create_order(symbol, 'market', stop_yonu, miktar, None, {
-                            'trigger_price': stop_fiyati,
-                            'price': stop_fiyati,
-                            'reduce_only': True
-                        })
-                    except Exception as sl_err:
-                        print(f"Stop emri borsaya iletilemedi ({symbol}): {sl_err}")
-
-                    try:
-                        exchange.create_order(symbol, 'market', stop_yonu, miktar, None, {
-                            'trigger_price': hedef_fiyati,
-                            'price': hedef_fiyati,
-                            'reduce_only': True
-                        })
-                    except Exception as tp_err:
-                        print(f"Take Profit emri borsaya iletilemedi ({symbol}): {tp_err}")
 
                     hesaplanan_marjin = (miktar * contract_size * guncel_fiyat) / KALDIRAC if 'contract_size' in locals() else hedef_marjin
                     
@@ -462,11 +438,11 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
 
                     telegram_mesaj_gonder(
-                        f"🛡️ *İŞLEM AÇILDI & BORSA GÜVENCELİ - {KALDIRAC}x*\n"
+                        f"🛡️ *İŞLEM AÇILDI & DÖNGÜ KORUMALI - {KALDIRAC}x*\n"
                         f"• Parite: `{symbol}` ({grid_yonu})\n"
                         f"• Giriş Fiyatı: `{guncel_fiyat}`\n"
-                        f"• Borsa Stop-Loss: `{stop_fiyati}` (`-{ZARAR_KES_ROESINI_ISTENEN}% ROI`)\n"
-                        f"• Borsa Hedef Kâr: `{hedef_fiyati}` (`+{HEDEF_ROESINI_ISTENEN}% ROI`)\n"
+                        f"• Takip Edilen Stop: `{stop_fiyati}` (`-{ZARAR_KES_ROESINI_ISTENEN}% ROI`)\n"
+                        f"• Takip Edilen Hedef: `{hedef_fiyati}` (`+{HEDEF_ROESINI_ISTENEN}% ROI`)\n"
                         f"• Trend Gücü (ADX): `{adx_degeri:.1f}`\n"
                         f"• Marjin: `~{hesaplanan_marjin:.2f} USDT`\n"
                         f"• Giriş RSI: `{rsi:.1f}`"
@@ -481,7 +457,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print(f"🛡️ Kasa Koruma Modlu Bot Başlatılıyor...")
+    print(f"🛡️ Kararlı Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
