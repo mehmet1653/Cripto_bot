@@ -1,7 +1,9 @@
 ccxt
 pandas
 ta
-requests
+numpy
 flask
-gunicorn
 python-telegram-bot
+supabase
+scikit-learn
+requests
