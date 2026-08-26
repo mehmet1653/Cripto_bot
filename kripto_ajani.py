@@ -36,7 +36,7 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-TAKIP_EDILENLER = ['AVAX/USDT:USDT', 'HYPE/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT']
+TAKIP_EDILENLER = ['AVAX/USDT:USDT', 'DOGE/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT']
 BOT_CALISIYOR_MU = True
 
 def hafizayi_yukle():
@@ -494,59 +494,39 @@ def otomatik_arkaplan_tarayici():
                         stop_fiyati = guncel_fiyat * (1.0 + fiyat_stop_orani)
                         hedef_fiyati = guncel_fiyat * (1.0 - fiyat_hedef_orani)
 
-                    stop_fiyati = float(exchange.price_to_precision(symbol, stop_fiyati))
-                    hedef_fiyati = float(exchange.price_to_precision(symbol, hedef_fiyati))
-
-                    hesaplanan_marjin = (miktar * contract_size * guncel_fiyat) / KALDIRAC if 'contract_size' in locals() else hedef_marjin
-                    
                     AKTIF_GRID_SISTEMLERI[symbol] = {
-                        "yon": grid_yonu,
-                        "merkez_fiyat": guncel_fiyat,
-                        "marjin": hesaplanan_marjin,
-                        "miktar": miktar,
+                        "giris_fiyati": guncel_fiyat,
                         "giris_rsi": rsi,
                         "giris_adx": adx_degeri,
-                        "ema_fark": ema_farki_orani
+                        "ema_fark": ema_farki_orani,
+                        "yon": grid_yonu,
+                        "miktar": miktar
                     }
                     hafizayi_kaydet()
 
-                    ai_not = "🧠 (Supabase AI Onaylı)" if ai_model_egitildi else "🤖 (AI Veri Topluyor)"
-                    telegram_mesaj_gonder(
-                        f"☁️ *İŞLEM AÇILDI & SUPABASE SENKRONİZE - {KALDIRAC}x*\n"
-                        f"• Parite: `{symbol}` ({grid_yonu}) {ai_not}\n"
-                        f"• Giriş Fiyatı: `{guncel_fiyat}`\n"
-                        f"• Takip Edilen Stop: `{stop_fiyati}` (`-{ZARAR_KES_ROESINI_ISTENEN}% ROI`)\n"
-                        f"• Takip Edilen Hedef: `{hedef_fiyati}` (`+{HEDEF_ROESINI_ISTENEN}% ROI`)\n"
-                        f"• Trend Gücü (ADX): `{adx_degeri:.1f}`\n"
-                        f"• Marjin: `~{hesaplanan_marjin:.2f} USDT`\n"
-                        f"• Giriş RSI: `{rsi:.1f}`"
-                    )
-                    time.sleep(10)
-                except Exception as order_err:
-                    print(f"Emir hatası ({symbol}): {order_err}")
+                    telegram_mesaj_gonder(f"🚀 *YENİ İŞLEM AÇILDI* - `{symbol}` ({grid_yonu})\nGiriş: `{guncel_fiyat}` | RSI: `{rsi:.1f}`")
 
-        except Exception as loop_err:
-            print(f"Döngü hatası: {loop_err}")
-        
-        time.sleep(2)
+                except Exception as e:
+                    print(f"Emir açma hatası: {e}")
 
-if __name__ == "__main__":
-    print(f"☁️ Supabase Destekli Kararlı Bot Başlatılıyor...")
-    
+        except Exception as e:
+            print(f"Tarayıcı döngü hatası: {e}")
+            
+        time.sleep(10)
+
+def main():
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
+    app_telegram = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app_telegram.add_handler(CommandHandler("durum", durum_komutu))
+    app_telegram.add_handler(CommandHandler("baslat", baslat_komutu))
+    app_telegram.add_handler(CommandHandler("durdur", durdur_komutu))
+    app_telegram.add_handler(CommandHandler("kapat", kapat_komutu))
+    
+    print("🤖 Telegram Bot & Arka Plan Servisleri Başlatıldı.")
+    app_telegram.run_polling()
+
+if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
-    
-    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app_tg.add_handler(CommandHandler("durum", durum_komutu))
-    app_tg.add_handler(CommandHandler("pozisyonlar", durum_komutu))
-    app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
-    app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
-    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
-    
-    print("Telegram komut dinleyicisi aktif...")
-    try:
-        app_tg.run_polling(drop_pending_updates=True)
-    except Exception as e:
-        print(f"Telegram polling hatası: {e}")
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
+    main()
