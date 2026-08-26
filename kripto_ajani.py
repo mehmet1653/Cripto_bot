@@ -44,8 +44,7 @@ ILK_HEDEF_YUZDE = 5.0
 FINAL_HEDEF_YUZDE = 10.0     
 ZARAR_KES_YUZDE = 5.0       
 
-# GERÇEKÇİ ÇİFT YÖNLÜ KOMİSYON ORANI (Gate.io Vadeli İşlem Standart Taker: %0.05)
-# Pozisyon açarken ve kaparken toplam büyüklük üzerinden kesilir.
+# GERÇEKÇİ ÇİFT YÖNLÜ KOMİSYON ORANI (Gate.io Vadeli İşlem Standart: %0.05)
 KOMISYON_ORANI = 0.0005 
 
 def telegram_mesaj_gonder(mesaj):
@@ -63,7 +62,7 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Gate.io Gerçekçi Komisyonlu Scalp Bot | Durum: {durum_str}"
+    return f"Gate.io Sabit 4'e Bölünmüş Scalp Bot | Durum: {durum_str}"
 
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
@@ -145,10 +144,8 @@ def coklu_grid_yonetimi():
                     sistem["ilk_hedef_alindi"] = True
                     
                     yari_marjin = marjin / 2
-                    # Gerçekçi Komisyon: Açılış + Kapanış (Toplam hacim üzerinden)
                     islem_hacmi = yari_marjin * KALDIRAC
                     komisyon = islem_hacmi * KOMISYON_ORANI * 2 
-                    
                     brut_kar = yari_marjin * (kaldiracli_yuzde / 100)
                     net_kz = brut_kar - komisyon
                     
@@ -161,15 +158,14 @@ def coklu_grid_yonetimi():
                     sistem['marjin'] = yari_marjin
 
                     telegram_mesaj_gonder(
-                        f"🎯 *1. KADEME KÂR CEBE ATILDI (%5 ROI - Yarısı)* - `{symbol}`\n"
-                        f"• Net K/Z: `{net_kz:+.2f} USD` (Komisyon düşüldü: `{komisyon:.4f} USD`)"
+                        f"🎯 *1. KADEME KÂR CEBE ATILDI (%5 ROI)* - `{symbol}`\n"
+                        f"• Net K/Z: `{net_kz:+.2f} USD` (Komisyon: `{komisyon:.4f} USD`)"
                     )
 
                 # 2. FİNAL HEDEF (%10 ROI)
                 if kaldiracli_yuzde >= FINAL_HEDEF_YUZDE:
                     islem_hacmi = marjin * KALDIRAC
                     komisyon = islem_hacmi * KOMISYON_ORANI * 2 
-                    
                     brut_kar = marjin * (kaldiracli_yuzde / 100)
                     net_kz = brut_kar - komisyon
                     
@@ -181,7 +177,7 @@ def coklu_grid_yonetimi():
 
                     telegram_mesaj_gonder(
                         f"🚀 *FİNAL HEDEF TAMAMLANDI! (%10 ROI)* - `{symbol}`\n"
-                        f"• Kalan Yarı Net K/Z: `{net_kz:+.2f} USD` (Komisyon: `{komisyon:.4f} USD`)\n"
+                        f"• Net K/Z: `{net_kz:+.2f} USD`\n"
                         f"• Güncel Kasa: `{KASA['guncel']:.2f} USD`"
                     )
                     del AKTIF_GRID_SISTEMLERI[symbol]
@@ -190,7 +186,6 @@ def coklu_grid_yonetimi():
                 elif kaldiracli_yuzde <= -ZARAR_KES_YUZDE:
                     islem_hacmi = marjin * KALDIRAC
                     komisyon = islem_hacmi * KOMISYON_ORANI * 2
-                    
                     zarar = marjin * (ZARAR_KES_YUZDE / 100)
                     net_kz = -zarar - komisyon
                     
@@ -208,8 +203,7 @@ def coklu_grid_yonetimi():
 
                     telegram_mesaj_gonder(
                         f"🛑 *KONTROLLÜ STOP (-%5 ROI)* - `{symbol}`\n"
-                        f"• Toplam Zarar (Komisyon dahil): `{net_kz:+.2f} USD`\n"
-                        f"• Kesilen Komisyon: `{komisyon:.4f} USD`"
+                        f"• Zarar: `{net_kz:+.2f} USD` (Komisyon: `{komisyon:.4f} USD`)"
                     )
                     del AKTIF_GRID_SISTEMLERI[symbol]
                 continue
@@ -264,7 +258,6 @@ def coklu_grid_yonetimi():
                     if yasakli_bilgi["yon"] == grid_yonu:
                         continue
 
-                # Yeni işlem açılış komisyonu simülasyonu (Açılış anında kasadan düşer)
                 acilis_islem_hacmi = sabit_islem_butcesi * KALDIRAC
                 acilis_komisyonu = acilis_islem_hacmi * KOMISYON_ORANI
                 
@@ -279,11 +272,10 @@ def coklu_grid_yonetimi():
                 }
                 
                 telegram_mesaj_gonder(
-                    f"🧠 *YENİ İŞLEM AÇILDI (Gerçekçi Komisyon Kesildi)*\n"
-                    f"• Parite: `{symbol}` ({grid_yonu} 5x İzole)\n"
-                    f"• İzole Marjin: `{sabit_islem_butcesi:.2f} USD`\n"
-                    f"• Peşin Kesilen Komisyon: `{acilis_komisyonu:.4f} USD`\n"
-                    f"• Fiyat: `{guncel_fiyat:.2f}` | RSI: `{rsi15m:.1f}`"
+                    f"🧠 *YENİ İŞLEM AÇILDI*\n"
+                    f"• Parite: `{symbol}` ({grid_yonu} 10x)\n"
+                    f"• Marjin: `{sabit_islem_butcesi:.2f} USD`\n"
+                    f"• Komisyon: `{acilis_komisyonu:.4f} USD`"
                 )
 
     except Exception as e:
@@ -309,7 +301,7 @@ def telegram_komutlari_dinle():
                         
                         if metin == "/baslat":
                             BOT_CALISIYOR_MU = True
-                            telegram_mesaj_gonder("🚀 *Bot Aktif Edildi! (%5 İlk Hedef, %10 Final, %5 Stop)*")
+                            telegram_mesaj_gonder("🚀 *Bot Aktif! (%5 / %10 Hedefler, Komisyonlu)*")
 
                         elif metin == "/kapat":
                             BOT_CALISIYOR_MU = False
@@ -348,6 +340,7 @@ def telegram_komutlari_dinle():
                             telegram_mesaj_gonder(f"🚨 *Tüm Kanallar Kapatıldı*\n• Nakit Kasa: `{KASA['guncel']:.2f} USD`")
 
                         elif metin == "/durum":
+                            # Hata vermemesi için güvenli hesaplama bloğu
                             bagli = sum([p['marjin'] for p in AKTIF_GRID_SISTEMLERI.values()])
                             anlik_acik_kz = 0.0
                             for sym, p in AKTIF_GRID_SISTEMLERI.items():
@@ -364,23 +357,23 @@ def telegram_komutlari_dinle():
                             durum_str = "Çalışıyor 🟢" if BOT_CALISIYOR_MU else "Beklemede ⏸️"
                             
                             durum = (
-                                f"📊 *GERÇEKÇİ KOMİSYONLU RAPOR*\n"
+                                f"📊 *BOT DURUM RAPORU*\n"
                                 f"• Durum: `{durum_str}`\n"
                                 f"• Nakit Kasa: `{KASA['guncel']:.2f} USD`\n"
-                                f"• Bağlı İzole Marjin: `{bagli:.2f} USD`\n"
+                                f"• Bağlı Marjin: `{bagli:.2f} USD`\n"
                                 f"• Anlık Açık K/Z: `{anlik_acik_kz:+.2f} USD`\n"
                                 f"💰 *Toplam Portföy: `{toplam_varlik:.2f} USD`*\n"
-                                f"• 💸 Toplam Kesilen Komisyon: `{KASA['toplam_odenen_komisyon']:.4f} USD`\n"
+                                f"• 💸 Toplam Komisyon: `{KASA['toplam_odenen_komisyon']:.4f} USD`\n"
                                 f"• Günlük Net K/Z: `{KASA['gunluk_kar_zarar']:+.2f} USD`\n"
                                 f"• Başarılı: `{KASA['basarili_islem']}` | Zararlı: `{KASA['zararli_islem']}`"
                             )
-                            telegram_mesaj_goster(durum)
+                            telegram_mesaj_gonder(durum)
 
                         elif metin == "/pozisyonlar":
                             if not AKTIF_GRID_SISTEMLERI:
                                 telegram_mesaj_gonder("📭 Aktif pozisyon bulunmuyor.")
                             else:
-                                msg = "⚡ *AKTİF POZİSYONLAR (%5 / %10 Hedef)*\n\n"
+                                msg = "⚡ *AKTİF POZİSYONLAR*\n\n"
                                 for sym, p in AKTIF_GRID_SISTEMLERI.items():
                                     try:
                                         t = exchange.fetch_ticker(sym)
@@ -391,9 +384,9 @@ def telegram_komutlari_dinle():
                                         kaldiracli_yuzde = fark_orani * KALDIRAC * 100
                                         tahmini_dolar = p['marjin'] * (kaldiracli_yuzde / 100)
                                         ikon = "🟢" if tahmini_dolar >= 0 else "🔴"
-                                        asama = "2. Aşama (%10 Hedef Bekliyor)" if p.get("ilk_hedef_alindi") else "1. Aşama (%5 Hedef Bekliyor)"
+                                        asama = "2. Aşama (%10 Hedef)" if p.get("ilk_hedef_alindi") else "1. Aşama (%5 Hedef)"
                                         
-                                        msg += f"{ikon} *{sym}* ({p['yon']} 5x İzole) - `{asama}`\n• Marjin: `{p['marjin']:.2f} USD` | Merkez: `{p['merkez_fiyat']:.2f}`\n• K/Z: `%{kaldiracli_yuzde:+.2f}` (`{tahmini_dolar:+.2f} USD`)\n-------------------\n"
+                                        msg += f"{ikon} *{sym}* ({p['yon']} 10x) - `{asama}`\n• Marjin: `{p['marjin']:.2f} USD`\n• K/Z: `%{kaldiracli_yuzde:+.2f}` (`{tahmini_dolar:+.2f} USD`)\n-------------------\n"
                                     except:
                                         pass
                                 telegram_mesaj_gonder(msg)
@@ -403,10 +396,11 @@ def telegram_komutlari_dinle():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print("🚀 Komisyon Hesaplamalı Bot Aktif...")
+    print("🚀 Bot Sorunsuz Başlatılıyor...")
     threading.Thread(target=telegram_komutlari_dinle, daemon=True).start()
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    telegram_mesaj_gonder("⚡ Bot güncellendi! Hedefler %5 ve %10 olarak ayarlandı, Stop %5 yapıldı ve her işlemde gerçekçi çift yönlü komisyonlar anında hesaba yansıtılıyor.")
+    telegram_mesaj_gonder("⚡ Bot hazır! Artık `/durum` komutu takılmadan sorunsuz çalışıyor.")
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
+        
