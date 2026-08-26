@@ -28,7 +28,6 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-# İstediğin yeni ve daha stabil testnet coinleri
 TAKIP_EDILENLER = ['SOL/USDT:USDT', 'AVAX/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT']
 BOT_CALISIYOR_MU = True
 
@@ -74,8 +73,8 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
 KALDIRAC = 10
 
 # ==================== KASA KORUMA & RİSK YÖNETİMİ ====================
-HEDEF_ROESINI_ISTENEN = 50.0     # %5 Kâr Al (10x Kaldıraç ile %50 ROI)
-ZARAR_KES_ROESINI_ISTENEN = 100.0 # %10 Zarar Kes (10x Kaldıraç ile %100 ROI)
+HEDEF_ROESINI_ISTENEN = 5.0      # %5 Kâr Al (ROI)
+ZARAR_KES_ROESINI_ISTENEN = 10.0 # %10 Zarar Kes (ROI)
 MIN_ADX_GUCU = 20.0              # Yatay piyasayı filtrelemek için minimum trend gücü
 # ======================================================================
 
