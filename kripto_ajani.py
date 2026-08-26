@@ -483,4 +483,6 @@ if __name__ == "__main__":
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
-    port = 
+        port = int(os.environ.get("PORT", 5000))
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
+
