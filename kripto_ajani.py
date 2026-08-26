@@ -18,10 +18,9 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = "8870934003:AAGIpiwdgpnQVW7nbJIRcR0dOLOzj-MOZsA"
 CHAT_ID = "6929517567"
 
-# Supabase Bilgilerin
-SUPABASE_URL = "https://cvsveozrpjgvpkdephkc.supabase.co"
-SUPABASE_KEY = "sb_publishable_zrz7kxGbskX6QUc_o9YS_A__qfUUk_D"
-
+# Supabase Güncel Bağlantı Bilgilerin
+SUPABASE_URL = "https://rllpcylzhptqwzmzehnv.supabase.co"
+SUPABASE_KEY = "Sb_publishable_cdVagXxPLhau5FlQMtt8ww_o2vkEYpg"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 exchange = ccxt.gate({
@@ -36,18 +35,31 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-TAKIP_EDILENLER = ['AVAX/USDT:USDT', 'DOGE/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT']
+TAKIP_EDILENLER = ['AVAX/USDT:USDT', 'HYPE/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT']
 BOT_CALISIYOR_MU = True
+KALDIRAC = 10
 
+# ==================== SUPABASE HAFIZA FONKSİYONLARI ====================
 def hafizayi_yukle():
     try:
-        response = supabase.table("bot_hafiza").select("deger").eq("anahtar", "ana_veri").execute()
+        response = supabase.table("bot_hafiza").select("*").eq("id", 1).execute()
         if response.data and len(response.data) > 0:
-            return response.data[0]["deger"]
+            veri = response.data[0]
+            print("☁️ Supabase hafızası başarıyla yüklendi.")
+            return {
+                "aktif_sistemler": veri.get("aktif_sistemler", {}),
+                "analitik": veri.get("analitik", {
+                    "basarisiz_analizler": [],
+                    "basarili_islem_sayisi": 0,
+                    "basarisiz_islem_sayisi": 0,
+                    "gunluk_net_kar_usd": 0.0,
+                    "egitim_verileri": []
+                })
+            }
     except Exception as e:
-        print(f"Supabase'den hafıza yükleme hatası: {e}")
+        print(f"Supabase hafıza yükleme hatası: {e}")
         
-    return {
+    varsayilan = {
         "aktif_sistemler": {},
         "analitik": {
             "basarisiz_analizler": [],
@@ -57,16 +69,22 @@ def hafizayi_yukle():
             "egitim_verileri": []
         }
     }
+    hafizayi_kaydet_db(varsayilan["aktif_sistemler"], varsayilan["analitik"])
+    return varsayilan
 
-def hafizayi_kaydet():
+def hafizayi_kaydet_db(aktif_sistemler_data, analitik_data):
     try:
-        data = {
-            "aktif_sistemler": AKTIF_GRID_SISTEMLERI,
-            "analitik": ANALitik_HAFIZA
+        payload = {
+            "id": 1,
+            "aktif_sistemler": aktif_sistemler_data,
+            "analitik": analitik_data
         }
-        supabase.table("bot_hafiza").upsert({"anahtar": "ana_veri", "deger": data}).execute()
+        supabase.table("bot_hafiza").upsert(payload).execute()
     except Exception as e:
         print(f"Supabase hafıza kaydetme hatası: {e}")
+
+def hafizayi_kaydet():
+    hafizayi_kaydet_db(AKTIF_GRID_SISTEMLERI, ANALitik_HAFIZA)
 
 kalici_veri = hafizayi_yukle()
 AKTIF_GRID_SISTEMLERI = kalici_veri.get("aktif_sistemler", {})
@@ -77,8 +95,6 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
     "gunluk_net_kar_usd": 0.0,
     "egitim_verileri": []
 })
-
-KALDIRAC = 10
 
 # ==================== KASA KORUMA & RİSK YÖNETİMİ ====================
 HEDEF_ROESINI_ISTENEN = 5.0      
@@ -146,7 +162,7 @@ def telegram_mesaj_gonder(mesaj):
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
     ai_durum = "Aktif & Eğitildi 🧠" if ai_model_egitildi else "Veri Toplanıyor 🔄"
-    return f"Supabase Destekli AI Bot | Durum: {durum_str} | ML Model: {ai_durum}"
+    return f"Supabase Hafızalı AI Bot | Durum: {durum_str} | ML Model: {ai_durum}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -257,7 +273,7 @@ def get_account_status_summary():
         gunluk_pnl = ANALitik_HAFIZA['gunluk_net_kar_usd']
         ai_durum_str = "🧠 Aktif" if ai_model_egitildi else "🔄 Veri Topluyor"
         
-        summary = f"☁️ *SUPABASE & AI RAPORU*\n\n"
+        summary = f"📊 *SUPABASE & AI RAPORU*\n\n"
         summary += f"🤖 **AI Model Durumu:** `{ai_durum_str}`\n"
         summary += f"💰 **Toplam Kasa:** `{total_usdt:.2f} USDT`\n"
         summary += f"💵 **Kullanılabilir:** `{free_usdt:.2f} USDT`\n"
@@ -295,7 +311,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 *Supabase destekli bot aktif edildi!*", parse_mode='Markdown')
+    await update.message.reply_text("🟢 *Bot aktif edildi ve taranıyor!*", parse_mode='Markdown')
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -329,7 +345,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("☁️ Supabase & Yapay Zeka Destekli Tarayıcı aktif.")
+    print("🚀 Supabase Hafızalı Tarayıcı aktif.")
     
     try:
         exchange.load_markets()
@@ -395,7 +411,7 @@ def otomatik_arkaplan_tarayici():
                         ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
                         hafizayi_kaydet()
                         
-                        mesaj = f"🚀 *YAPAY ZEKA KÂR ALDI* - `{symbol}` (`+{net_kar_zarar_yuzdesi:.2f}%`)"
+                        mesaj = f"🚀 *KÂR ALINDI* - `{symbol}` (`+{net_kar_zarar_yuzdesi:.2f}%`)"
                         pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj, rsi=rsi_degeri, adx=adx_degeri, ema_fark=ema_fark_degeri, basarili=True)
                         
                     elif net_kar_zarar_yuzdesi <= -ZARAR_KES_ROESINI_ISTENEN or pos_bilgi["percentage"] <= -ZARAR_KES_ROESINI_ISTENEN:
@@ -414,7 +430,7 @@ def otomatik_arkaplan_tarayici():
                         ANALitik_HAFIZA["basarisiz_analizler"].append(analitik_hata_notu)
                         hafizayi_kaydet()
                         
-                        mesaj = f"🛑 *ZARAR KES & SUPABASE'E ÖĞRETİLDİ* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%`)"
+                        mesaj = f"🛑 *ZARAR KES & ÖĞRETİLDİ* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%`)"
                         pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj, rsi=rsi_degeri, adx=adx_degeri, ema_fark=ema_fark_degeri, basarili=False)
                         
                     continue
@@ -484,16 +500,6 @@ def otomatik_arkaplan_tarayici():
                 try:
                     exchange.create_market_order(symbol, emir_yonu, miktar)
 
-                    fiyat_hedef_orani = HEDEF_ROESINI_ISTENEN / (100.0 * KALDIRAC)
-                    fiyat_stop_orani = ZARAR_KES_ROESINI_ISTENEN / (100.0 * KALDIRAC)
-
-                    if grid_yonu == 'LONG':
-                        stop_fiyati = guncel_fiyat * (1.0 - fiyat_stop_orani)
-                        hedef_fiyati = guncel_fiyat * (1.0 + fiyat_hedef_orani)
-                    else:
-                        stop_fiyati = guncel_fiyat * (1.0 + fiyat_stop_orani)
-                        hedef_fiyati = guncel_fiyat * (1.0 - fiyat_hedef_orani)
-
                     AKTIF_GRID_SISTEMLERI[symbol] = {
                         "giris_fiyati": guncel_fiyat,
                         "giris_rsi": rsi,
@@ -523,7 +529,7 @@ def main():
     app_telegram.add_handler(CommandHandler("durdur", durdur_komutu))
     app_telegram.add_handler(CommandHandler("kapat", kapat_komutu))
     
-    print("🤖 Telegram Bot & Arka Plan Servisleri Başlatıldı.")
+    print("🤖 Telegram Bot & Supabase Servisleri Başlatıldı.")
     app_telegram.run_polling()
 
 if __name__ == '__main__':
