@@ -73,7 +73,7 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
 KALDIRAC = 10
 
 # ==================== KASA KORUMA & RİSK YÖNETİMİ ====================
-HEDEF_ROESINI_ISTENEN = 20.0     # Pozisyonda hedeflenen net getiri (%20 Kâr ROI -> Fiyat %2 lehimize)
+HEDEF_ROESINI_ISTENEN = 5.0     # Pozisyonda hedeflenen net getiri (%20 Kâr ROI -> Fiyat %2 lehimize)
 ZARAR_KES_ROESINI_ISTENEN = 10.0 # Pozisyonda göze alınan net zarar (%10 Stop ROI -> Fiyat %1 aleyhimize)
 MIN_ADX_GUCU = 20.0              # Yatay piyasayı filtrelemek için minimum trend gücü
 # ======================================================================
