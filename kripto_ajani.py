@@ -95,7 +95,7 @@ def telegram_mesaj_gonder(mesaj):
         print(f"Telegram Gönderme Hatası: {e}")
 
 def parite_musait_mi(symbol):
-    """Paritenin cooldown (dinlenme) süresinin dolup dolmadığını kesin olarak kontrol eder."""
+    """Paritenin cooldown (dinlenme) süresinin dolup dolmadığını kontrol eder."""
     if symbol in parite_cooldowns:
         if datetime.now() < parite_cooldowns[symbol]:
             return False 
@@ -120,7 +120,7 @@ def set_isolated_leverage_safely(symbol, leverage):
     except Exception:
         return False
 
-def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
+def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, zarar_etiti_mi=False):
     kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
     
     try:
@@ -147,8 +147,12 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
         except Exception as e2:
             print(f"Pozisyon kapatma hatası: {e2}")
 
-    # ÖNEMLİ: İşlem kapatıldığı an pariteye kesin cooldown çak ve hafızadan sil
-    parite_cooldowns[symbol] = datetime.now() + timedelta(minutes=COOLDOWN_SURESI_DK)
+    # ÖNEMLİ: Sadece ZARAR KES (Stop) olduğunda cooldown ver. Kârla kapanan coinler bekletilmez!
+    if zarar_etiti_mi:
+        parite_cooldowns[symbol] = datetime.now() + timedelta(minutes=COOLDOWN_SURESI_DK)
+    else:
+        if symbol in parite_cooldowns:
+            del parite_cooldowns[symbol]
 
     if symbol in AKTIF_GRID_SISTEMLERI:
         del AKTIF_GRID_SISTEMLERI[symbol]
@@ -268,7 +272,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 side = str(pos.get('side', '')).upper()
                 if not side:
                     side = "LONG" if float(pos.get('notional', 0)) > 0 else "SHORT"
-                pozisyonu_garantili_kapat(sym, side, float(pos['contracts']), f"🛑 *MANUEL KAPATMA (/kapat)* - `{sym}`")
+                pozisyonu_garantili_kapat(sym, side, float(pos['contracts']), f"🛑 *MANUEL KAPATMA (/kapat)* - `{sym}`", zarar_etiti_mi=False)
                 kapatilanlar += 1
 
         AKTIF_GRID_SISTEMLERI.clear()
@@ -317,7 +321,7 @@ def otomatik_arkaplan_tarayici():
                 if not BOT_CALISIYOR_MU:
                     break
                     
-                # 1. Cooldown kontrolü: Süre bitmediyse ve paritede aktif pozisyon yoksa bu coine kesinlikle bakma
+                # Cooldown kontrolü (Sadece stop olanlar için geçerli)
                 if not parite_musait_mi(symbol) and symbol not in aktif_borsa_map:
                     continue
 
@@ -327,7 +331,6 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
-                # EĞER POZİSYON ZATEN AÇIKSA KONTROL ET (Kâr Al / Zarar Kes)
                 if symbol in aktif_borsa_map:
                     pos_bilgi = aktif_borsa_map[symbol]
                     yon = pos_bilgi["side"]
@@ -346,7 +349,8 @@ def otomatik_arkaplan_tarayici():
                         hafizayi_kaydet()
                         
                         mesaj = f"🚀 *HEDEF BAŞARILI (KÂR ALINDI)* - `{symbol}` (`+{net_kar_zarar_yuzdesi:.2f}%`)"
-                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj)
+                        # Kârla kapandığı için zarar_etiti_mi=False (Cooldown'a girmez, hemen yeni fırsat arar)
+                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj, zarar_etiti_mi=False)
                         time.sleep(3)
                         continue
                         
@@ -367,13 +371,16 @@ def otomatik_arkaplan_tarayici():
                         hafizayi_kaydet()
                         
                         mesaj = f"🛑 *ZARAR KES (KASA KORUMA STOP) & ANALİZE EKLENDİ* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%`)"
-                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj)
+                        # Zararla kapandığı için zarar_etiti_mi=True (Cooldown'a girer, iğnelerden korunur)
+                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj, zarar_etiti_mi=True)
                         time.sleep(3)
                         continue
                         
                     continue
 
-                # EĞER POZİSYON YOKSA VE COOLDOWN DEVAM EDİYORSA YENİ İŞLEM AÇMA
+                if symbol in aktif_borsa_map:
+                    continue
+
                 if not parite_musait_mi(symbol):
                     continue
 
