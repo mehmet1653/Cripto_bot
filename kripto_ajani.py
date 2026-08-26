@@ -28,8 +28,7 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-# GÜNCELLENEN PARİTE LİSTESİ
-TAKIP_EDILENLER = ['SOL/USDT:USDT', 'AVAX/USDT:USDT', 'XRP/USDT:USDT', 'HYPE/USDT:USDT']
+TAKIP_EDILENLER = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT']
 BOT_CALISIYOR_MU = True
 
 HAFIZA_DOSYASI = "bot_kalici_hafiza.json"
