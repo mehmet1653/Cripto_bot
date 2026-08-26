@@ -19,8 +19,8 @@ TELEGRAM_TOKEN = "8870934003:AAGIpiwdgpnQVW7nbJIRcR0dOLOzj-MOZsA"
 CHAT_ID = "6929517567"
 
 # Supabase Güncel Bağlantı Bilgilerin
-SUPABASE_URL = "https://rllpcylzhptqwzmzehnv.supabase.co"
-SUPABASE_KEY = "Sb_publishable_cdVagXxPLhau5FlQMtt8ww_o2vkEYpg"
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://rllpcylzhptqwzmzehnv.supabase.co")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "Sb_secret_ln9y67Ep_zCtOQ9Q2NE8KQ_nf0gKkmO")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 exchange = ccxt.gate({
