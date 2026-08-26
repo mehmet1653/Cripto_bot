@@ -483,6 +483,18 @@ if __name__ == "__main__":
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
-        port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 5000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
-
+    
+    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app_tg.add_handler(CommandHandler("durum", durum_komutu))
+    app_tg.add_handler(CommandHandler("pozisyonlar", durum_komutu))
+    app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
+    app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
+    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
+    
+    print("Telegram komut dinleyicisi aktif...")
+    try:
+        app_tg.run_polling(drop_pending_updates=True)
+    except Exception as e:
+        print(f"Telegram polling hatası: {e}")
