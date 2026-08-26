@@ -6,7 +6,6 @@ import pandas as pd
 import ta
 import os
 import json
-from datetime import datetime, timedelta
 from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
@@ -31,9 +30,6 @@ exchange.set_sandbox_mode(True)
 
 TAKIP_EDILENLER = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT']
 BOT_CALISIYOR_MU = True
-
-COOLDOWN_SURESI_DK = 30
-parite_cooldowns = {}
 
 HAFIZA_DOSYASI = "bot_kalici_hafiza.json"
 
@@ -77,8 +73,8 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
 KALDIRAC = 10
 
 # ==================== KASA KORUMA & RİSK YÖNETİMİ ====================
-HEDEF_ROESINI_ISTENEN = 2.5      # %2.5 Kâr Al (TP)
-ZARAR_KES_ROESINI_ISTENEN = 5.0  # %5 Zarar Kes (SL)
+HEDEF_ROESINI_ISTENEN = 5.0     # Pozisyonda hedeflenen net getiri (%20 Kâr ROI -> Fiyat %2 lehimize)
+ZARAR_KES_ROESINI_ISTENEN = 10.0 # Pozisyonda göze alınan net zarar (%10 Stop ROI -> Fiyat %1 aleyhimize)
 MIN_ADX_GUCU = 20.0              # Yatay piyasayı filtrelemek için minimum trend gücü
 # ======================================================================
 
@@ -93,15 +89,6 @@ def telegram_mesaj_gonder(mesaj):
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"Telegram Gönderme Hatası: {e}")
-
-def parite_musait_mi(symbol):
-    """Paritenin cooldown (dinlenme) süresinin dolup dolmadığını kontrol eder."""
-    if symbol in parite_cooldowns:
-        if datetime.now() < parite_cooldowns[symbol]:
-            return False 
-        else:
-            del parite_cooldowns[symbol] 
-    return True
 
 @app.route('/')
 def home():
@@ -120,7 +107,7 @@ def set_isolated_leverage_safely(symbol, leverage):
     except Exception:
         return False
 
-def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, zarar_etiti_mi=False):
+def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
     kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
     
     try:
@@ -146,13 +133,6 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, zarar_etiti_mi=
             exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, guvenli_fiyat, {'timeInForce': 'IOC', 'reduce_only': True})
         except Exception as e2:
             print(f"Pozisyon kapatma hatası: {e2}")
-
-    # ÖNEMLİ: Sadece ZARAR KES (Stop) olduğunda cooldown ver. Kârla kapanan coinler bekletilmez!
-    if zarar_etiti_mi:
-        parite_cooldowns[symbol] = datetime.now() + timedelta(minutes=COOLDOWN_SURESI_DK)
-    else:
-        if symbol in parite_cooldowns:
-            del parite_cooldowns[symbol]
 
     if symbol in AKTIF_GRID_SISTEMLERI:
         del AKTIF_GRID_SISTEMLERI[symbol]
@@ -272,7 +252,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 side = str(pos.get('side', '')).upper()
                 if not side:
                     side = "LONG" if float(pos.get('notional', 0)) > 0 else "SHORT"
-                pozisyonu_garantili_kapat(sym, side, float(pos['contracts']), f"🛑 *MANUEL KAPATMA (/kapat)* - `{sym}`", zarar_etiti_mi=False)
+                pozisyonu_garantili_kapat(sym, side, float(pos['contracts']), f"🛑 *MANUEL KAPATMA (/kapat)* - `{sym}`")
                 kapatilanlar += 1
 
         AKTIF_GRID_SISTEMLERI.clear()
@@ -321,10 +301,6 @@ def otomatik_arkaplan_tarayici():
                 if not BOT_CALISIYOR_MU:
                     break
                     
-                # Cooldown kontrolü (Sadece stop olanlar için geçerli)
-                if not parite_musait_mi(symbol) and symbol not in aktif_borsa_map:
-                    continue
-
                 try:
                     ticker = exchange.fetch_ticker(symbol)
                     guncel_fiyat = ticker['last']
@@ -349,10 +325,7 @@ def otomatik_arkaplan_tarayici():
                         hafizayi_kaydet()
                         
                         mesaj = f"🚀 *HEDEF BAŞARILI (KÂR ALINDI)* - `{symbol}` (`+{net_kar_zarar_yuzdesi:.2f}%`)"
-                        # Kârla kapandığı için zarar_etiti_mi=False (Cooldown'a girmez, hemen yeni fırsat arar)
-                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj, zarar_etiti_mi=False)
-                        time.sleep(3)
-                        continue
+                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj)
                         
                     elif net_kar_zarar_yuzdesi <= -ZARAR_KES_ROESINI_ISTENEN or pos_bilgi["percentage"] <= -ZARAR_KES_ROESINI_ISTENEN:
                         tahmini_zarar_usd = abs(pos_bilgi["unrealizedPnl"]) if pos_bilgi["unrealizedPnl"] < 0 else 1.0
@@ -371,17 +344,11 @@ def otomatik_arkaplan_tarayici():
                         hafizayi_kaydet()
                         
                         mesaj = f"🛑 *ZARAR KES (KASA KORUMA STOP) & ANALİZE EKLENDİ* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%`)"
-                        # Zararla kapandığı için zarar_etiti_mi=True (Cooldown'a girer, iğnelerden korunur)
-                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj, zarar_etiti_mi=True)
-                        time.sleep(3)
-                        continue
+                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj)
                         
                     continue
 
                 if symbol in aktif_borsa_map:
-                    continue
-
-                if not parite_musait_mi(symbol):
                     continue
 
                 try:
@@ -506,3 +473,4 @@ if __name__ == "__main__":
         app_tg.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
+                    
