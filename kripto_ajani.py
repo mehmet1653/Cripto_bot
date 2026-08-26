@@ -5,16 +5,24 @@ import ccxt
 import pandas as pd
 import ta
 import os
-import json
+import numpy as np
 from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
+from sklearn.ensemble import RandomForestClassifier
+from supabase import create_client, Client
 
 app = Flask(__name__)
 
 # ==================== AYARLAR VE ANAHTARLAR ====================
 TELEGRAM_TOKEN = "8870934003:AAGIpiwdgpnQVW7nbJIRcR0dOLOzj-MOZsA"
 CHAT_ID = "6929517567"
+
+# Supabase Bilgilerin (Güncellendi)
+SUPABASE_URL = "https://cvsveozrpjgvpkdephkc.supabase.co"
+SUPABASE_KEY = "sb_publishable_zrz7kxGbskX6QUc_o9YS_A__qfUUk_D"
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 exchange = ccxt.gate({
     'apiKey': '82cca880898a88d1a31e86d8eb474c57',
@@ -31,22 +39,22 @@ exchange.set_sandbox_mode(True)
 TAKIP_EDILENLER = ['AVAX/USDT:USDT', 'HYPE/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT']
 BOT_CALISIYOR_MU = True
 
-HAFIZA_DOSYASI = "bot_kalici_hafiza.json"
-
 def hafizayi_yukle():
-    if os.path.exists(HAFIZA_DOSYASI):
-        try:
-            with open(HAFIZA_DOSYASI, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
+    try:
+        response = supabase.table("bot_hafiza").select("deger").eq("anahtar", "ana_veri").execute()
+        if response.data and len(response.data) > 0:
+            return response.data[0]["deger"]
+    except Exception as e:
+        print(f"Supabase'den hafıza yükleme hatası: {e}")
+        
     return {
         "aktif_sistemler": {},
         "analitik": {
             "basarisiz_analizler": [],
             "basarili_islem_sayisi": 0,
             "basarisiz_islem_sayisi": 0,
-            "gunluk_net_kar_usd": 0.0
+            "gunluk_net_kar_usd": 0.0,
+            "egitim_verileri": []
         }
     }
 
@@ -56,10 +64,9 @@ def hafizayi_kaydet():
             "aktif_sistemler": AKTIF_GRID_SISTEMLERI,
             "analitik": ANALitik_HAFIZA
         }
-        with open(HAFIZA_DOSYASI, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
+        supabase.table("bot_hafiza").upsert({"anahtar": "ana_veri", "deger": data}).execute()
     except Exception as e:
-        print(f"Hafıza kaydetme hatası: {e}")
+        print(f"Supabase hafıza kaydetme hatası: {e}")
 
 kalici_veri = hafizayi_yukle()
 AKTIF_GRID_SISTEMLERI = kalici_veri.get("aktif_sistemler", {})
@@ -67,16 +74,61 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
     "basarisiz_analizler": [],
     "basarili_islem_sayisi": 0,
     "basarisiz_islem_sayisi": 0,
-    "gunluk_net_kar_usd": 0.0
+    "gunluk_net_kar_usd": 0.0,
+    "egitim_verileri": []
 })
 
 KALDIRAC = 10
 
 # ==================== KASA KORUMA & RİSK YÖNETİMİ ====================
-HEDEF_ROESINI_ISTENEN = 5.0      # Hedeflenen ROI (%5)
-ZARAR_KES_ROESINI_ISTENEN = 10.0 # Göze alınan Zarar ROI (%10)
-MIN_ADX_GUCU = 20.0              # Minimum trend gücü
+HEDEF_ROESINI_ISTENEN = 5.0      
+ZARAR_KES_ROESINI_ISTENEN = 10.0 
+MIN_ADX_GUCU = 20.0              
 # ======================================================================
+
+# ==================== YAPAY ZEKA MODELİ (ML) ====================
+ai_model = RandomForestClassifier(n_estimators=50, random_state=42)
+ai_model_egitildi = False
+
+def yapay_zekayi_egit_ve_guncelle():
+    global ai_model, ai_model_egitildi
+    veriler = ANALitik_HAFIZA.get("egitim_verileri", [])
+    
+    if len(veriler) < 5:
+        ai_model_egitildi = False
+        return
+        
+    try:
+        X = []
+        y = []
+        for item in veriler:
+            X.append(item[:4]) 
+            y.append(item[4])  
+            
+        X = np.array(X)
+        y = np.array(y)
+        
+        if len(set(y)) < 2:
+            ai_model_egitildi = False
+            return
+            
+        ai_model.fit(X, y)
+        ai_model_egitildi = True
+        print("🧠 Yapay Zeka Modeli Supabase verileriyle güncellendi.")
+    except Exception as e:
+        print(f"Yapay zeka eğitim hatası: {e}")
+        ai_model_egitildi = False
+
+def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod):
+    if not ai_model_egitildi:
+        return True 
+    try:
+        X_test = np.array([[rsi, adx, ema_fark, yon_kod]])
+        tahmin = ai_model.predict(X_test)[0]
+        return bool(tahmin == 1)
+    except Exception:
+        return True
+# ================================================================
 
 def telegram_mesaj_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID:
@@ -93,7 +145,8 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
-    return f"Testnet Kararlı Bot | Durum: {durum_str}"
+    ai_durum = "Aktif & Eğitildi 🧠" if ai_model_egitildi else "Veri Toplanıyor 🔄"
+    return f"Supabase Destekli AI Bot | Durum: {durum_str} | ML Model: {ai_durum}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -107,7 +160,7 @@ def set_isolated_leverage_safely(symbol, leverage):
     except Exception:
         return False
 
-def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
+def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=0, adx=0, ema_fark=0, basarili_ mi=True):
     kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
     
     try:
@@ -133,6 +186,14 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
             exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, guvenli_fiyat, {'timeInForce': 'IOC', 'reduce_only': True})
         except Exception as e2:
             print(f"Pozisyon kapatma hatası: {e2}")
+
+    yon_kod = 1 if yon == 'LONG' else -1
+    sonuc_kod = 1 if basarili_ mi else 0
+    ANALitik_HAFIZA["egitim_verileri"].append([rsi, adx, ema_fark, yon_kod, sonuc_kod])
+    if len(ANALitik_HAFIZA["egitim_verileri"]) > 100:
+        ANALitik_HAFIZA["egitim_verileri"].pop(0)
+        
+    yapay_zekayi_egit_ve_guncelle()
 
     if symbol in AKTIF_GRID_SISTEMLERI:
         del AKTIF_GRID_SISTEMLERI[symbol]
@@ -194,8 +255,10 @@ def get_account_status_summary():
                 })
 
         gunluk_pnl = ANALitik_HAFIZA['gunluk_net_kar_usd']
+        ai_durum_str = "🧠 Aktif" if ai_model_egitildi else "🔄 Veri Topluyor"
         
-        summary = f"🛡️ *KASA KORUMA & POZİSYON RAPORU*\n\n"
+        summary = f"☁️ *SUPABASE & AI RAPORU*\n\n"
+        summary += f"🤖 **AI Model Durumu:** `{ai_durum_str}`\n"
         summary += f"💰 **Toplam Kasa:** `{total_usdt:.2f} USDT`\n"
         summary += f"💵 **Kullanılabilir:** `{free_usdt:.2f} USDT`\n"
         
@@ -225,7 +288,6 @@ def get_account_status_summary():
     except Exception as e:
         return f"Kasa durumu alınırken hata oluştu: {str(e)}"
 
-# ==================== TELEGRAM KOMUTLARI ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = get_account_status_summary()
     await update.message.reply_text(status_text, parse_mode='Markdown')
@@ -233,7 +295,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 *Bot aktif edildi!*", parse_mode='Markdown')
+    await update.message.reply_text("🟢 *Supabase destekli bot aktif edildi!*", parse_mode='Markdown')
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -252,7 +314,11 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 side = str(pos.get('side', '')).upper()
                 if not side:
                     side = "LONG" if float(pos.get('notional', 0)) > 0 else "SHORT"
-                pozisyonu_garantili_kapat(sym, side, float(pos['contracts']), f"🛑 *MANUEL KAPATMA (/kapat)* - `{sym}`")
+                
+                kayitli_veri = AKTIF_GRID_SISTEMLERI.get(sym, {})
+                rsi_val = kayitli_veri.get("giris_rsi", 50.0)
+                
+                pozisyonu_garantili_kapat(sym, side, float(pos['contracts']), f"🛑 *MANUEL KAPATMA (/kapat)* - `{sym}`", rsi=rsi_val, basarili_ mi=False)
                 kapatilanlar += 1
 
         AKTIF_GRID_SISTEMLERI.clear()
@@ -261,13 +327,13 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Kapatma sırasında hata: `{str(e)}`", parse_mode='Markdown')
 
-# ==================== ANA STRATEJİ DÖNGÜSÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🔄 Kararlı Takip ve Koruma Döngüsü aktif.")
+    print("☁️ Supabase & Yapay Zeka Destekli Tarayıcı aktif.")
     
     try:
         exchange.load_markets()
+        yapay_zekayi_egit_ve_guncelle()
     except Exception as e:
         print(f"Piyasalar yüklenemedi: {e}")
     
@@ -318,14 +384,19 @@ def otomatik_arkaplan_tarayici():
                         
                     net_kar_zarar_yuzdesi = fark_orani * 100 * KALDIRAC
                     
+                    istemci_veri = AKTIF_GRID_SISTEMLERI.get(symbol, {})
+                    rsi_degeri = istemci_veri.get("giris_rsi", 50.0)
+                    adx_degeri = istemci_veri.get("giris_adx", 25.0)
+                    ema_fark_degeri = istemci_veri.get("ema_fark", 0.0)
+                    
                     if net_kar_zarar_yuzdesi >= HEDEF_ROESINI_ISTENEN or pos_bilgi["percentage"] >= HEDEF_ROESINI_ISTENEN:
                         tahmini_kar_usd = abs(pos_bilgi["unrealizedPnl"]) if pos_bilgi["unrealizedPnl"] > 0 else 2.0
                         ANALitik_HAFIZA["gunluk_net_kar_usd"] += tahmini_kar_usd
                         ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
                         hafizayi_kaydet()
                         
-                        mesaj = f"🚀 *HEDEF BAŞARILI (KÂR ALINDI)* - `{symbol}` (`+{net_kar_zarar_yuzdesi:.2f}%`)"
-                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj)
+                        mesaj = f"🚀 *YAPAY ZEKA KÂR ALDI* - `{symbol}` (`+{net_kar_zarar_yuzdesi:.2f}%`)"
+                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj, rsi=rsi_degeri, adx=adx_degeri, ema_fark=ema_fark_degeri, basarili_ mi=True)
                         
                     elif net_kar_zarar_yuzdesi <= -ZARAR_KES_ROESINI_ISTENEN or pos_bilgi["percentage"] <= -ZARAR_KES_ROESINI_ISTENEN:
                         tahmini_zarar_usd = abs(pos_bilgi["unrealizedPnl"]) if pos_bilgi["unrealizedPnl"] < 0 else 1.0
@@ -343,8 +414,8 @@ def otomatik_arkaplan_tarayici():
                         ANALitik_HAFIZA["basarisiz_analizler"].append(analitik_hata_notu)
                         hafizayi_kaydet()
                         
-                        mesaj = f"🛑 *ZARAR KES (STOP) & ANALİZE EKLENDİ* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%`)"
-                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj)
+                        mesaj = f"🛑 *ZARAR KES & SUPABASE'E ÖĞRETİLDİ* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%`)"
+                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj, rsi=rsi_degeri, adx=adx_degeri, ema_fark=ema_fark_degeri, basarili_ mi=False)
                         
                     continue
 
@@ -384,11 +455,11 @@ def otomatik_arkaplan_tarayici():
                 if grid_yonu == "LONG" and rsi > 58:
                     continue 
 
-                son_hatalar = [h for h in ANALitik_HAFIZA["basarisiz_analizler"] if h["symbol"] == symbol]
-                if son_hatalar:
-                    son_hata = son_hatalar[-1]
-                    if son_hata["yanlis_yon"] == grid_yonu and abs(rsi - 50) < 5:
-                        continue
+                ema_farki_orani = float(ema7 - ema21)
+                yon_kod_degeri = 1 if grid_yonu == 'LONG' else -1
+                
+                if not yapay_zeka_islem_onayi(rsi, adx_degeri, ema_farki_orani, yon_kod_degeri):
+                    continue
 
                 set_isolated_leverage_safely(symbol, KALDIRAC)
                 
@@ -433,13 +504,16 @@ def otomatik_arkaplan_tarayici():
                         "merkez_fiyat": guncel_fiyat,
                         "marjin": hesaplanan_marjin,
                         "miktar": miktar,
-                        "giris_rsi": rsi
+                        "giris_rsi": rsi,
+                        "giris_adx": adx_degeri,
+                        "ema_fark": ema_farki_orani
                     }
                     hafizayi_kaydet()
 
+                    ai_not = "🧠 (Supabase AI Onaylı)" if ai_model_egitildi else "🤖 (AI Veri Topluyor)"
                     telegram_mesaj_gonder(
-                        f"🛡️ *İŞLEM AÇILDI & DÖNGÜ KORUMALI - {KALDIRAC}x*\n"
-                        f"• Parite: `{symbol}` ({grid_yonu})\n"
+                        f"☁️ *İŞLEM AÇILDI & SUPABASE SENKRONİZE - {KALDIRAC}x*\n"
+                        f"• Parite: `{symbol}` ({grid_yonu}) {ai_not}\n"
                         f"• Giriş Fiyatı: `{guncel_fiyat}`\n"
                         f"• Takip Edilen Stop: `{stop_fiyati}` (`-{ZARAR_KES_ROESINI_ISTENEN}% ROI`)\n"
                         f"• Takip Edilen Hedef: `{hedef_fiyati}` (`+{HEDEF_ROESINI_ISTENEN}% ROI`)\n"
@@ -457,7 +531,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print(f"🛡️ Kararlı Bot Başlatılıyor...")
+    print(f"☁️ Supabase Destekli Kararlı Bot Başlatılıyor...")
     
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
