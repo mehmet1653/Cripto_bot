@@ -32,7 +32,6 @@ exchange.set_sandbox_mode(True)
 TAKIP_EDILENLER = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT']
 BOT_CALISIYOR_MU = True
 
-# Cooldown (Dinlenme) Takip Sözlüğü -> Aynı paritenin sürekli stop olmasını engellemek için
 COOLDOWN_SURESI_DK = 30
 parite_cooldowns = {}
 
@@ -79,7 +78,7 @@ KALDIRAC = 10
 
 # ==================== KASA KORUMA & RİSK YÖNETİMİ ====================
 HEDEF_ROESINI_ISTENEN = 2.5      # %2.5 Kâr Al (TP)
-ZARAR_KES_ROESINI_ISTENEN = 5.0  # %5 Zarar Kes (SL) - İğnelerden korumak için sıkılaştırıldı
+ZARAR_KES_ROESINI_ISTENEN = 5.0  # %5 Zarar Kes (SL)
 MIN_ADX_GUCU = 20.0              # Yatay piyasayı filtrelemek için minimum trend gücü
 # ======================================================================
 
@@ -96,7 +95,7 @@ def telegram_mesaj_gonder(mesaj):
         print(f"Telegram Gönderme Hatası: {e}")
 
 def parite_musait_mi(symbol):
-    """Paritenin cooldown (dinlenme) süresinin dolup dolmadığını kontrol eder."""
+    """Paritenin cooldown (dinlenme) süresinin dolup dolmadığını kesin olarak kontrol eder."""
     if symbol in parite_cooldowns:
         if datetime.now() < parite_cooldowns[symbol]:
             return False 
@@ -148,7 +147,7 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji):
         except Exception as e2:
             print(f"Pozisyon kapatma hatası: {e2}")
 
-    # Stop olan pariteye 30 dakika cooldown (dinlenme) ver
+    # ÖNEMLİ: İşlem kapatıldığı an pariteye kesin cooldown çak ve hafızadan sil
     parite_cooldowns[symbol] = datetime.now() + timedelta(minutes=COOLDOWN_SURESI_DK)
 
     if symbol in AKTIF_GRID_SISTEMLERI:
@@ -318,7 +317,7 @@ def otomatik_arkaplan_tarayici():
                 if not BOT_CALISIYOR_MU:
                     break
                     
-                # Cooldown süresi dolmadıysa bu pariteye bakma
+                # 1. Cooldown kontrolü: Süre bitmediyse ve paritede aktif pozisyon yoksa bu coine kesinlikle bakma
                 if not parite_musait_mi(symbol) and symbol not in aktif_borsa_map:
                     continue
 
@@ -328,6 +327,7 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
+                # EĞER POZİSYON ZATEN AÇIKSA KONTROL ET (Kâr Al / Zarar Kes)
                 if symbol in aktif_borsa_map:
                     pos_bilgi = aktif_borsa_map[symbol]
                     yon = pos_bilgi["side"]
@@ -347,7 +347,7 @@ def otomatik_arkaplan_tarayici():
                         
                         mesaj = f"🚀 *HEDEF BAŞARILI (KÂR ALINDI)* - `{symbol}` (`+{net_kar_zarar_yuzdesi:.2f}%`)"
                         pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj)
-                        time.sleep(5)
+                        time.sleep(3)
                         continue
                         
                     elif net_kar_zarar_yuzdesi <= -ZARAR_KES_ROESINI_ISTENEN or pos_bilgi["percentage"] <= -ZARAR_KES_ROESINI_ISTENEN:
@@ -368,12 +368,13 @@ def otomatik_arkaplan_tarayici():
                         
                         mesaj = f"🛑 *ZARAR KES (KASA KORUMA STOP) & ANALİZE EKLENDİ* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%`)"
                         pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj)
-                        time.sleep(5)
+                        time.sleep(3)
                         continue
                         
                     continue
 
-                if symbol in aktif_borsa_map:
+                # EĞER POZİSYON YOKSA VE COOLDOWN DEVAM EDİYORSA YENİ İŞLEM AÇMA
+                if not parite_musait_mi(symbol):
                     continue
 
                 try:
