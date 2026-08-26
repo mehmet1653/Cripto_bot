@@ -106,7 +106,7 @@ def pozisyonu_kapat_sanal(symbol, sebep_mesaji):
     pos = SANAL_POZISYONLAR[symbol]
     yon = pos["yon"]
     giris = pos["giris_fiyati"]
-    marjin = pos["marjin"]
+    marjin = pos["margin"]
     
     try:
         ticker = exchange.fetch_ticker(symbol)
@@ -180,7 +180,6 @@ def get_account_status_summary():
             'margin': pos["margin"]
         })
 
-    # İstediğin mantık: Kasadaki para + Dolaşımdaki marjinler + Anlık PnL = Toplam Güncel Kasa
     anlik_toplam_kasa = SANAL_BAKIYE + toplam_marjin_degeri + toplam_anlik_pnl
     gunluk_pnl = ANALitik_HAFIZA['gunluk_net_kar_usd']
     
@@ -350,6 +349,12 @@ def otomatik_arkaplan_tarayici():
 if __name__ == "__main__":
     print(f"🛡️ Paper Trading (Sanal Simülasyon) Botu Başlatıldı. Telegram'dan /baslat komutu bekleniyor...")
     
+    # Başlamadan önce eski webhook kalıntılarını ve takılan kilitleri temizle
+    try:
+        requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=5)
+    except Exception:
+        pass
+
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
     port = int(os.environ.get("PORT", 5000))
@@ -364,7 +369,6 @@ if __name__ == "__main__":
     
     print("Telegram komut dinleyicisi aktif...")
     try:
-        app_tg.run_polling(drop_pending_updates=True)
+        app_tg.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
     except Exception as e:
         print(f"Telegram polling hatası: {e}")
-        
