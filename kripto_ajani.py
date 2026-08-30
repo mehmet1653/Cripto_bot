@@ -6,11 +6,16 @@ import pandas as pd
 import ta
 import os
 import numpy as np
+import functools
 from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
+
+# Print çıktılarını tamponsuz (anında) konsola yansıt
+import sys
+print = functools.partial(print, flush=True)
 
 app = Flask(__name__)
 
@@ -18,7 +23,6 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = "8870934003:AAGIpiwdgpnQVW7nbJIRcR0dOLOzj-MOZsA"
 CHAT_ID = "6929517567"
 
-# Supabase Güncel Bağlantı Bilgilerin
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://rllpcylzhptqwzmzehnv.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "Sb_secret_ln9y67Ep_zCtOQ9Q2NE8KQ_nf0gKkmO")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -35,7 +39,18 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-TAKIP_EDILENLER = ['AVAX/USDT:USDT', 'HYPE/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT']
+# Yüksek hacimli 8 temel coin (Gate.io Vadeli İşlem formatı)
+TAKIP_EDILENLER = [
+    'BTC/USDT:USDT', 
+    'ETH/USDT:USDT', 
+    'SOL/USDT:USDT', 
+    'XRP/USDT:USDT', 
+    'HYPE/USDT:USDT', 
+    'SUI/USDT:USDT', 
+    'DOGE/USDT:USDT', 
+    'AVAX/USDT:USDT'
+]
+
 BOT_CALISIYOR_MU = True
 KALDIRAC = 10
 
@@ -449,6 +464,15 @@ def otomatik_arkaplan_tarayici():
                     continue
 
                 try:
+                    # 4 Saatlik Ana Trend Kontrolü
+                    ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=50)
+                    df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    ema50_4h = ta.trend.ema_indicator(df_4h['close'], window=50).iloc[-1]
+                    ema200_4h = ta.trend.ema_indicator(df_4h['close'], window=200).iloc[-1]
+                    
+                    ana_trend = "LONG" if ema50_4h > ema200_4h else "SHORT"
+
+                    # 15 Dakikalık İvme ve Göstergeler
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     
@@ -464,12 +488,15 @@ def otomatik_arkaplan_tarayici():
                 if adx_degeri < MIN_ADX_GUCU:
                     continue
 
-                grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
+                # Ana Trend ve 15m Kesişim Uyumu
+                grid_yonu = None
+                if ana_trend == "LONG" and ema7 > ema21 and rsi < 58:
+                    grid_yonu = "LONG"
+                elif ana_trend == "SHORT" and ema7 < ema21 and rsi > 42:
+                    grid_yonu = "SHORT"
 
-                if grid_yonu == "SHORT" and rsi < 42:
-                    continue 
-                if grid_yonu == "LONG" and rsi > 58:
-                    continue 
+                if not grid_yonu:
+                    continue
 
                 ema_farki_orani = float(ema7 - ema21)
                 yon_kod_degeri = 1 if grid_yonu == 'LONG' else -1
@@ -493,4 +520,48 @@ def otomatik_arkaplan_tarayici():
                         
                     miktar = float(exchange.amount_to_precision(symbol, gercek_ham_miktar))
                 except Exception:
-         
+                    continue
+
+                emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
+                
+                try:
+                    exchange.create_market_order(symbol, emir_yonu, miktar)
+                    
+                    AKTIF_GRID_SISTEMLERI[symbol] = {
+                        "giris_rsi": rsi,
+                        "giris_adx": adx_degeri,
+                        "ema_fark": ema_farki_orani
+                    }
+                    hafizayi_kaydet()
+                    
+                    mesaj = f"🎯 *YENİ İŞLEM AÇILDI* - `{symbol}`\n"
+                    mesaj += f"🔹 Yön: `{grid_yonu}` | Kaldıraç: `{KALDIRAC}x`\n"
+                    mesaj += f"📊 RSI: `{rsi:.1f}` | ADX: `{adx_degeri:.1f}`"
+                    telegram_mesaj_gonder(mesaj)
+                    print(f"✅ Başarıyla işlem açıldı: {symbol} ({grid_yonu})")
+                    
+                except Exception as e:
+                    print(f"Emir iletme hatası ({symbol}): {e}")
+                    
+        except Exception as e:
+            print(f"Ana döngü hatası: {e}")
+            
+        time.sleep(10)
+
+def telegram_botunu_baslat():
+    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app_tg.add_handler(CommandHandler("durum", durum_komutu))
+    app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
+    app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
+    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
+    app_tg.run_polling()
+
+if __name__ == '__main__':
+    tarayici_thread = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
+    tarayici_thread.start()
+    
+    telegram_thread = threading.Thread(target=telegram_botunu_baslat, daemon=True)
+    telegram_thread.start()
+    
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
