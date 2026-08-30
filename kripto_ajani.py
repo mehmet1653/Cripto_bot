@@ -471,14 +471,13 @@ def otomatik_arkaplan_tarayici():
                     ema50_4h = ta.trend.ema_indicator(df_4h['close'], window=50).iloc[-1]
                     ema200_4h = ta.trend.ema_indicator(df_4h['close'], window=200).iloc[-1]
                     
-                    # 🔥 EKLEDİĞİMİZ FİLTRE: 4 Saatlik Mumun Rengi ve Gövde Durumu Teyidi
                     son_mum_4h = df_4h.iloc[-1]
                     mum_yesil_4h = son_mum_4h['close'] > son_mum_4h['open']
                     
                     ana_trend_yonu = "LONG" if (ema50_4h > ema200_4h and mum_yesil_4h) else ("SHORT" if (ema50_4h < ema200_4h and not mum_yesil_4h) else None)
                     
                     if not ana_trend_yonu:
-                        continue # Eğer 4 saatlik mum kararsızsa veya trend ile mum rengi çelişiyorsa işlem arama
+                        continue 
 
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -538,16 +537,21 @@ def otomatik_arkaplan_tarayici():
 def main():
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
+    port = int(os.environ.get("PORT", 5000))
+    flask_thread = threading.Thread(
+        target=lambda: app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False),
+        daemon=True
+    )
+    flask_thread.start()
+    
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
-    threading.Thread(target=app_tg.run_polling, kwargs={'drop_pending_updates': True}, daemon=True).start()
-    
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    print("🤖 Telegram Bot Polling başlatılıyor...")
+    app_tg.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
