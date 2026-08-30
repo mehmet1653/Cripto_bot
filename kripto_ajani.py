@@ -176,7 +176,7 @@ def set_isolated_leverage_safely(symbol, leverage):
     except Exception:
         return False
 
-def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=0, adx=0, ema_fark=0, basarili=True):
+def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=0, adx=0, ema_fark=0, basarili=True, is_noise=False):
     kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
     
     try:
@@ -203,13 +203,15 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=0, adx=0, e
         except Exception as e2:
             print(f"Pozisyon kapatma hatası: {e2}")
 
-    yon_kod = 1 if yon == 'LONG' else -1
-    sonuc_kod = 1 if basarili else 0
-    ANALitik_HAFIZA["egitim_verileri"].append([rsi, adx, ema_fark, yon_kod, sonuc_kod])
-    if len(ANALitik_HAFIZA["egitim_verileri"]) > 100:
-        ANALitik_HAFIZA["egitim_verileri"].pop(0)
-        
-    yapay_zekayi_egit_ve_guncelle()
+    # GÜRÜLTÜ FİLTRESİ: Eğer işlem anlık bir balina iğnesi/gürültü yüzünden patladıysa eğitime ZARAR olarak eklemiyoruz!
+    if not is_noise:
+        yon_kod = 1 if yon == 'LONG' else -1
+        sonuc_kod = 1 if basarili else 0
+        ANALitik_HAFIZA["egitim_verileri"].append([rsi, adx, ema_fark, yon_kod, sonuc_kod])
+        if len(ANALitik_HAFIZA["egitim_verileri"]) > 100:
+            ANALitik_HAFIZA["egitim_verileri"].pop(0)
+            
+        yapay_zekayi_egit_ve_guncelle()
 
     if symbol in AKTIF_GRID_SISTEMLERI:
         del AKTIF_GRID_SISTEMLERI[symbol]
@@ -416,6 +418,21 @@ def otomatik_arkaplan_tarayici():
                         
                     elif net_kar_zarar_yuzdesi <= -ZARAR_KES_ROESINI_ISTENEN or pos_bilgi["percentage"] <= -ZARAR_KES_ROESINI_ISTENEN:
                         tahmini_zarar_usd = abs(pos_bilgi["unrealizedPnl"]) if pos_bilgi["unrealizedPnl"] < 0 else 1.0
+                        
+                        # --- ANOMALİ / GÜRÜLTÜ TESPİTİ ---
+                        # Son mumu kontrol ediyoruz: Hacim son 20 mumun ortalamasının 3 katından fazlaysa,
+                        # bu anlık bir balina iğnesidir ve modele "yanlış sinyal" olarak ezberletilmez.
+                        is_noise_flag = False
+                        try:
+                            check_ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=20)
+                            check_df = pd.DataFrame(check_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                            ortalama_hacim = check_df['volume'].iloc[:-1].mean()
+                            son_hacim = check_df['volume'].iloc[-1]
+                            if son_hacim > (ortalama_hacim * 3.0):
+                                is_noise_flag = True
+                        except Exception:
+                            pass
+
                         ANALitik_HAFIZA["gunluk_net_kar_usd"] -= tahmini_zarar_usd
                         ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
                         
@@ -425,13 +442,18 @@ def otomatik_arkaplan_tarayici():
                             "giris_fiyati": merkez,
                             "zarar_orani": net_kar_zarar_yuzdesi,
                             "zarar_usd": tahmini_zarar_usd,
-                            "zaman": time.strftime('%H:%M:%S')
+                            "zaman": time.strftime('%H:%M:%S'),
+                            "gurultu_mu": is_noise_flag
                         }
                         ANALitik_HAFIZA["basarisiz_analizler"].append(analitik_hata_notu)
                         hafizayi_kaydet()
                         
-                        mesaj = f"🛑 *ZARAR KES & ÖĞRETİLDİ* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%`)"
-                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj, rsi=rsi_degeri, adx=adx_degeri, ema_fark=ema_fark_degeri, basarili=False)
+                        if is_noise_flag:
+                            mesaj = f"⚡ *ANOMALİ TESPİT EDİLDİ (GÜRÜLTÜ SÜZÜLDÜ)* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%`)"
+                        else:
+                            mesaj = f"🛑 *ZARAR KES & ÖĞRETİLDİ* - `{symbol}` (`{net_kar_zarar_yuzdesi:.2f}%`)"
+                            
+                        pozisyonu_garantili_kapat(symbol, yon, pos_bilgi["contracts"], mesaj, rsi=rsi_degeri, adx=adx_degeri, ema_fark=ema_fark_degeri, basarili=False, is_noise=is_noise_flag)
                         
                     continue
 
@@ -449,6 +471,15 @@ def otomatik_arkaplan_tarayici():
                     continue
 
                 try:
+                    # --- 1. ÜST ZAMAN DİLİMİ (4H) TREND FİLTRESİ ---
+                    ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=30)
+                    df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    ema50_4h = ta.trend.ema_indicator(df_4h['close'], window=50).iloc[-1]
+                    ema200_4h = ta.trend.ema_indicator(df_4h['close'], window=200).iloc[-1]
+                    # Eğer 4 saatlikte EMA50 > EMA200 ise ana trend YUKARI (LONG), aksi halde AŞAĞI (SHORT)
+                    ana_trend_yonu = "LONG" if ema50_4h > ema200_4h else "SHORT"
+
+                    # --- 2. ALT ZAMAN DİLİMİ (15M) STRATEJİSİ ---
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     
@@ -465,6 +496,11 @@ def otomatik_arkaplan_tarayici():
                     continue
 
                 grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
+
+                # --- KATİ TREND DUVARI ---
+                # 4 saatlik ana trend ile 15 dakikalık sinyal uyuşmuyorsa işlem AÇMA!
+                if grid_yonu != ana_trend_yonu:
+                    continue
 
                 if grid_yonu == "SHORT" and rsi < 42:
                     continue 
@@ -493,46 +529,4 @@ def otomatik_arkaplan_tarayici():
                         
                     miktar = float(exchange.amount_to_precision(symbol, gercek_ham_miktar))
                 except Exception:
-                    miktar = float(exchange.amount_to_precision(symbol, ham_miktar))
-
-                emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
-                
-                try:
-                    exchange.create_market_order(symbol, emir_yonu, miktar)
-
-                    AKTIF_GRID_SISTEMLERI[symbol] = {
-                        "giris_fiyati": guncel_fiyat,
-                        "giris_rsi": rsi,
-                        "giris_adx": adx_degeri,
-                        "ema_fark": ema_farki_orani,
-                        "yon": grid_yonu,
-                        "miktar": miktar
-                    }
-                    hafizayi_kaydet()
-
-                    telegram_mesaj_gonder(f"🚀 *YENİ İŞLEM AÇILDI* - `{symbol}` ({grid_yonu})\nGiriş: `{guncel_fiyat}` | RSI: `{rsi:.1f}`")
-
-                except Exception as e:
-                    print(f"Emir açma hatası: {e}")
-
-        except Exception as e:
-            print(f"Tarayıcı döngü hatası: {e}")
-            
-        time.sleep(10)
-
-def main():
-    threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    
-    app_telegram = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app_telegram.add_handler(CommandHandler("durum", durum_komutu))
-    app_telegram.add_handler(CommandHandler("baslat", baslat_komutu))
-    app_telegram.add_handler(CommandHandler("durdur", durdur_komutu))
-    app_telegram.add_handler(CommandHandler("kapat", kapat_komutu))
-    
-    print("🤖 Telegram Bot & Supabase Servisleri Başlatıldı.")
-    app_telegram.run_polling()
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
-    main()
+                    continue
