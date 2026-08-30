@@ -35,11 +35,10 @@ exchange = ccxt.gate({
 exchange.set_sandbox_mode(True)
 
 TAKIP_EDILENLER = [
-    'SOL/USDT:USDT', 
-    'AVAX/USDT:USDT', 'HYPE/USDT:USDT', 'XRP/USDT:USDT', 
-    'NEAR/USDT:USDT', 'LINK/USDT:USDT', 'DOGE/USDT:USDT', 'ADA/USDT:USDT'
+    'SOL/USDT:USDT', 'AVAX/USDT:USDT', 'HYPE/USDT:USDT', 
+    'XRP/USDT:USDT', 'NEAR/USDT:USDT', 'LINK/USDT:USDT', 
+    'DOGE/USDT:USDT', 'ADA/USDT:USDT'
 ]
-
 BOT_CALISIYOR_MU = True
 KALDIRAC = 10
 
@@ -103,7 +102,7 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
 # ==================== KASA KORUMA & RİSK YÖNETİMİ ====================
 HEDEF_ROESINI_ISTENEN = 10.0      
 ZARAR_KES_ROESINI_ISTENEN = 5.0 
-MIN_ADX_GUCU = 15.0              
+MIN_ADX_GUCU = 20.0              # ADX tekrar 20 yapıldı
 # =================================================================     
 
 # ==================== YAPAY ZEKA MODELİ (ML) ====================
@@ -476,10 +475,7 @@ def otomatik_arkaplan_tarayici():
                     ema50_4h = ta.trend.ema_indicator(df_4h['close'], window=50).iloc[-1]
                     ema200_4h = ta.trend.ema_indicator(df_4h['close'], window=200).iloc[-1]
                     
-                    son_mum_4h = df_4h.iloc[-1]
-                    mum_yesil_4h = son_mum_4h['close'] > son_mum_4h['open']
-                    
-                    ana_trend_yonu = "LONG" if (ema50_4h > ema200_4h and mum_yesil_4h) else ("SHORT" if (ema50_4h < ema200_4h and not mum_yesil_4h) else None)
+                    ana_trend_yonu = "LONG" if (ema50_4h > ema200_4h) else ("SHORT" if (ema50_4h < ema200_4h) else None)
                     
                     if not ana_trend_yonu:
                         continue 
