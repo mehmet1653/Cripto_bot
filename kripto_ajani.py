@@ -545,21 +545,23 @@ def otomatik_arkaplan_tarayici():
             print(f"Tarayıcı döngü hatası: {e}")
         time.sleep(10)
 
-def telegram_botunu_baslat(application):
-    application.run_polling()
-
 if __name__ == '__main__':
+    # Flask sunucusunu arka planda çalıştırıyoruz
+    flask_thread = threading.Thread(
+        target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)), use_reloader=False),
+        daemon=True
+    )
+    flask_thread.start()
+    
+    # Arka plan kripto tarayıcısını başlatıyoruz
     t = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
     t.start()
     
+    # Telegram botunu ana thread'de doğrudan çalıştırıyoruz
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     application.add_handler(CommandHandler("durum", durum_komutu))
     application.add_handler(CommandHandler("baslat", baslat_komutu))
     application.add_handler(CommandHandler("durdur", durdur_komutu))
     application.add_handler(CommandHandler("kapat", kapat_komutu))
     
-    tg_thread = threading.Thread(target=telegram_botunu_baslat, args=(application,), daemon=True)
-    tg_thread.start()
-    
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    application.run_polling()
