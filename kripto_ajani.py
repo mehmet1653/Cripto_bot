@@ -39,9 +39,7 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-TAKIP_EDILENLER = [
-    'BTC/USDT:USDT', 
-    'ETH/USDT:USDT', 
+TAKIP_EDILENLER = [ 
     'SOL/USDT:USDT', 
     'XRP/USDT:USDT', 
     'HYPE/USDT:USDT', 
