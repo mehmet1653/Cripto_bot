@@ -50,6 +50,7 @@ TAKIP_EDILENLER = [
 
 BOT_CALISIYOR_MU = True
 KALDIRAC = 10
+MAKSIMUM_ACIK_ISLEM = 2  # Aynı anda açılacak maksimum pozisyon sınırı (Limit hatasını önlemek için)
 
 # ==================== SUPABASE HAFIZA FONKSİYONLARI ====================
 def hafizayi_yukle():
@@ -174,7 +175,7 @@ def telegram_mesaj_gonder(mesaj):
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
     ai_durum = "Aktif & Eğitildi 🧠" if ai_model_egitildi else "Veri Toplanıyor 🔄"
-    return f"Supabase Hafızalı AI Bot (Trend + Yatay Mod) | Durum: {durum_str} | ML Model: {ai_durum}"
+    return f"Supabase Hafızalı AI Bot (Esnek Trend + Yatay Mod) | Durum: {durum_str} | ML Model: {ai_durum}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -229,6 +230,10 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=0, adx=0, e
 
     if sebep_mesaji:
         telegram_mesaj_gonder(sebep_mesaji)
+
+async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    status_text = get_account_status_summary()
+    await update.message.reply_text(status_text, parse_mode='Markdown')
 
 def get_account_status_summary():
     try:
@@ -316,10 +321,6 @@ def get_account_status_summary():
     except Exception as e:
         return f"Kasa durumu alınırken hata oluştu: {str(e)}"
 
-async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    status_text = get_account_status_summary()
-    await update.message.reply_text(status_text, parse_mode='Markdown')
-
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
@@ -357,7 +358,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 Supabase Hafızalı Akıllı Tarayıcı (Trend + Yatay Mod) aktif.")
+    print("🚀 Supabase Hafızalı Akıllı Tarayıcı (Esnek Trend + Yatay Mod) aktif.")
     
     try:
         exchange.load_markets()
@@ -377,15 +378,18 @@ def otomatik_arkaplan_tarayici():
                 borsa_pozisyonlari = []
 
             aktif_borsa_map = {}
+            acik_pozisyon_sayisi = 0
             for pos in borsa_pozisyonlari:
-                if float(pos.get('contracts', 0)) > 0:
+                contracts = float(pos.get('contracts', 0))
+                if contracts > 0:
+                    acik_pozisyon_sayisi += 1
                     sym = pos.get('symbol')
                     side = str(pos.get('side', '')).upper()
                     if not side:
                         side = "LONG" if float(pos.get('notional', 0)) > 0 else "SHORT"
                     aktif_borsa_map[sym] = {
                         "side": side,
-                        "contracts": float(pos['contracts']),
+                        "contracts": contracts,
                         "entryPrice": float(pos.get('entryPrice', 0)),
                         "unrealizedPnl": float(pos.get('unrealizedPnl', 0)),
                         "percentage": float(pos.get('percentage', 0))
@@ -450,6 +454,10 @@ def otomatik_arkaplan_tarayici():
                 if symbol in aktif_borsa_map:
                     continue
 
+                # Maksimum açık pozisyon kontrolü (Limit aşımını engeller)
+                if acik_pozisyon_sayisi >= MAKSIMUM_ACIK_ISLEM:
+                    continue
+
                 try:
                     balance = exchange.fetch_balance()
                     toplam_bakiye = float(balance['total'].get('USDT', 0))
@@ -461,7 +469,6 @@ def otomatik_arkaplan_tarayici():
                     continue
 
                 try:
-                    # Göstergeleri ve Verileri Çek
                     ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
                     df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     ema20_1h = ta.trend.ema_indicator(df_1h['close'], window=20).iloc[-1]
@@ -478,34 +485,33 @@ def otomatik_arkaplan_tarayici():
                     adx_indicator = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14)
                     adx_degeri = adx_indicator.adx().iloc[-1]
 
-                    # Bollinger Bantları (Yatay piyasa analizi için)
                     bollinger = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
                     bb_alt = bollinger.bollinger_lband().iloc[-1]
                     bb_ust = bollinger.bollinger_hband().iloc[-1]
                 except Exception:
                     continue
 
-                # ==================== STRATEJİ SEÇİMİ ====================
+                # ==================== ESNETİLMİŞ STRATEJİ SEÇİMİ ====================
                 islem_tipi = None
                 grid_yonu = None
 
                 # 1. DURUM: Güçlü Trend Piyasası (ADX >= 20)
                 if adx_degeri >= MIN_ADX_GUCU:
-                    if ana_trend == "LONG" and ema7 > ema21 and rsi < 58:
+                    if ana_trend == "LONG" and ema7 > ema21 and rsi < 60:
                         grid_yonu = "LONG"
                         islem_tipi = "TREND (LONG)"
-                    elif ana_trend == "SHORT" and ema7 < ema21 and rsi > 42:
+                    elif ana_trend == "SHORT" and ema7 < ema21 and rsi > 40:
                         grid_yonu = "SHORT"
                         islem_tipi = "TREND (SHORT)"
 
-                # 2. DURUM: Yatay / Testere Piyasası (ADX < 20 - Bollinger Bant Tepkisi)
+                # 2. DURUM: Yatay / Testere Piyasası (ADX < 20 - Esnetilmiş Bollinger Bant Tepkisi)
                 else:
-                    # Fiyat alt banda çok yakınsa veya alt bandı kırıp RSI aşırı satımdan dönüyorsa LONG (Destek tepkisi)
-                    if guncel_fiyat <= bb_alt * 1.002 and rsi < 38:
+                    # Esnetilmiş destek bölgesi (RSI < 45 ve alt banda yakın/iğne atmış)
+                    if guncel_fiyat <= bb_alt * 1.005 and rsi < 45:
                         grid_yonu = "LONG"
                         islem_tipi = "YATAY/TESTERE (DESTEK ALIMI)"
-                    # Fiyat üst banda çok yakınsa veya üst bandı zorlayıp RSI aşırı alımdan dönüyorsa SHORT (Direnç tepkisi)
-                    elif guncel_fiyat >= bb_ust * 0.998 and rsi > 62:
+                    # Esnetilmiş direnç bölgesi (RSI > 55 ve üst banda yakın/iğne atmış)
+                    elif guncel_fiyat >= bb_ust * 0.995 and rsi > 55:
                         grid_yonu = "SHORT"
                         islem_tipi = "YATAY/TESTERE (DİRENÇ SATIŞI)"
 
@@ -515,7 +521,6 @@ def otomatik_arkaplan_tarayici():
                 ema_farki_orani = float(ema7 - ema21)
                 yon_kod_degeri = 1 if grid_yonu == 'LONG' else -1
                 
-                # Yapay Zeka Onayı
                 if not yapay_zeka_islem_onayi(rsi, adx_degeri, ema_farki_orani, yon_kod_degeri):
                     continue
 
@@ -541,6 +546,7 @@ def otomatik_arkaplan_tarayici():
                 
                 try:
                     exchange.create_market_order(symbol, emir_yonu, miktar)
+                    acik_pozisyon_sayisi += 1
                     
                     AKTIF_GRID_SISTEMLERI[symbol] = {
                         "giris_rsi": rsi,
