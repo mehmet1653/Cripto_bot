@@ -103,7 +103,7 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
 # ==================== KASA KORUMA & RİSK YÖNETİMİ ====================
 HEDEF_ROESINI_ISTENEN = 10.0      
 ZARAR_KES_ROESINI_ISTENEN = 5.0 
-MIN_ADX_GUCU = 20.0              
+MIN_ADX_GUCU = 15.0              
 # =================================================================     
 
 # ==================== YAPAY ZEKA MODELİ (ML) ====================
