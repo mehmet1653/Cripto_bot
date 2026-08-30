@@ -41,8 +41,6 @@ exchange.set_sandbox_mode(True)
 
 # Yüksek hacimli 8 temel coin (Gate.io Vadeli İşlem formatı)
 TAKIP_EDILENLER = [
-    'BTC/USDT:USDT', 
-    'ETH/USDT:USDT', 
     'SOL/USDT:USDT', 
     'XRP/USDT:USDT', 
     'HYPE/USDT:USDT', 
@@ -464,7 +462,7 @@ def otomatik_arkaplan_tarayici():
                     continue
 
                 try:
-                    # 1 Saatlik Orta Vadeli Trend Filtresi (Daha hassas ve çevik)
+                    # 1 Saatlik Orta Vadeli Trend Filtresi
                     ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
                     df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     ema20_1h = ta.trend.ema_indicator(df_1h['close'], window=20).iloc[-1]
@@ -548,20 +546,22 @@ def otomatik_arkaplan_tarayici():
             
         time.sleep(10)
 
-def telegram_botunu_baslat():
+if __name__ == '__main__':
+    # 1. Alım-satım ve takip tarayıcısını arka plan thread'inde başlatıyoruz
+    tarayici_thread = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
+    tarayici_thread.start()
+    
+    # 2. Flask sunucusunu arka plan thread'ine taşıyoruz (Railway port dinlemesi için)
+    port = int(os.environ.get("PORT", 5000))
+    flask_thread = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False), daemon=True)
+    flask_thread.start()
+    
+    # 3. Telegram botunun run_polling() metodunu ANA THREAD (Main Thread) içinde çalıştırıyoruz (Kritik Çözüm)
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
+    
+    print("🤖 Telegram Bot Ana Thread üzerinde polling modunda başlatılıyor...")
     app_tg.run_polling()
-
-if __name__ == '__main__':
-    tarayici_thread = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
-    tarayici_thread.start()
-    
-    telegram_thread = threading.Thread(target=telegram_botunu_baslat, daemon=True)
-    telegram_thread.start()
-    
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
