@@ -97,8 +97,8 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
 })
 
 # ==================== KASA KORUMA & RİSK YÖNETİMİ ====================
-HEDEF_ROESINI_ISTENEN = 10.0      
-ZARAR_KES_ROESINI_ISTENEN = 5.0 
+HEDEF_ROESINI_ISTENEN = 20.0      
+ZARAR_KES_ROESINI_ISTENEN = 10.0 
 MIN_ADX_GUCU = 20.0              
 # ======================================================================
 
@@ -203,7 +203,6 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=0, adx=0, e
         except Exception as e2:
             print(f"Pozisyon kapatma hatası: {e2}")
 
-    # GÜRÜLTÜ FİLTRESİ: Eğer işlem anlık bir balina iğnesi/gürültü yüzünden patladıysa eğitime ZARAR olarak eklemiyoruz!
     if not is_noise:
         yon_kod = 1 if yon == 'LONG' else -1
         sonuc_kod = 1 if basarili else 0
@@ -419,9 +418,6 @@ def otomatik_arkaplan_tarayici():
                     elif net_kar_zarar_yuzdesi <= -ZARAR_KES_ROESINI_ISTENEN or pos_bilgi["percentage"] <= -ZARAR_KES_ROESINI_ISTENEN:
                         tahmini_zarar_usd = abs(pos_bilgi["unrealizedPnl"]) if pos_bilgi["unrealizedPnl"] < 0 else 1.0
                         
-                        # --- ANOMALİ / GÜRÜLTÜ TESPİTİ ---
-                        # Son mumu kontrol ediyoruz: Hacim son 20 mumun ortalamasının 3 katından fazlaysa,
-                        # bu anlık bir balina iğnesidir ve modele "yanlış sinyal" olarak ezberletilmez.
                         is_noise_flag = False
                         try:
                             check_ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=20)
@@ -471,15 +467,12 @@ def otomatik_arkaplan_tarayici():
                     continue
 
                 try:
-                    # --- 1. ÜST ZAMAN DİLİMİ (4H) TREND FİLTRESİ ---
                     ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=30)
                     df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     ema50_4h = ta.trend.ema_indicator(df_4h['close'], window=50).iloc[-1]
                     ema200_4h = ta.trend.ema_indicator(df_4h['close'], window=200).iloc[-1]
-                    # Eğer 4 saatlikte EMA50 > EMA200 ise ana trend YUKARI (LONG), aksi halde AŞAĞI (SHORT)
                     ana_trend_yonu = "LONG" if ema50_4h > ema200_4h else "SHORT"
 
-                    # --- 2. ALT ZAMAN DİLİMİ (15M) STRATEJİSİ ---
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     
@@ -497,8 +490,6 @@ def otomatik_arkaplan_tarayici():
 
                 grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
 
-                # --- KATİ TREND DUVARI ---
-                # 4 saatlik ana trend ile 15 dakikalık sinyal uyuşmuyorsa işlem AÇMA!
                 if grid_yonu != ana_trend_yonu:
                     continue
 
@@ -530,3 +521,39 @@ def otomatik_arkaplan_tarayici():
                     miktar = float(exchange.amount_to_precision(symbol, gercek_ham_miktar))
                 except Exception:
                     continue
+
+                try:
+                    order = exchange.create_market_order(symbol, 'buy' if grid_yonu == 'LONG' else 'sell', miktar)
+                    entry_price = float(order.get('average', guncel_fiyat))
+                    if entry_price == 0:
+                        entry_price = guncel_fiyat
+                        
+                    AKTIF_GRID_SISTEMLERI[symbol] = {
+                        "yon": grid_yonu,
+                        "giris_fiyati": entry_price,
+                        "giris_rsi": rsi,
+                        "giris_adx": adx_degeri,
+                        "ema_fark": ema_farki_orani
+                    }
+                    hafizayi_kaydet()
+                    
+                    telegram_mesaj_gonder(f"🚀 *YENİ İŞLEM AÇILDI* - `{symbol}` (`{grid_yonu}`)\nGiriş: `{entry_price}` | RSI: `{rsi:.1f}` | ADX: `{adx_degeri:.1f}`")
+                except Exception as e:
+                    print(f"Emir gönderme hatası {symbol}: {e}")
+
+        except Exception as e:
+            print(f"Tarayıcı döngü hatası: {e}")
+        time.sleep(10)
+
+if __name__ == '__main__':
+    t = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
+    t.start()
+    
+    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    application.add_handler(CommandHandler("durum", durum_komutu))
+    application.add_handler(CommandHandler("baslat", baslat_komutu))
+    application.add_handler(CommandHandler("durdur", durdur_komutu))
+    application.add_handler(CommandHandler("kapat", kapat_komutu))
+    
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
