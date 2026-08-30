@@ -464,13 +464,13 @@ def otomatik_arkaplan_tarayici():
                     continue
 
                 try:
-                    # 4 Saatlik Ana Trend Kontrolü
-                    ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=50)
-                    df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    ema50_4h = ta.trend.ema_indicator(df_4h['close'], window=50).iloc[-1]
-                    ema200_4h = ta.trend.ema_indicator(df_4h['close'], window=200).iloc[-1]
+                    # 1 Saatlik Orta Vadeli Trend Filtresi (Daha hassas ve çevik)
+                    ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
+                    df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    ema20_1h = ta.trend.ema_indicator(df_1h['close'], window=20).iloc[-1]
+                    ema50_1h = ta.trend.ema_indicator(df_1h['close'], window=50).iloc[-1]
                     
-                    ana_trend = "LONG" if ema50_4h > ema200_4h else "SHORT"
+                    ana_trend = "LONG" if ema20_1h > ema50_1h else "SHORT"
 
                     # 15 Dakikalık İvme ve Göstergeler
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
@@ -488,7 +488,7 @@ def otomatik_arkaplan_tarayici():
                 if adx_degeri < MIN_ADX_GUCU:
                     continue
 
-                # Ana Trend ve 15m Kesişim Uyumu
+                # 1h Trend ve 15m Kesişim Uyumu
                 grid_yonu = None
                 if ana_trend == "LONG" and ema7 > ema21 and rsi < 58:
                     grid_yonu = "LONG"
