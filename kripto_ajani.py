@@ -18,7 +18,6 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = "8870934003:AAGIpiwdgpnQVW7nbJIRcR0dOLOzj-MOZsA"
 CHAT_ID = "6929517567"
 
-# Supabase Güncel Bağlantı Bilgilerin
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://rllpcylzhptqwzmzehnv.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "Sb_secret_ln9y67Ep_zCtOQ9Q2NE8KQ_nf0gKkmO")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -100,7 +99,7 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
 HEDEF_ROESINI_ISTENEN = 10.0      
 ZARAR_KES_ROESINI_ISTENEN = 5.0 
 MIN_ADX_GUCU = 20.0              
-# ======================================================================
+# =================================================================     
 
 # ==================== YAPAY ZEKA MODELİ (ML) ====================
 ai_model = RandomForestClassifier(n_estimators=50, random_state=42)
@@ -471,7 +470,15 @@ def otomatik_arkaplan_tarayici():
                     df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     ema50_4h = ta.trend.ema_indicator(df_4h['close'], window=50).iloc[-1]
                     ema200_4h = ta.trend.ema_indicator(df_4h['close'], window=200).iloc[-1]
-                    ana_trend_yonu = "LONG" if ema50_4h > ema200_4h else "SHORT"
+                    
+                    # 🔥 EKLEDİĞİMİZ FİLTRE: 4 Saatlik Mumun Rengi ve Gövde Durumu Teyidi
+                    son_mum_4h = df_4h.iloc[-1]
+                    mum_yesil_4h = son_mum_4h['close'] > son_mum_4h['open']
+                    
+                    ana_trend_yonu = "LONG" if (ema50_4h > ema200_4h and mum_yesil_4h) else ("SHORT" if (ema50_4h < ema200_4h and not mum_yesil_4h) else None)
+                    
+                    if not ana_trend_yonu:
+                        continue # Eğer 4 saatlik mum kararsızsa veya trend ile mum rengi çelişiyorsa işlem arama
 
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -480,88 +487,67 @@ def otomatik_arkaplan_tarayici():
                     ema21 = ta.trend.ema_indicator(df['close'], window=21).iloc[-1]
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
                     
-                    adx_indicator = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14)
-                    adx_degeri = adx_indicator.adx().iloc[-1]
-                except Exception:
-                    continue
-
-                if adx_degeri < MIN_ADX_GUCU:
-                    continue
-
-                grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
-
-                if grid_yonu != ana_trend_yonu:
-                    continue
-
-                if grid_yonu == "SHORT" and rsi < 42:
-                    continue 
-                if grid_yonu == "LONG" and rsi > 58:
-                    continue 
-
-                ema_farki_orani = float(ema7 - ema21)
-                yon_kod_degeri = 1 if grid_yonu == 'LONG' else -1
-                
-                if not yapay_zeka_islem_onayi(rsi, adx_degeri, ema_farki_orani, yon_kod_degeri):
-                    continue
-
-                set_isolated_leverage_safely(symbol, KALDIRAC)
-                
-                hedef_pozisyon_usdt = hedef_marjin * KALDIRAC
-                ham_miktar = hedef_pozisyon_usdt / guncel_fiyat
-
-                try:
-                    market_info = exchange.market(symbol)
-                    contract_size = float(market_info.get('contractSize', 1.0))
-                    min_amount = float(market_info['limits']['amount']['min'] or 1.0)
+                    adx_obj = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14)
+                    adx = adx_obj.adx().iloc[-1]
                     
-                    gercek_ham_miktar = ham_miktar / contract_size
-                    if gercek_ham_miktar < min_amount:
-                        gercek_ham_miktar = min_amount
-                        
-                    miktar = float(exchange.amount_to_precision(symbol, gercek_ham_miktar))
-                except Exception:
-                    continue
-
-                try:
-                    order = exchange.create_market_order(symbol, 'buy' if grid_yonu == 'LONG' else 'sell', miktar)
-                    entry_price = float(order.get('average', guncel_fiyat))
-                    if entry_price == 0:
-                        entry_price = guncel_fiyat
-                        
-                    AKTIF_GRID_SISTEMLERI[symbol] = {
-                        "yon": grid_yonu,
-                        "giris_fiyati": entry_price,
-                        "giris_rsi": rsi,
-                        "giris_adx": adx_degeri,
-                        "ema_fark": ema_farki_orani
-                    }
-                    hafizayi_kaydet()
+                    ema_fark = float(ema7 - ema21)
                     
-                    telegram_mesaj_gonder(f"🚀 *YENİ İŞLEM AÇILDI* - `{symbol}` (`{grid_yonu}`)\nGiriş: `{entry_price}` | RSI: `{rsi:.1f}` | ADX: `{adx_degeri:.1f}`")
+                    sinyal = None
+                    if ana_trend_yonu == "LONG" and ema7 > ema21 and rsi < 58 and adx > MIN_ADX_GUCU:
+                        yon_kod = 1
+                        if yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod):
+                            sinyal = "LONG"
+                    elif ana_trend_yonu == "SHORT" and ema7 < ema21 and rsi > 42 and adx > MIN_ADX_GUCU:
+                        yon_kod = -1
+                        if yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod):
+                            sinyal = "SHORT"
+                            
+                    if sinyal:
+                        set_isolated_leverage_safely(symbol, KALDIRAC)
+                        ticker = exchange.fetch_ticker(symbol)
+                        giris_fiyati = ticker['ask'] if sinyal == 'LONG' else ticker['bid']
+                        
+                        notional_deger = hedef_marjin * KALDIRAC
+                        miktar = notional_deger / giris_fiyati
+                        
+                        market_info = exchange.market(symbol)
+                        min_amount = float(market_info['limits']['amount']['min'] or 1.0)
+                        if miktar < min_amount:
+                            miktar = min_amount
+                        miktar = float(exchange.amount_to_precision(symbol, miktar))
+                        
+                        islem_yonu = 'buy' if sinyal == 'LONG' else 'sell'
+                        exchange.create_market_order(symbol, islem_yonu, miktar)
+                        
+                        AKTIF_GRID_SISTEMLERI[symbol] = {
+                            "giris_rsi": float(rsi),
+                            "giris_adx": float(adx),
+                            "ema_fark": float(ema_fark)
+                        }
+                        hafizayi_kaydet()
+                        
+                        telegram_mesaj_gonder(f"🚀 *YENİ İŞLEM AÇILDI ({sinyal})* - `{symbol}`\nGiriş: `{giris_fiyati}` | ADX: `{adx:.1f}` | RSI: `{rsi:.1f}`")
                 except Exception as e:
-                    print(f"Emir gönderme hatası {symbol}: {e}")
-
+                    print(f"{symbol} tarama hatası: {e}")
+                    
         except Exception as e:
             print(f"Tarayıcı döngü hatası: {e}")
+            
         time.sleep(10)
 
+def main():
+    threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
+    
+    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app_tg.add_handler(CommandHandler("durum", durum_komutu))
+    app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
+    app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
+    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
+    
+    threading.Thread(target=app_tg.run_polling, kwargs={'drop_pending_updates': True}, daemon=True).start()
+    
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
+
 if __name__ == '__main__':
-    # Flask sunucusunu arka planda çalıştırıyoruz
-    flask_thread = threading.Thread(
-        target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)), use_reloader=False),
-        daemon=True
-    )
-    flask_thread.start()
-    
-    # Arka plan kripto tarayıcısını başlatıyoruz
-    t = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
-    t.start()
-    
-    # Telegram botunu ana thread'de doğrudan çalıştırıyoruz
-    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    application.add_handler(CommandHandler("durum", durum_komutu))
-    application.add_handler(CommandHandler("baslat", baslat_komutu))
-    application.add_handler(CommandHandler("durdur", durdur_komutu))
-    application.add_handler(CommandHandler("kapat", kapat_komutu))
-    
-    application.run_polling()
+    main()
