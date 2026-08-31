@@ -39,7 +39,9 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-TAKIP_EDILENLER = [ 
+TAKIP_EDILENLER = [
+    'BTC/USDT:USDT', 
+    'ETH/USDT:USDT', 
     'SOL/USDT:USDT', 
     'XRP/USDT:USDT', 
     'HYPE/USDT:USDT', 
@@ -50,7 +52,7 @@ TAKIP_EDILENLER = [
 
 BOT_CALISIYOR_MU = True
 KALDIRAC = 10
-MAKSIMUM_ACIK_ISLEM = 2  # Aynı anda açılacak maksimum pozisyon sınırı (Limit hatasını önlemek için)
+MAKSIMUM_ACIK_ISLEM = 2  # Aynı anda açılacak maksimum pozisyon sınırı
 
 # ==================== SUPABASE HAFIZA FONKSİYONLARI ====================
 def hafizayi_yukle():
@@ -112,8 +114,8 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
 # ==================== KASA KORUMA & RİSK YÖNETİMİ ====================
 HEDEF_ROESINI_ISTENEN = 20.0      
 ZARAR_KES_ROESINI_ISTENEN = 10.0 
-MIN_ADX_GUCU = 20.0              # Bu seviyenin altı yatay/testere piyasa kabul edilecek
-# ======================================================================
+MIN_ADX_GUCU = 20.0              
+# =================================================================     
 
 # ==================== YAPAY ZEKA MODELİ (ML) ====================
 ai_model = RandomForestClassifier(n_estimators=50, random_state=42)
@@ -175,7 +177,7 @@ def telegram_mesaj_gonder(mesaj):
 def home():
     durum_str = "AKTİF 🟢" if BOT_CALISIYOR_MU else "BEKLEMEDE ⏸️"
     ai_durum = "Aktif & Eğitildi 🧠" if ai_model_egitildi else "Veri Toplanıyor 🔄"
-    return f"Supabase Hafızalı AI Bot (Esnek Trend + Yatay Mod) | Durum: {durum_str} | ML Model: {ai_durum}"
+    return f"Supabase Hafızalı AI Bot (Optimize Trend + Yatay Mod) | Durum: {durum_str} | ML Model: {ai_durum}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -358,7 +360,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 Supabase Hafızalı Akıllı Tarayıcı (Esnek Trend + Yatay Mod) aktif.")
+    print("🚀 Supabase Hafızalı Akıllı Tarayıcı (Optimize Trend + Yatay Mod) aktif.")
     
     try:
         exchange.load_markets()
@@ -454,7 +456,6 @@ def otomatik_arkaplan_tarayici():
                 if symbol in aktif_borsa_map:
                     continue
 
-                # Maksimum açık pozisyon kontrolü (Limit aşımını engeller)
                 if acik_pozisyon_sayisi >= MAKSIMUM_ACIK_ISLEM:
                     continue
 
@@ -475,7 +476,7 @@ def otomatik_arkaplan_tarayici():
                     ema50_1h = ta.trend.ema_indicator(df_1h['close'], window=50).iloc[-1]
                     ana_trend = "LONG" if ema20_1h > ema50_1h else "SHORT"
 
-                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
+                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=100) # Veri derinliği artırıldı
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     
                     ema7 = ta.trend.ema_indicator(df['close'], window=7).iloc[-1]
@@ -491,26 +492,24 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
-                # ==================== ESNETİLMİŞ STRATEJİ SEÇİMİ ====================
+                # ==================== OPTİMİZE STRATEJİ SEÇİMİ ====================
                 islem_tipi = None
                 grid_yonu = None
 
-                # 1. DURUM: Güçlü Trend Piyasası (ADX >= 20)
+                # 1. DURUM: Güçlü Trend Piyasası (ADX >= 20) - Dip/Tepe yakalamayı önleyen optimize edilmiş RSI sınırları
                 if adx_degeri >= MIN_ADX_GUCU:
-                    if ana_trend == "LONG" and ema7 > ema21 and rsi < 60:
+                    if ana_trend == "LONG" and ema7 > ema21 and rsi < 50: # Aşırı şişmişken long açmaz
                         grid_yonu = "LONG"
                         islem_tipi = "TREND (LONG)"
-                    elif ana_trend == "SHORT" and ema7 < ema21 and rsi > 40:
+                    elif ana_trend == "SHORT" and ema7 < ema21 and rsi > 50: # Aşırı düşmüşken (dibe gelmişken) short açmaz
                         grid_yonu = "SHORT"
                         islem_tipi = "TREND (SHORT)"
 
-                # 2. DURUM: Yatay / Testere Piyasası (ADX < 20 - Esnetilmiş Bollinger Bant Tepkisi)
+                # 2. DURUM: Yatay / Testere Piyasası (ADX < 20 - Bollinger Bant Tepkisi)
                 else:
-                    # Esnetilmiş destek bölgesi (RSI < 45 ve alt banda yakın/iğne atmış)
                     if guncel_fiyat <= bb_alt * 1.005 and rsi < 45:
                         grid_yonu = "LONG"
                         islem_tipi = "YATAY/TESTERE (DESTEK ALIMI)"
-                    # Esnetilmiş direnç bölgesi (RSI > 55 ve üst banda yakın/iğne atmış)
                     elif guncel_fiyat >= bb_ust * 0.995 and rsi > 55:
                         grid_yonu = "SHORT"
                         islem_tipi = "YATAY/TESTERE (DİRENÇ SATIŞI)"
