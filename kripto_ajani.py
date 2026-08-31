@@ -34,7 +34,7 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-# 🚀 BTC ve ETH Çıkartılmış Yüksek Hacimli Coinler Listesi (Toplam 10 Adet)
+# 🚀 BTC ve ETH Çıkartılmış Yüksek Hacimli Coinler Listesi
 TAKIP_EDILENLER = [
     'SOL/USDT:USDT', 'AVAX/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 
     'SUI/USDT:USDT', 'HYPE/USDT:USDT', 'NEAR/USDT:USDT', 'PEPE/USDT:USDT', 
@@ -192,7 +192,28 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         balance = exchange.fetch_balance()
         total = float(balance['total'].get('USDT', 0))
-        await update.message.reply_text(f"📊 *DİNAMİK BOT DURUMU*\n\n💰 Toplam Kasa: `{total:.2f} USDT`\n📌 Aktif İşlem Sayısı: `{len(AKTIF_GRID_SISTEMLERI)}`", parse_mode='Markdown')
+        
+        try:
+            borsa_pozisyonlari = exchange.fetch_positions()
+            aktif_poslar = [p for p in borsa_pozisyonlari if float(p.get('contracts', 0)) > 0]
+        except Exception:
+            aktif_poslar = []
+
+        mesaj = f"📊 *DİNAMİK BOT DURUMU*\n\n💰 Toplam Kasa: `{total:.2f} USDT`\n📌 Aktif İşlem Sayısı: `{len(AKTIF_GRID_SISTEMLERI)}`\n\n"
+        
+        if aktif_poslar:
+            mesaj += "📋 *Açık Pozisyonlar:*\n"
+            for pos in aktif_poslar:
+                sym = pos.get('symbol')
+                yon = str(pos.get('side', '')).upper()
+                kaldirac = pos.get('leverage', 1)
+                pnl = float(pos.get('unrealizedPnl', 0))
+                yuzde = float(pos.get('percentage', 0))
+                mesaj += f"🔹 *{sym}* (`{yon}` {kaldirac}x)\n   Kâr/Zarar: `{pnl:.2f} USDT` (`%{yuzde:.2f}`)\n"
+        else:
+            mesaj += "ℹ️ Şu an borsada açık aktif pozisyon bulunmuyor."
+
+        await update.message.reply_text(mesaj, parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
 
@@ -361,15 +382,21 @@ def otomatik_arkaplan_tarayici():
             
         time.sleep(10)
 
-def telegram_bot_thread():
+def flask_web_server():
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+
+if __name__ == '__main__':
+    # 1. Arka plan tarayıcısını thread olarak başlat
+    threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
+    
+    # 2. Flask web sunucusunu ayrı bir thread'e al (Railway port dinlemesi için)
+    threading.Thread(target=flask_web_server, daemon=True).start()
+    
+    # 3. Telegram Bot'u ANA THREAD (Main Thread) üzerinde çalıştır
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
+    
     app_tg.run_polling()
-
-if __name__ == '__main__':
-    threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    threading.Thread(target=telegram_bot_thread, daemon=True).start()
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
