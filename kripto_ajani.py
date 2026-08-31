@@ -7,11 +7,29 @@ import ta
 import os
 import numpy as np
 import functools
+import logging
+from logging.handlers import RotatingFileHandler
 from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
+
+# ==================== LOGLAMA SİSTEMİ (DİSKTE SAKLAMA) ====================
+log_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+log_file = "bot_faaliyet.log"
+
+# Dosya boyutu 5MB'ı geçerse yenisini açar, en fazla 3 yedek tutar (disk dolmasını önler)
+file_handler = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=3, encoding='utf-8')
+file_handler.setFormatter(log_formatter)
+
+console_handler = logging.StreamHandler(sys.stdout if 'sys' in globals() else None)
+console_handler.setFormatter(log_formatter)
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
 
 import sys
 print = functools.partial(print, flush=True)
@@ -37,14 +55,14 @@ exchange = ccxt.gate({
 exchange.set_sandbox_mode(True)
 
 TAKIP_EDILENLER = [
-    'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 
+    'SOL/USDT:USDT', 
     'XRP/USDT:USDT', 'HYPE/USDT:USDT', 'SUI/USDT:USDT', 
     'DOGE/USDT:USDT', 'AVAX/USDT:USDT'
 ]
 
 BOT_CALISIYOR_MU = True
 KALDIRAC = 10
-MAKSIMUM_ACIK_ISLEM = 2  
+MAKSIMUM_ACIK_ISLEM = 3  
 
 # ==================== SUPABASE HAFIZA ====================
 def hafizayi_yukle():
@@ -52,7 +70,7 @@ def hafizayi_yukle():
         response = supabase.table("bot_hafiza").select("*").eq("id", 1).execute()
         if response.data and len(response.data) > 0:
             veri = response.data[0]
-            print("☁️ Supabase hafızası başarıyla yüklendi.")
+            logger.info("☁️ Supabase hafızası başarıyla yüklendi.")
             return {
                 "aktif_sistemler": veri.get("aktif_sistemler", {}),
                 "analitik": veri.get("analitik", {
@@ -61,7 +79,7 @@ def hafizayi_yukle():
                 })
             }
     except Exception as e:
-        print(f"Supabase hafıza yükleme hatası: {e}")
+        logger.error(f"Supabase hafıza yükleme hatası: {e}")
         
     varsayilan = {
         "aktif_sistemler": {},
@@ -74,7 +92,7 @@ def hafizayi_kaydet_db(aktif_sistemler_data, analitik_data):
     try:
         supabase.table("bot_hafiza").upsert({"id": 1, "aktif_sistemler": aktif_sistemler_data, "analitik": analitik_data}).execute()
     except Exception as e:
-        print(f"Supabase hafıza kaydetme hatası: {e}")
+        logger.error(f"Supabase hafıza kaydetme hatası: {e}")
 
 def hafizayi_kaydet():
     hafizayi_kaydet_db(AKTIF_GRID_SISTEMLERI, ANALitik_HAFIZA)
@@ -89,7 +107,7 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
 HEDEF_ROESINI_ISTENEN = 20.0      
 ZARAR_KES_ROESINI_ISTENEN = 10.0 
 
-# ==================== YAPAY ZEKA (META-LABELING GÜVENLİK DUVARI) ====================
+# ==================== YAPAY ZEKA (META-LABELING) ====================
 ai_model = RandomForestClassifier(n_estimators=100, random_state=42)
 ai_model_egitildi = False
 
@@ -107,34 +125,33 @@ def yapay_zekayi_egit_ve_guncelle():
             return
         ai_model.fit(X, y)
         ai_model_egitildi = True
-        print("🧠 Yapay Zeka Meta-Labeling modeli güncellendi.")
+        logger.info("🧠 Yapay Zeka Meta-Labeling modeli güncellendi.")
     except Exception as e:
-        print(f"Yapay zeka eğitim hatası: {e}")
+        logger.error(f"Yapay zeka eğitim hatası: {e}")
         ai_model_egitildi = False
 
 def meta_labeling_onayi(rsi, adx, atr_orani, yon_kod):
-    """ Yapay zeka bu sinyalin tuzak olup olmadığını denetler (Güvenlik Duvarı) """
     if not ai_model_egitildi:
-        return True # Veri yoksa kurallara güven
+        return True 
     try:
         tahmin = ai_model.predict(np.array([[rsi, adx, atr_orani, yon_kod]]))[0]
-        return bool(tahmin == 1) # 1se işlem onaylı, 0sa tuzak/iptal
+        return bool(tahmin == 1) 
     except Exception:
         return True
 
 # ==================== YARDIMCI ARAÇLAR ====================
 def telegram_mesaj_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print(f"[TEST EKRANI] -> {mesaj}")
+        logger.info(f"[TEST EKRANI] -> {mesaj}")
         return
     try:
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}, timeout=10)
     except Exception as e:
-        print(f"Telegram Gönderme Hatası: {e}")
+        logger.error(f"Telegram Gönderme Hatası: {e}")
 
 @app.route('/')
 def home():
-    return f"Pro Mimari Bot (4 Katmanlı Filtreleme) Aktif 🟢 | ML: {'Eğitildi 🧠' : ai_model_egitildi else 'Veri Toplanıyor 🔄'}"
+    return f"Pro Mimari Bot (Log Kayıtlı) Aktif 🟢 | ML: {'Eğitildi 🧠' if ai_model_egitildi else 'Veri Toplanıyor 🔄'}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -158,7 +175,7 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=0, adx=0, a
         if miktar < min_amt: miktar = min_amt
         exchange.create_market_order(symbol, kapatma_yonu, float(exchange.amount_to_precision(symbol, miktar)), {'reduce_only': True})
     except Exception as e:
-        print(f"Kapatma hatası: {e}")
+        logger.error(f"Kapatma hatası: {e}")
 
     yon_kod = 1 if yon == 'LONG' else -1
     ANALitik_HAFIZA["egitim_verileri"].append([rsi, adx, atr, yon_kod, 1 if basarili else 0])
@@ -204,15 +221,15 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}", parse_mode='Markdown')
 
-# ==================== ANA PRO TARAYICI (4 KATMANLI MİMARİ) ====================
+# ==================== ANA PRO TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 4 Katmanlı Profesyonel Algoritma Devrede.")
+    logger.info("🚀 4 Katmanlı Profesyonel Algoritma ve Dosya Loglama Aktif.")
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
     except Exception as e:
-        print(f"Başlangıç yükleme hatası: {e}")
+        logger.error(f"Başlangıç yükleme hatası: {e}")
 
     while True:
         try:
@@ -249,7 +266,9 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
-                # ---- Pozisyon Yönetimi (Kâr Al / Zarar Kes) ----
+                # Canlı Tarama Logu (Her parite taranırken dosyaya/ekrana yazar)
+                logger.info(f"🔍 Taranıyor -> {symbol} | Fiyat: {guncel_fiyat}")
+
                 if symbol in aktif_borsa_map:
                     pos = aktif_borsa_map[symbol]
                     yon, merkez = pos["side"], pos["entryPrice"]
@@ -281,25 +300,21 @@ def otomatik_arkaplan_tarayici():
                 hedef_marjin = toplam_bakiye / 4.0
                 if toplam_bakiye < hedef_marjin: continue
 
-                # ==================== 4 KATMANLI ANALİZ MOTORU ====================
                 try:
-                    # Katman 1: Çoklu Zaman Dilimi (4h ve 1h Rejim Tespiti)
                     df_4h = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe='4h', limit=50), columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     trend_4h = "LONG" if ta.trend.ema_indicator(df_4h['close'], window=20).iloc[-1] > ta.trend.ema_indicator(df_4h['close'], window=50).iloc[-1] else "SHORT"
 
                     df_1h = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50), columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     trend_1h = "LONG" if ta.trend.ema_indicator(df_1h['close'], window=20).iloc[-1] > ta.trend.ema_indicator(df_1h['close'], window=50).iloc[-1] else "SHORT"
 
-                    if trend_4h != trend_1h: continue # Büyük resim uyuşmuyorsa işlem açma!
+                    if trend_4h != trend_1h: continue 
 
-                    # Katman 2 & 3: 15m Tetikleyici, Volatilite (ATR) ve İğne/Konsolidasyon Koruması
                     df_15m = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe='15m', limit=100), columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     
-                    # İğne Koruması: Son mum çok sert (anormal hacimli/uzun iğneli) ise bekle
                     son_govde = abs(df_15m['close'].iloc[-1] - df_15m['open'].iloc[-1])
                     ortalama_govde = (df_15m['close'] - df_15m['open']).abs().rolling(10).mean().iloc[-1]
                     if son_govde > ortalama_govde * 2.5: 
-                        continue # Manipülatif iğne mumunda işlem açma!
+                        continue 
 
                     rsi = ta.momentum.rsi(df_15m['close'], window=14).iloc[-1]
                     adx = ta.trend.ADXIndicator(df_15m['high'], df_15m['low'], df_15m['close'], window=14).adx().iloc[-1]
@@ -310,23 +325,21 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
-                # Strateji Kararı
                 grid_yonu = None
-                if adx >= 20: # Trend Rejimi
+                if adx >= 20: 
                     if trend_1h == "LONG" and rsi < 55: grid_yonu = "LONG"
                     elif trend_1h == "SHORT" and rsi > 45: grid_yonu = "SHORT"
-                else: # Yatay / Testere Rejimi (Mean Reversion)
+                else: 
                     if guncel_fiyat <= bb_alt * 1.003 and rsi < 42: grid_yonu = "LONG"
                     elif guncel_fiyat >= bb_ust * 0.997 and rsi > 58: grid_yonu = "SHORT"
 
                 if not grid_yonu: continue
 
-                # Katman 4: Yapay Zeka Meta-Labeling Süzgeci (Tuzak Avcısı)
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 if not meta_labeling_onayi(rsi, adx, atr, yon_kod):
-                    continue # Yapay zeka bu sinyali riskli/tuzak buldu, iptal etti!
+                    logger.info(f"🛡️ AI Sinyali Engelledi (Tuzak Koruması) -> {symbol} ({grid_yonu})")
+                    continue 
 
-                # Emir İletim ve Marjin Hesaplama
                 if not set_isolated_leverage_safely(symbol, KALDIRAC): continue
                 
                 ham_miktar = (hedef_marjin * KALDIRAC) / guncel_fiyat
@@ -344,13 +357,13 @@ def otomatik_arkaplan_tarayici():
                     AKTIF_GRID_SISTEMLERI[symbol] = {"rsi": rsi, "adx": adx}
                     hafizayi_kaydet()
                     
-                    telegram_mesaj_gonder(f"🎯 *PRO İŞLEM AÇILDI* - `{symbol}`\n🔹 Yön: `{grid_yonu}` | Kaldıraç: `{KALDIRAC}x`\n📊 RSI: `{rsi:.1f}` | ADX: `{adx:.1f}` (4h/1h Uyumlu)")
-                    print(f"✅ Pro İşlem Açıldı: {symbol} ({grid_yonu})")
+                    telegram_mesaj_gonder(f"🎯 *PRO İŞLEM AÇILDI* - `{symbol}`\n🔹 Yön: `{grid_yonu}` | Kaldıraç: `{KALDIRAC}x`\n📊 RSI: `{rsi:.1f}` | ADX: `{adx:.1f}`")
+                    logger.info(f"✅ Pro İşlem Açıldı: {symbol} ({grid_yonu})")
                 except Exception as e:
-                    print(f"Emir hatası ({symbol}): {e}")
+                    logger.error(f"Emir hatası ({symbol}): {e}")
 
         except Exception as e:
-            print(f"Ana döngü hatası: {e}")
+            logger.error(f"Ana döngü hatası: {e}")
         time.sleep(10)
 
 if __name__ == '__main__':
@@ -363,5 +376,5 @@ if __name__ == '__main__':
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
-    print("🤖 Pro Telegram Bot Çalıştırılıyor...")
+    logger.info("🤖 Pro Telegram Bot ve Loglama Aktif Edildi...")
     app_tg.run_polling()
