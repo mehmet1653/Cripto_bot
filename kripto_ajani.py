@@ -111,8 +111,6 @@ def yapay_zekayi_egit_ve_guncelle():
         X = [item[:4] for item in veriler]
         y = [item[4] for item in veriler]
         if len(set(y)) < 2:
-            # Yapay zekanın sağlıklı karar verebilmesi için hem başarılı hem başarısız veri olmalı
-            # Başlangıçta veri yoksa varsayılan sahte örnek ekleyelim ki model hata vermesin
             X.extend([[50, 25, 0.001, 1], [50, 25, -0.001, -1]])
             y.extend([1, 0])
         ai_model.fit(np.array(X), np.array(y))
@@ -123,7 +121,7 @@ def yapay_zekayi_egit_ve_guncelle():
 
 def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod):
     if not ai_model_egitildi:
-        return True # Model eğitilene kadar serbest bırak
+        return True
     try:
         tahmin = ai_model.predict(np.array([[rsi, adx, ema_fark, yon_kod]]))[0]
         return bool(tahmin == 1)
@@ -141,7 +139,7 @@ def telegram_mesaj_gonder(mesaj):
 
 @app.route('/')
 def home():
-    return f"Testnet Dinamik Sinyal Botu | Aktif Hafıza: {len(AKTIF_GRID_SISTEMLERI)} | Yapay Zeka Durumu: {'Eğitildi' > '' if ai_model_egitildi else 'Eğitiliyor'}"
+    return f"Testnet Dinamik Sinyal Botu | Aktif Hafıza: {len(AKTIF_GRID_SISTEMLERI)} | Yapay Zeka Durumu: {'Eğitildi' if ai_model_egitildi else 'Eğitiliyor'}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -172,7 +170,6 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=50, adx=25,
     except Exception as e:
         print(f"Kapatma API hatası: {e}")
 
-    # Yapay zeka hafızasına öğrenmesi için işlem sonucunu kaydet
     yon_kod = 1 if yon == 'LONG' else -1
     sonuc_kod = 1 if basarili else 0
     ANALitik_HAFIZA["egitim_verileri"].append([rsi, adx, ema_fark, yon_kod, sonuc_kod])
@@ -202,7 +199,22 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         toplam_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in borsa_poslari)
         pnl_ikon = "🟢" if toplam_pnl >= 0 else "🔴"
 
-        mesaj = f"📊 *DİNAMİK BOT DURUMU*\n\n💰 Toplam Kasa: `{total:.2f} USDT`\n{pnl_ikon} Anlık Toplam Kâr/Zarar: `{toplam_pnl:+.2f} USDT`\n📌 Açık Pozisyon Sayısı: `{len(borsa_poslari)}`\n🤖 Yapay Zeka Durumu: `{'Aktif ve Öğreniyor' if ai_model_egitildi else 'Veri Topluyor'}`\n\n"
+        basarili_sayisi = ANALitik_HAFIZA.get("basarili_islem_sayisi", 0)
+        basarisiz_sayisi = ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0)
+        toplam_islem = basarili_sayisi + basarisiz_sayisi
+        basari_orani = (basarili_sayisi / toplam_islem * 100) if toplam_islem > 0 else 0.0
+
+        mesaj = (
+            f"📊 *DİNAMİK BOT DURUMU*\n\n"
+            f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
+            f"{pnl_ikon} Anlık Toplam Kâr/Zarar: `{toplam_pnl:+.2f} USDT`\n"
+            f"📌 Açık Pozisyon Sayısı: `{len(borsa_poslari)}`\n\n"
+            f"🎯 *İşlem İstatistikleri:*\n"
+            f"✅ Başarılı (TP): `{basarili_sayisi}` adet\n"
+            f"❌ Başarısız (SL): `{basarisiz_sayisi}` adet\n"
+            f"📈 Başarı Oranı: `%{basari_orani:.1f}`\n\n"
+            f"🤖 Yapay Zeka: `{'Aktif ve Öğreniyor' if ai_model_egitildi else 'Veri Topluyor'}`\n\n"
+        )
         
         if borsa_poslari:
             mesaj += "📋 *Aktif Pozisyonlar:*\n"
@@ -347,7 +359,6 @@ def otomatik_arkaplan_tarayici():
                 ema_fark_val = float(ema7 - ema21)
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 
-                # 🤖 **Yapay Zeka Süzgeci Aktif**
                 if not yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod):
                     continue
 
@@ -376,7 +387,6 @@ def otomatik_arkaplan_tarayici():
                 ema_fark_val = sinyal["ema_fark"]
                 guncel_fiyat = sinyal["fiyat"]
 
-                # 🛡️ **AYNI YÖN FİLTRESİ KONTROLÜ (Düzeltildi: ayni_yon_sayisi)**
                 ayni_yon_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == grid_yonu)
                 if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
                     continue 
