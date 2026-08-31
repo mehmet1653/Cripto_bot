@@ -387,8 +387,9 @@ def otomatik_arkaplan_tarayici():
                 ema_fark_val = sinyal["ema_fark"]
                 guncel_fiyat = sinyal["fiyat"]
 
+                # 🛡️ **AYNI YÖN FİLTRESİ VE GÜÇLÜ FIRSAT İSTİSNASI (>= 80 PUANSA 4. İŞLEME İZİN VER)**
                 ayni_yon_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == grid_yonu)
-                if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
+                if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI and sinyal_puani < 80:
                     continue 
 
                 if sinyal_puani >= 80:
