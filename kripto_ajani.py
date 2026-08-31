@@ -96,6 +96,7 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
 })
 
 MIN_ADX_GUCU = 20.0
+MAKSIMUM_AYNI_YON_SAYISI = 3  # 🛡️ Aynı yöne en fazla 3 pozisyon sınırı
 
 # ==================== YAPAY ZEKA MODELİ (ML) ====================
 ai_model = RandomForestClassifier(n_estimators=50, random_state=42)
@@ -199,7 +200,10 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             aktif_poslar = []
 
-        mesaj = f"📊 *DİNAMİK BOT DURUMU*\n\n💰 Toplam Kasa: `{total:.2f} USDT`\n📌 Aktif İşlem Sayısı: `{len(AKTIF_GRID_SISTEMLERI)}`\n\n"
+        toplam_anlik_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in aktif_poslar)
+        pnl_ikon = "🟢" if toplam_anlik_pnl >= 0 else "🔴"
+
+        mesaj = f"📊 *DİNAMİK BOT DURUMU*\n\n💰 Toplam Kasa: `{total:.2f} USDT`\n{pnl_ikon} Anlık Toplam Kâr/Zarar: `{toplam_anlik_pnl:+.2f} USDT`\n📌 Aktif İşlem Sayısı: `{len(AKTIF_GRID_SISTEMLERI)}`\n\n"
         
         if aktif_poslar:
             mesaj += "📋 *Açık Pozisyonlar:*\n"
@@ -209,7 +213,8 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 kaldirac = pos.get('leverage', 1)
                 pnl = float(pos.get('unrealizedPnl', 0))
                 yuzde = float(pos.get('percentage', 0))
-                mesaj += f"🔹 *{sym}* (`{yon}` {kaldirac}x)\n   Kâr/Zarar: `{pnl:.2f} USDT` (`%{yuzde:.2f}`)\n"
+                isaret = "🟢" if pnl >= 0 else "🔴"
+                mesaj += f"🔹 *{sym}* (`{yon}` {kaldirac}x)\n   {isaret} Kâr/Zarar: `{pnl:+.2f} USDT` (`%{yuzde:+.2f}`)\n"
         else:
             mesaj += "ℹ️ Şu an borsada açık aktif pozisyon bulunmuyor."
 
@@ -262,51 +267,47 @@ def otomatik_arkaplan_tarayici():
 
             aktif_borsa_map = {pos['symbol']: pos for pos in borsa_pozisyonlari if float(pos.get('contracts', 0)) > 0}
 
-            for symbol in TAKIP_EDILENLER:
-                if not BOT_CALISIYOR_MU:
-                    break
+            # --- 1. AÇIK POZİSYON KONTROLÜ VE DİNAMİK HEDEF / STOP YÖNETİMİ ---
+            for symbol in list(aktif_borsa_map.keys()):
+                pos = aktif_borsa_map[symbol]
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
                 except Exception:
                     continue
 
-                # --- 1. AÇIK POZİSYON KONTROLÜ VE DİNAMİK HEDEF / STOP YÖNETİMİ ---
+                yon = str(pos.get('side', '')).upper()
+                merkez = float(pos.get('entryPrice', 0))
+                kaldirac_kullanilan = int(pos.get('leverage', 10))
+                
+                fark = (guncel_fiyat - merkez) / merkez if yon == "LONG" else (merkez - guncel_fiyat) / merkez
+                roe = fark * 100 * kaldirac_kullanilan
+
+                kayitli = AKTIF_GRID_SISTEMLERI.get(symbol, {})
+                hedef_roe = kayitli.get("hedef_roe", 20.0)
+                stop_roe = kayitli.get("stop_roe", 10.0)
+
+                if roe >= hedef_roe or float(pos.get('percentage', 0)) >= hedef_roe:
+                    ANALitik_HAFIZA["gunluk_net_kar_usd"] += max(float(pos.get('unrealizedPnl', 0)), 1.0)
+                    ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
+                    hafizayi_kaydet()
+                    pozisyonu_garantili_kapat(symbol, yon, float(pos['contracts']), f"🚀 *DİNAMİK HEDEF ALINDI* - `{symbol}` (`+{roe:.2f}%`)", rsi=kayitli.get("giris_rsi", 50), adx=kayitli.get("giris_adx", 25), ema_fark=kayitli.get("ema_fark", 0), basarili=True)
+                elif roe <= -stop_roe or float(pos.get('percentage', 0)) <= -stop_roe:
+                    ANALitik_HAFIZA["gunluk_net_kar_usd"] -= abs(float(pos.get('unrealizedPnl', 0)))
+                    ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
+                    hafizayi_kaydet()
+                    pozisyonu_garantili_kapat(symbol, yon, float(pos['contracts']), f"🛑 *DİNAMİK STOP KESİLDİ* - `{symbol}` (`{roe:.2f}%`)", rsi=kayitli.get("giris_rsi", 50), adx=kayitli.get("giris_adx", 25), ema_fark=kayitli.get("ema_fark", 0), basarili=False)
+
+            # --- 2. TÜM COIN'LERİ TARAYIP GÜCÜNE GÖRE SIRALAMA (EN GÜÇLÜ ÖNCE) ---
+            taranan_sinyaller = []
+
+            for symbol in TAKIP_EDILENLER:
+                if not BOT_CALISIYOR_MU:
+                    break
                 if symbol in aktif_borsa_map:
-                    pos = aktif_borsa_map[symbol]
-                    yon = str(pos.get('side', '')).upper()
-                    merkez = float(pos.get('entryPrice', 0))
-                    kaldirac_kullanilan = int(pos.get('leverage', 10))
-                    
-                    fark = (guncel_fiyat - merkez) / merkez if yon == "LONG" else (merkez - guncel_fiyat) / merkez
-                    roe = fark * 100 * kaldirac_kullanilan
-
-                    kayitli = AKTIF_GRID_SISTEMLERI.get(symbol, {})
-                    hedef_roe = kayitli.get("hedef_roe", 20.0)
-                    stop_roe = kayitli.get("stop_roe", 10.0)
-
-                    if roe >= hedef_roe or float(pos.get('percentage', 0)) >= hedef_roe:
-                        ANALitik_HAFIZA["gunluk_net_kar_usd"] += max(float(pos.get('unrealizedPnl', 0)), 1.0)
-                        ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
-                        hafizayi_kaydet()
-                        pozisyonu_garantili_kapat(symbol, yon, float(pos['contracts']), f"🚀 *DİNAMİK HEDEF ALINDI* - `{symbol}` (`+{roe:.2f}%`)", rsi=kayitli.get("giris_rsi", 50), adx=kayitli.get("giris_adx", 25), ema_fark=kayitli.get("ema_fark", 0), basarili=True)
-                    elif roe <= -stop_roe or float(pos.get('percentage', 0)) <= -stop_roe:
-                        ANALitik_HAFIZA["gunluk_net_kar_usd"] -= abs(float(pos.get('unrealizedPnl', 0)))
-                        ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
-                        hafizayi_kaydet()
-                        pozisyonu_garantili_kapat(symbol, yon, float(pos['contracts']), f"🛑 *DİNAMİK STOP KESİLDİ* - `{symbol}` (`{roe:.2f}%`)", rsi=kayitli.get("giris_rsi", 50), adx=kayitli.get("giris_adx", 25), ema_fark=kayitli.get("ema_fark", 0), basarili=False)
-                    continue
-
-                if symbol in aktif_borsa_map:
-                    continue
-
-                # --- 2. YENİ SİNYAL TESPİTİ VE DİNAMİK PUANLAMA (KASA / KALDIRAÇ / STOP) ---
-                try:
-                    balance = exchange.fetch_balance()
-                    toplam_bakiye = float(balance['total'].get('USDT', 0))
-                except Exception:
-                    continue
+                    continue  # Zaten açık pozisyon varsa pas geç
 
                 try:
+                    guncel_fiyat = exchange.fetch_ticker(symbol)['last']
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     ema7 = ta.trend.ema_indicator(df['close'], window=7).iloc[-1]
@@ -323,30 +324,74 @@ def otomatik_arkaplan_tarayici():
                 if grid_yonu == "SHORT" and rsi < 42: continue 
                 if grid_yonu == "LONG" and rsi > 58: continue 
 
-                # 🧠 **DİNAMİK PUANLAMA SİSTEMİ**
+                # Sinyal Puanı Hesaplama
                 sinyal_puani = 50  # Baz puan
                 if adx_val > 30: sinyal_puani += 20
                 if abs(ema7 - ema21) / guncel_fiyat > 0.002: sinyal_puani += 15
 
-                # Sinyal gücüne göre bütçe (kasa yönetimi), kaldıraç ve hedef/stop esnekliği
+                ema_fark_val = float(ema7 - ema21)
+                
+                # Yapay Zeka Onayı
+                if not yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, 1 if grid_yonu == 'LONG' else -1):
+                    continue
+
+                taranan_sinyaller.append({
+                    "symbol": symbol,
+                    "puan": sinyal_puani,
+                    "yon": grid_yonu,
+                    "rsi": rsi,
+                    "adx": adx_val,
+                    "ema_fark": ema_fark_val,
+                    "fiyat": guncel_fiyat,
+                    "ema7": ema7,
+                    "ema21": ema21
+                })
+
+            # 🔥 **EN GÜÇLÜ SİNYALDEN EN ZAYIF SİNYALE DOĞRE SIRALA (Çok Önemli Filtre)**
+            taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
+
+            # --- 3. SIRALANAN EN GÜÇLÜ COIN'LERE İŞLEM AÇMA ---
+            for sinyal in taranan_sinyaller:
+                if not BOT_CALISIYOR_MU:
+                    break
+
+                symbol = sinyal["symbol"]
+                grid_yonu = sinyal["yon"]
+                sinyal_puani = sinyal["puan"]
+                rsi = sinyal["rsi"]
+                adx_val = sinyal["adx"]
+                ema_fark_val = sinyal["ema_fark"]
+                guncel_fiyat = sinyal["fiyat"]
+
+                # 🛡️ **AYNI YÖN FİLTRESİ KONTROLÜ (Maksimum 3 İşlem)**
+                guncel_borsa_pozlari = exchange.fetch_positions()
+                guncel_aktif_map = {p['symbol']: p for p in guncel_borsa_pozlari if float(p.get('contracts', 0)) > 0}
+                
+                ayni_yon_sayisi = sum(1 for p in guncel_aktif_map.values() if str(p.get('side', '')).upper() == grid_yonu)
+                if ayn_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
+                    continue  # Bu yönde zaten 3 sınırına ulaşıldıysa sıradaki başka bir güçlü coine bak
+
+                # Puanına göre bütçe ve kaldıraç belirleme
                 if sinyal_puani >= 80:
                     dinamik_kaldirac = 20
-                    kasa_orani = 0.35  # Güçlü sinyale kasanın %35'i
+                    kasa_orani = 0.35
                     hedef_roe = 25.0
                     stop_roe = 8.0
                 elif sinyal_puani >= 65:
                     dinamik_kaldirac = 10
-                    kasa_orani = 0.20  # Normal sinyale kasanın %20'si
+                    kasa_orani = 0.20
                     hedef_roe = 18.0
                     stop_roe = 10.0
                 else:
                     dinamik_kaldirac = 5
-                    kasa_orani = 0.10  # Zayıf sinyale kasanın %10'u
+                    kasa_orani = 0.10
                     hedef_roe = 12.0
                     stop_roe = 12.0
 
-                ema_fark_val = float(ema7 - ema21)
-                if not yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, 1 if grid_yonu == 'LONG' else -1):
+                try:
+                    balance = exchange.fetch_balance()
+                    toplam_bakiye = float(balance['total'].get('USDT', 0))
+                except Exception:
                     continue
 
                 set_isolated_leverage_safely(symbol, dinamik_kaldirac)
@@ -373,7 +418,7 @@ def otomatik_arkaplan_tarayici():
                         "stop_roe": stop_roe
                     }
                     hafizayi_kaydet()
-                    telegram_mesaj_gonder(f"🚨 *DİNAMİK İŞLEM AÇILDI!*\n\n📌 *Coin:* `{symbol}`\n📊 *Yön:* `{grid_yonu}`\n⭐ *Puan:* `{sinyal_puani}`\n⚙️ *Kaldıraç:* `{dinamik_kaldirac}x`\n🎯 *Hedef TP:* `+{hedef_roe}%` | 🛑 *Stop SL:* `-{stop_roe}%`")
+                    telegram_mesaj_gonder(f"🚨 *EN GÜÇLÜ SİNYAL İŞLEME ALINDI!*\n\n📌 *Coin:* `{symbol}`\n📊 *Yön:* `{grid_yonu}`\n⭐ *Puan:* `{sinyal_puani}`\n⚙️ *Kaldıraç:* `{dinamik_kaldirac}x`\n🎯 *Hedef TP:* `+{hedef_roe}%` | 🛑 *Stop SL:* `-{stop_roe}%`")
                 except Exception as e:
                     print(f"Emir hatası ({symbol}): {e}")
 
