@@ -496,10 +496,25 @@ def otomatik_arkaplan_tarayici():
                     if miktar < min_amount:
                         miktar = min_amount
 
-                    # Genişletilmiş fiyat toleransı (PEPE gibi küçük fiyatlı coinler için)
-                    fiyat_toleransi = guncel_fiyat * 1.005 if grid_yonu == 'LONG' else guncel_fiyat * 0.995
+                    # 🚀 GATE.IO TESTNET KESİN ÇÖZÜM: Mark Price tabanlı güvenli fiyat aralığı (±%1.5)
+                    ticker_data = exchange.fetch_ticker(symbol)
+                    mark_price = float(ticker_data.get('info', {}).get('mark_price', guncel_fiyat))
                     
-                    exchange.create_order(symbol, 'limit', 'buy' if grid_yonu == 'LONG' else 'sell', miktar, fiyat_toleransi, {'timeInForce': 'IOC'})
+                    if grid_yonu == 'LONG':
+                        emir_fiyati = min(guncel_fiyat, mark_price * 1.015)
+                        emir_yonu = 'buy'
+                    else:
+                        emir_fiyati = max(guncel_fiyat, mark_price * 0.985)
+                        emir_yonu = 'sell'
+
+                    exchange.create_order(
+                        symbol, 
+                        'limit', 
+                        emir_yonu, 
+                        miktar, 
+                        emir_fiyati, 
+                        {'timeInForce': 'IOC'}
+                    )
 
                     AKTIF_GRID_SISTEMLERI[symbol] = {
                         "giris_rsi": rsi,
