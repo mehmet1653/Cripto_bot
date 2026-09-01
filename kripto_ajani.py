@@ -303,7 +303,7 @@ def otomatik_arkaplan_tarayici():
                     del AKTIF_GRID_SISTEMLERI[sym]
                     hafizayi_kaydet()
 
-            # --- 1. AÇIK POZİSYON HEDEF (TP) / ZARAR KES (SL) KONTROLÜ (Borsa Emirleri Dışında Ek Güvenlik) ---
+            # --- 1. AÇIK POZİSYON HEDEF (TP) / ZARAR KES (SL) KONTROLÜ (Bot Takipli Market Kapatma) ---
             for symbol, pos in aktif_borsa_map.items():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
@@ -319,8 +319,8 @@ def otomatik_arkaplan_tarayici():
                 pnl = float(pos.get('unrealizedPnl', 0))
 
                 kayitli = AKTIF_GRID_SISTEMLERI.get(symbol, {})
-                hedef_roe = kayitli.get("hedef_roe", 20.0)
-                stop_roe = kayitli.get("stop_roe", 10.0)
+                hedef_roe = kayitli.get("hedef_roe", 3.5)
+                stop_roe = kayitli.get("stop_roe", 4.5)
                 rsi_val = kayitli.get("giris_rsi", 50)
                 adx_val = kayitli.get("giris_adx", 25)
                 ema_fark_val = kayitli.get("ema_fark", 0.0)
@@ -342,7 +342,7 @@ def otomatik_arkaplan_tarayici():
                         rsi=rsi_val, adx=adx_val, ema_fark=ema_fark_val, basarili=False
                     )
 
-            # --- 2. COİN TARAMA VE MOD SEÇİMİ (TREND vs TESTERE vs SNIPER) ---
+            # --- 2. COİN TARAMA VE MOD SEÇİMİ (SCALP / TESTERE UYUMLU) ---
             taranan_sinyaller = []
 
             for symbol in TAKIP_EDILENLER:
@@ -367,15 +367,15 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
-                is_tester = adx_val < 18.0
+                is_tester = adx_val < 25.0
                 
                 if is_tester:
-                    if rsi < 32:
+                    if rsi < 42:
                         grid_yonu = "LONG"
-                        sinyal_puani = 62 
-                    elif rsi > 68:
+                        sinyal_puani = 75 
+                    elif rsi > 58:
                         grid_yonu = "SHORT"
-                        sinyal_puani = 62
+                        sinyal_puani = 75
                     else:
                         continue
                 else:
@@ -383,8 +383,8 @@ def otomatik_arkaplan_tarayici():
                         continue
                     
                     grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
-                    if grid_yonu == "SHORT" and rsi < 42: continue 
-                    if grid_yonu == "LONG" and rsi > 58: continue 
+                    if grid_yonu == "SHORT" and rsi < 40: continue 
+                    if grid_yonu == "LONG" and rsi > 60: continue 
 
                     sinyal_puani = 50
                     if adx_val > 30: sinyal_puani += 20
@@ -413,7 +413,7 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
-            # --- 3. İŞLEM LİMİTLERİ VE SİPARİŞ AÇMA (BORSA TARAFI TP/SL İLE) ---
+            # --- 3. İŞLEM LİMİTLERİ VE PİYASA EMRİ İLE AÇMA ---
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU:
                     break
@@ -437,29 +437,24 @@ def otomatik_arkaplan_tarayici():
 
                 if sinyal_puani >= 85:
                     dinamik_kaldirac = 20
-                    kasa_orani = 0.30
-                    hedef_roe = max(30.0, atr_yuzdesi * 10)
+                    kasa_orani = 0.25
+                    hedef_roe = max(25.0, atr_yuzdesi * 8)
                     stop_roe = max(8.0, atr_yuzdesi * 3)
                 elif is_tester:
-                    dinamik_kaldirac = 5
-                    kasa_orani = 0.08
-                    hedef_roe = 5.0
-                    stop_roe = 4.0
-                elif sinyal_puani >= 80:
-                    dinamik_kaldirac = 20
-                    kasa_orani = 0.30
-                    hedef_roe = max(20.0, atr_yuzdesi * 8)
-                    stop_roe = max(8.0, atr_yuzdesi * 3)
-                elif sinyal_puani >= 65:
                     dinamik_kaldirac = 10
-                    kasa_orani = 0.18
-                    hedef_roe = max(15.0, atr_yuzdesi * 6)
+                    kasa_orani = 0.10
+                    hedef_roe = 3.5
+                    stop_roe = 4.5
+                elif sinyal_puani >= 80:
+                    dinamik_kaldirac = 15
+                    kasa_orani = 0.20
+                    hedef_roe = max(18.0, atr_yuzdesi * 6)
                     stop_roe = max(8.0, atr_yuzdesi * 3)
                 else:
-                    dinamik_kaldirac = 5
-                    kasa_orani = 0.10
-                    hedef_roe = max(10.0, atr_yuzdesi * 4)
-                    stop_roe = max(10.0, atr_yuzdesi * 3.5)
+                    dinamik_kaldirac = 10
+                    kasa_orani = 0.12
+                    hedef_roe = max(12.0, atr_yuzdesi * 4)
+                    stop_roe = max(8.0, atr_yuzdesi * 3)
 
                 try:
                     balance = exchange.fetch_balance()
@@ -484,50 +479,10 @@ def otomatik_arkaplan_tarayici():
                     if miktar < min_amount:
                         miktar = min_amount
 
-                    ticker_data = exchange.fetch_ticker(symbol)
-                    mark_price = float(ticker_data.get('info', {}).get('mark_price', guncel_fiyat))
-                    
-                    if grid_yonu == 'LONG':
-                        emir_fiyati = min(guncel_fiyat, mark_price * 1.015)
-                        emir_yonu = 'buy'
-                        kapatma_yonu = 'sell'
-                        tp_fiyat = emir_fiyati * (1 + (hedef_roe / 100 / dinamik_kaldirac))
-                        sl_fiyat = emir_fiyati * (1 - (stop_roe / 100 / dinamik_kaldirac))
-                    else:
-                        emir_fiyati = max(guncel_fiyat, mark_price * 0.985)
-                        emir_yonu = 'sell'
-                        kapatma_yonu = 'buy'
-                        tp_fiyat = emir_fiyati * (1 - (hedef_roe / 100 / dinamik_kaldirac))
-                        sl_fiyat = emir_fiyati * (1 + (stop_roe / 100 / dinamik_kaldirac))
+                    emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
 
-                    # 1. Ana Pozisyon Emrini Aç
-                    exchange.create_order(
-                        symbol, 
-                        'limit', 
-                        emir_yonu, 
-                        miktar, 
-                        emir_fiyati, 
-                        {'timeInForce': 'IOC'}
-                    )
-
-                    # 2. Borsa Tarafına Kâr Al (TP) Emri Bırak (Gate.io / CCXT V5 Destekli Parametrelerle)
-                    try:
-                        exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, tp_fiyat, {
-                            'reduce_only': True,
-                            'price_high': tp_fiyat
-                        })
-                    except Exception as e:
-                        print(f"Borsa TP emir hatası ({symbol}): {e}")
-
-                    # 3. Borsa Tarafına Zarar Kes (SL) Emri Bırak (Gate.io V5 Standart Koşullu / Stop Emri)
-                    try:
-                        exchange.create_order(symbol, 'stop', kapatma_yonu, miktar, sl_fiyat, {
-                            'stopPrice': sl_fiyat,
-                            'reduce_only': True,
-                            'price': sl_fiyat
-                        })
-                    except Exception as e:
-                        print(f"Borsa SL emir hatası ({symbol}): {e}")
+                    # Doğrudan Market (Piyasa) Emri ile Pozisyon Açılışı
+                    exchange.create_order(symbol, 'market', emir_yonu, miktar)
 
                     AKTIF_GRID_SISTEMLERI[symbol] = {
                         "giris_rsi": rsi,
@@ -538,20 +493,20 @@ def otomatik_arkaplan_tarayici():
                     }
                     hafizayi_kaydet()
                     
-                    mod_etiketi = "🎯 *ALTIN KURAL (SNIPER)*" if sinyal_puani >= 85 else ("⚡ *YATAY TESTERE AVCI* " if is_tester else "🚀 *TREND SİNYALİ*")
+                    mod_etiketi = "🎯 *ALTIN KURAL (SNIPER)*" if sinyal_puani >= 85 else ("⚡ *YATAY TESTERE / SCALP* " if is_tester else "🚀 *TREND SİNYALİ*")
                     telegram_mesaj_gonder(
                         f"{mod_etiketi}\n\n"
                         f"📌 *Coin:* `{symbol}`\n"
                         f"📊 *Yön:* `{grid_yonu}` | ⭐ *Puan:* `{sinyal_puani}`\n"
                         f"⚙️ *Kaldıraç:* `{dinamik_kaldirac}x` | 💰 *Kasa Oranı:* `%{kasa_orani*100:.0f}`\n"
                         f"📈 *RSI:* `{rsi:.1f}` | *ADX:* `{adx_val:.1f}`\n"
-                        f"🎯 *Hedef TP:* `+{hedef_roe:.1f}%` (`{tp_fiyat:.4f}`)\n"
-                        f"🛑 *Stop SL:* `-{stop_roe:.1f}%` (`{sl_fiyat:.4f}`)"
+                        f"🎯 *Hedef TP ROE:* `+{hedef_roe:.1f}%`\n"
+                        f"🛑 *Stop SL ROE:* `-{stop_roe:.1f}%`"
                     )
                     
                     aktif_borsa_map[symbol] = {'symbol': symbol, 'side': grid_yonu, 'contracts': miktar}
                 except Exception as e:
-                    print(f"Emir hatası ({symbol}): {e}")
+                    print(f"Market emir hatası ({symbol}): {e}")
 
         except Exception as e:
             print(f"Tarayıcı döngü hatası: {e}")
