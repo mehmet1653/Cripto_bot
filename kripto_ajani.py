@@ -93,8 +93,8 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
     "egitim_verileri": []
 })
 
-MAKSIMUM_AYNI_YON_SAYISI = 3
-MAKSIMUM_TOPLAM_POZISYON = 5
+MAKSIMUM_AYNI_YON_SAYISI = 2
+MAKSIMUM_TOPLAM_POZISYON = 3  # Aynı anda çok fazla işlem açıp kasayı riske atmasın
 
 # ==================== YAPAY ZEKA MODELİ (ML) ====================
 ai_model = RandomForestClassifier(n_estimators=50, random_state=42)
@@ -127,7 +127,6 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod):
     except Exception:
         return True
 
-# ==================== ATR & LİKİDİTE FİLTRELERİ ====================
 def atr_ve_volatilite_hesapla(df, period=14):
     try:
         atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=period).average_true_range().iloc[-1]
@@ -157,7 +156,7 @@ def telegram_mesaj_gonder(mesaj):
 
 @app.route('/')
 def home():
-    return f"Melez Sinyal Botu | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)} | AI: {'Eğitildi' if ai_model_egitildi else 'Topluyor'}"
+    return f"Güvenli Melez Bot | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -224,7 +223,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         basari_orani = (basarili_sayisi / toplam_islem * 100) if toplam_islem > 0 else 0.0
 
         mesaj = (
-            f"📊 *MELEZ SİNYAL BOTU DURUMU*\n\n"
+            f"📊 *GÜVENLİ BOT DURUMU*\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"{pnl_ikon} Anlık Kâr/Zarar: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n\n"
@@ -255,7 +254,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 *Melez Bot (Trend + Testere + Sniper) Aktif!*", parse_mode='Markdown')
+    await update.message.reply_text("🟢 *Güvenli Bot Aktif Edildi!*", parse_mode='Markdown')
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -263,14 +262,14 @@ async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏸️ *Bot durduruldu.*", parse_mode='Markdown')
 
 async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 *Tüm pozisyonlar kapatılıyor ve hafıza sıfırlanıyor...*", parse_mode='Markdown')
+    await update.message.reply_text("🔄 *Tüm pozisyonlar kapatılıyor...*", parse_mode='Markdown')
     try:
         for pos in exchange.fetch_positions():
             if float(pos.get('contracts', 0)) > 0:
                 pozisyonu_garantili_kapat(pos['symbol'], str(pos.get('side', '')).upper(), float(pos['contracts']), f"🛑 *MANUEL KAPATMA* - `{pos['symbol']}`", basarili=False)
         AKTIF_GRID_SISTEMLERI.clear()
         hafizayi_kaydet()
-        await update.message.reply_text("✅ Tüm pozisyonlar kapatıldı ve sıfırlandı.", parse_mode='Markdown')
+        await update.message.reply_text("✅ Tüm pozisyonlar kapatıldı.", parse_mode='Markdown')
     except Exception as e:
         AKTIF_GRID_SISTEMLERI.clear()
         hafizayi_kaydet()
@@ -279,7 +278,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 Melez Tarayıcı (Trend + Testere + Sniper) Devrede.")
+    print("🚀 Güvenli Tarayıcı Devrede.")
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -303,7 +302,7 @@ def otomatik_arkaplan_tarayici():
                     del AKTIF_GRID_SISTEMLERI[sym]
                     hafizayi_kaydet()
 
-            # --- 1. AÇIK POZİSYON HEDEF (TP) / ZARAR KES (SL) KONTROLÜ (Bot Takipli Market Kapatma) ---
+            # --- 1. HEDEF (TP) / ZARAR KES (SL) KONTROLÜ (GÜVENLİ GENİŞ MESAFE) ---
             for symbol, pos in aktif_borsa_map.items():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
@@ -312,15 +311,15 @@ def otomatik_arkaplan_tarayici():
 
                 yon = str(pos.get('side', '')).upper()
                 merkez = float(pos.get('entryPrice', 0))
-                kaldirac_kullanilan = int(pos.get('leverage', 10))
+                kaldirac_kullanilan = int(pos.get('leverage', 5))
                 
                 fark = (guncel_fiyat - merkez) / merkez if yon == "LONG" else (merkez - guncel_fiyat) / merkez
                 roe = fark * 100 * kaldirac_kullanilan
                 pnl = float(pos.get('unrealizedPnl', 0))
 
                 kayitli = AKTIF_GRID_SISTEMLERI.get(symbol, {})
-                hedef_roe = kayitli.get("hedef_roe", 3.5)
-                stop_roe = kayitli.get("stop_roe", 4.5)
+                hedef_roe = kayitli.get("hedef_roe", 5.0)
+                stop_roe = kayitli.get("stop_roe", 12.0)  # Erken patlamayı önlemek için %12 güvenli stop
                 rsi_val = kayitli.get("giris_rsi", 50)
                 adx_val = kayitli.get("giris_adx", 25)
                 ema_fark_val = kayitli.get("ema_fark", 0.0)
@@ -342,7 +341,7 @@ def otomatik_arkaplan_tarayici():
                         rsi=rsi_val, adx=adx_val, ema_fark=ema_fark_val, basarili=False
                     )
 
-            # --- 2. COİN TARAMA VE MOD SEÇİMİ (SCALP / TESTERE UYUMLU) ---
+            # --- 2. COİN TARAMA VE GÜVENLİ FİLTRELEME ---
             taranan_sinyaller = []
 
             for symbol in TAKIP_EDILENLER:
@@ -370,34 +369,31 @@ def otomatik_arkaplan_tarayici():
                 is_tester = adx_val < 25.0
                 
                 if is_tester:
-                    if rsi < 42:
+                    if rsi < 32:
                         grid_yonu = "LONG"
                         sinyal_puani = 75 
-                    elif rsi > 58:
+                    elif rsi > 68:
                         grid_yonu = "SHORT"
                         sinyal_puani = 75
                     else:
                         continue
                 else:
-                    if adx_val < 20.0:
+                    if adx_val < 22.0:
                         continue
                     
                     grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
-                    if grid_yonu == "SHORT" and rsi < 40: continue 
-                    if grid_yonu == "LONG" and rsi > 60: continue 
+                    if grid_yonu == "SHORT" and rsi < 38: continue 
+                    if grid_yonu == "LONG" and rsi > 62: continue 
 
                     sinyal_puani = 50
                     if adx_val > 30: sinyal_puani += 20
                     if abs(ema7 - ema21) / guncel_fiyat > 0.002: sinyal_puani += 15
-                    if atr_yuzdesi > 3.5:
-                        sinyal_puani -= 10
 
                 ema_fark_val = float(ema7 - ema21)
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 
-                if sinyal_puani < 85 and not is_tester:
-                    if not yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod):
-                        continue
+                if not yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod):
+                    continue
 
                 taranan_sinyaller.append({
                     "symbol": symbol,
@@ -413,12 +409,12 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
-            # --- 3. İŞLEM LİMİTLERİ VE PİYASA EMRİ İLE AÇMA ---
+            # --- 3. DÜŞÜK KALDIRAÇLI GÜVENLİ İŞLEM AÇMA ---
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU:
                     break
 
-                if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON and sinyal["puan"] < 85:
+                if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
                     break
 
                 symbol = sinyal["symbol"]
@@ -432,29 +428,14 @@ def otomatik_arkaplan_tarayici():
                 is_tester = sinyal["tester"]
 
                 ayni_yon_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == grid_yonu)
-                if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI and sinyal_puani < 85:
+                if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
                     continue 
 
-                if sinyal_puani >= 85:
-                    dinamik_kaldirac = 20
-                    kasa_orani = 0.25
-                    hedef_roe = max(25.0, atr_yuzdesi * 8)
-                    stop_roe = max(8.0, atr_yuzdesi * 3)
-                elif is_tester:
-                    dinamik_kaldirac = 10
-                    kasa_orani = 0.10
-                    hedef_roe = 5
-                    stop_roe = 4.5
-                elif sinyal_puani >= 80:
-                    dinamik_kaldirac = 15
-                    kasa_orani = 0.20
-                    hedef_roe = max(18.0, atr_yuzdesi * 6)
-                    stop_roe = max(8.0, atr_yuzdesi * 3)
-                else:
-                    dinamik_kaldirac = 10
-                    kasa_orani = 0.12
-                    hedef_roe = max(12.0, atr_yuzdesi * 4)
-                    stop_roe = max(8.0, atr_yuzdesi * 3)
+                # 20x İPTAL EDİLDİ: Maksimum 5x - 7x kaldıraç ile kasayı koruyoruz
+                dinamik_kaldirac = 5 if is_tester else 7
+                kasa_orani = 0.10
+                hedef_roe = 5.0
+                stop_roe = 12.0  # Güvenli geniş stop mesafesi
 
                 try:
                     balance = exchange.fetch_balance()
@@ -480,8 +461,6 @@ def otomatik_arkaplan_tarayici():
                         miktar = min_amount
 
                     emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
-
-                    # Doğrudan Market (Piyasa) Emri ile Pozisyon Açılışı
                     exchange.create_order(symbol, 'market', emir_yonu, miktar)
 
                     AKTIF_GRID_SISTEMLERI[symbol] = {
@@ -493,9 +472,8 @@ def otomatik_arkaplan_tarayici():
                     }
                     hafizayi_kaydet()
                     
-                    mod_etiketi = "🎯 *ALTIN KURAL (SNIPER)*" if sinyal_puani >= 85 else ("⚡ *YATAY TESTERE / SCALP* " if is_tester else "🚀 *TREND SİNYALİ*")
                     telegram_mesaj_gonder(
-                        f"{mod_etiketi}\n\n"
+                        f"🛡️ *GÜVENLİ İŞLEM AÇILDI*\n\n"
                         f"📌 *Coin:* `{symbol}`\n"
                         f"📊 *Yön:* `{grid_yonu}` | ⭐ *Puan:* `{sinyal_puani}`\n"
                         f"⚙️ *Kaldıraç:* `{dinamik_kaldirac}x` | 💰 *Kasa Oranı:* `%{kasa_orani*100:.0f}`\n"
