@@ -396,7 +396,7 @@ def otomatik_arkaplan_tarayici():
                     dinamik_kaldirac = 20
                     kasa_orani = 0.35
                     hedef_roe = 25.0
-                    stop_roe = 8.0
+                    stop_roe = 10.0
                 elif sinyal_puani >= 65:
                     dinamik_kaldirac = 10
                     kasa_orani = 0.20
