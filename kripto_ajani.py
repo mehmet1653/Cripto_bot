@@ -185,7 +185,11 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=50, adx=25,
         if miktar < min_amount:
             miktar = min_amount
         miktar = float(exchange.amount_to_precision(symbol, miktar))
-        exchange.create_market_order(symbol, kapatma_yonu, miktar, {'reduce_only': True})
+        
+        guncel_ticker = exchange.fetch_ticker(symbol)['last']
+        kapatma_toleransi = guncel_ticker * 0.995 if kapatma_yonu == 'buy' else guncel_ticker * 1.005
+        
+        exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, kapatma_toleransi, {'reduce_only': True, 'timeInForce': 'IOC'})
     except Exception as e:
         print(f"Kapatma API hatası: {e}")
 
@@ -489,7 +493,9 @@ def otomatik_arkaplan_tarayici():
                     gercek_ham_miktar = max(ham_miktar / contract_size, min_amount)
                     miktar = float(exchange.amount_to_precision(symbol, gercek_ham_miktar))
 
-                    exchange.create_market_order(symbol, 'buy' if grid_yonu == 'LONG' else 'sell', miktar)
+                    # Fiyat sapması hatasını önlemek için IOC limit emir yapısı
+                    fiyat_toleransi = guncel_fiyat * 1.002 if grid_yonu == 'LONG' else guncel_fiyat * 0.998
+                    exchange.create_order(symbol, 'limit', 'buy' if grid_yonu == 'LONG' else 'sell', miktar, fiyat_toleransi, {'timeInForce': 'IOC'})
 
                     AKTIF_GRID_SISTEMLERI[symbol] = {
                         "giris_rsi": rsi,
@@ -523,7 +529,7 @@ def flask_web_server():
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
 
 if __name__ == '__main__':
-    threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
+    threading.Thread(target=otongan_arkaplan_tarayici := otomatik_arkaplan_tarayici, daemon=True).start()
     threading.Thread(target=flask_web_server, daemon=True).start()
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
