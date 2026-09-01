@@ -158,7 +158,7 @@ def telegram_mesaj_gonder(mesaj):
 
 @app.route('/')
 def home():
-    return f"Melez Sinyal Botu | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)} | AI: {'Eğitildi' fiş ai_model_egitildi else 'Topluyor'}"
+    return f"Melez Sinyal Botu | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)} | AI: {'Eğitildi' if ai_model_egitildi else 'Topluyor'}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -510,7 +510,6 @@ def otomatik_arkaplan_tarayici():
                         f"🎯 *Hedef TP:* `+{hedef_roe:.1f}%` | 🛑 *Stop SL:* `-{stop_roe:.1f}%`"
                     )
                     
-                    # Anlık listeyi güncelle ki döngü içinde limitler anında işlesin
                     aktif_borsa_map[symbol] = {'symbol': symbol, 'side': grid_yonu, 'contracts': miktar}
                 except Exception as e:
                     print(f"Emir hatası ({symbol}): {e}")
