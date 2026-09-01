@@ -529,7 +529,7 @@ def flask_web_server():
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
 
 if __name__ == '__main__':
-    threading.Thread(target=otongan_arkaplan_tarayici := otomatik_arkaplan_tarayici, daemon=True).start()
+    threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     threading.Thread(target=flask_web_server, daemon=True).start()
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
