@@ -497,12 +497,22 @@ def otomatik_arkaplan_tarayici():
                     if miktar < min_amount:
                         miktar = min_amount
 
-                    # 🚀 SANDBOX / TESTNET İÇİN KESİN ÇÖZÜM: MARKET EMİR
+                    # 🚀 TESTNET FİYAT SAPMA HATASI ÇÖZÜMÜ: Doğru kademeden IOC Limit Emir
+                    orderbook = exchange.fetch_order_book(symbol)
+                    if grid_yonu == 'LONG':
+                        emir_fiyati = orderbook['asks'][0][0] if orderbook['asks'] else guncel_fiyat * 1.005
+                        emir_yonu = 'buy'
+                    else:
+                        emir_fiyati = orderbook['bids'][0][0] if orderbook['bids'] else guncel_fiyat * 0.995
+                        emir_yonu = 'sell'
+
                     exchange.create_order(
                         symbol, 
-                        'market', 
-                        'buy' if grid_yonu == 'LONG' else 'sell', 
-                        miktar
+                        'limit', 
+                        emir_yonu, 
+                        miktar, 
+                        emir_fiyati, 
+                        {'timeInForce': 'IOC'}
                     )
 
                     AKTIF_GRID_SISTEMLERI[symbol] = {
