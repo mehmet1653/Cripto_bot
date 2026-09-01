@@ -443,7 +443,7 @@ def otomatik_arkaplan_tarayici():
                 elif is_tester:
                     dinamik_kaldirac = 10
                     kasa_orani = 0.10
-                    hedef_roe = 3.5
+                    hedef_roe = 5
                     stop_roe = 4.5
                 elif sinyal_puani >= 80:
                     dinamik_kaldirac = 15
