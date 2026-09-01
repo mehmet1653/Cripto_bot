@@ -490,11 +490,16 @@ def otomatik_arkaplan_tarayici():
                     market_info = exchange.market(symbol)
                     contract_size = float(market_info.get('contractSize', 1.0))
                     min_amount = float(market_info['limits']['amount']['min'] or 1.0)
+                    
                     gercek_ham_miktar = max(ham_miktar / contract_size, min_amount)
                     miktar = float(exchange.amount_to_precision(symbol, gercek_ham_miktar))
+                    
+                    if miktar < min_amount:
+                        miktar = min_amount
 
-                    # Fiyat sapması hatasını önlemek için IOC limit emir yapısı
-                    fiyat_toleransi = guncel_fiyat * 1.002 if grid_yonu == 'LONG' else guncel_fiyat * 0.998
+                    # Genişletilmiş fiyat toleransı (PEPE gibi küçük fiyatlı coinler için)
+                    fiyat_toleransi = guncel_fiyat * 1.005 if grid_yonu == 'LONG' else guncel_fiyat * 0.995
+                    
                     exchange.create_order(symbol, 'limit', 'buy' if grid_yonu == 'LONG' else 'sell', miktar, fiyat_toleransi, {'timeInForce': 'IOC'})
 
                     AKTIF_GRID_SISTEMLERI[symbol] = {
