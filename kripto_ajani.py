@@ -497,11 +497,13 @@ def otomatik_arkaplan_tarayici():
                     if miktar < min_amount:
                         miktar = min_amount
 
-                    # Genişletilmiş fiyat toleransı (PEPE gibi küçük fiyatlı coinler için)
-                    fiyat_toleransi = guncel_fiyat * 1.005 if grid_yonu == 'LONG' else guncel_fiyat * 0.995
-                    
-                    # 🚀 ÖNCE BORSAYA EMRİ GÖNDERİYORUZ (Hata alırsa Telegram mesajı gitmez, spam kesilir)
-                    exchange.create_order(symbol, 'limit', 'buy' if grid_yonu == 'LONG' else 'sell', miktar, fiyat_toleransi, {'timeInForce': 'IOC'})
+                    # 🚀 SANDBOX / TESTNET İÇİN KESİN ÇÖZÜM: MARKET EMİR
+                    exchange.create_order(
+                        symbol, 
+                        'market', 
+                        'buy' if grid_yonu == 'LONG' else 'sell', 
+                        miktar
+                    )
 
                     AKTIF_GRID_SISTEMLERI[symbol] = {
                         "giris_rsi": rsi,
