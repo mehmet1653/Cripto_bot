@@ -74,7 +74,7 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
 })
 
 KALDIRAC = 10
-MAKSIMUM_TOPLAM_POZISYON = 3  # Aynı anda en fazla kaç coinde olalım?
+MAKSIMUM_TOPLAM_POZISYON = 3
 MIN_ADX_GUCU = 20.0
 
 def telegram_mesaj_gonder(mesaj):
@@ -186,7 +186,7 @@ def get_account_status_summary():
 
         gunluk_pnl = ANALitik_HAFIZA['gunluk_net_kar_usd']
         
-        summary = f"🚀 *AKILLI SKORLAMA & TRAILING BOT RAPORU*\n\n"
+        summary = f"🚀 *AKILLİ SKORLAMA & TRAILING BOT RAPORU*\n\n"
         summary += f"💰 **Toplam Kasa:** `{total_usdt:.2f} USDT`\n"
         summary += f"💵 **Kullanılabilir:** `{free_usdt:.2f} USDT`\n"
         summary += f"📅 **Günlük Net Kâr:** `{gunluk_pnl:+.2f} USDT`\n"
@@ -257,13 +257,11 @@ def otomatik_arkaplan_tarayici():
             except Exception:
                 aktif_borsa_map = {}
 
-            # Açık olmayanları hafızadan temizle
             for sym in list(AKTIF_GRID_SISTEMLERI.keys()):
                 if sym not in aktif_borsa_map:
                     del AKTIF_GRID_SISTEMLERI[sym]
                     hafizayi_kaydet()
 
-            # --- 1. AÇIK POZİSYONLAR İÇİN TRAILING & KÂR KİLİTLEME KONTROLÜ ---
             for symbol, pos in aktif_borsa_map.items():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
@@ -283,14 +281,11 @@ def otomatik_arkaplan_tarayici():
                 kayitli = AKTIF_GRID_SISTEMLERI.get(symbol, {})
                 en_yuksek_roe = kayitli.get("en_yuksek_roe", roe)
 
-                # Yeni zirve görüldüyse kaydet
                 if roe > en_yuksek_roe:
                     en_yuksek_roe = roe
                     kayitli["en_yuksek_roe"] = en_yuksek_roe
                     hafizayi_kaydet()
 
-                # --- TRAILING TAKE-PROFIT MANTIĞI ---
-                # Eğer kâr %12'yi gördüyse ve zirveden %4 geri çekildiyse, kârı cebe atıp kaç!
                 if en_yuksek_roe >= 12.0 and roe <= (en_yuksek_roe - 4.0):
                     tahmini_kar = abs(pnl) if pnl > 0 else 2.0
                     ANALitik_HAFIZA["gunluk_net_kar_usd"] += tahmini_kar
@@ -303,7 +298,6 @@ def otomatik_arkaplan_tarayici():
                     )
                     continue
 
-                # Maksimum Sabit Güvenlik TP (%25)
                 if roe >= 25.0:
                     tahmini_kar = abs(pnl) if pnl > 0 else 3.0
                     ANALitik_HAFIZA["gunluk_net_kar_usd"] += tahmini_kar
@@ -316,7 +310,6 @@ def otomatik_arkaplan_tarayici():
                     )
                     continue
 
-                # Sabit Stop Loss (%10 Zarar Kes)
                 if roe <= -10.0:
                     tahmini_zarar = abs(pnl) if pnl < 0 else 1.5
                     ANALitik_HAFIZA["gunluk_net_kar_usd"] -= tahmini_zarar
@@ -329,7 +322,6 @@ def otomatik_arkaplan_tarayici():
                     )
                     continue
 
-            # --- 2. TÜM LİSTEYİ TARAYIP PUANLAMA (EN İYİYİ SEÇME) ---
             if len(aktif_borsa_map) < MAKSIMUM_TOPLAM_POZISYON:
                 taranan_sinyaller = []
 
@@ -354,10 +346,8 @@ def otomatik_arkaplan_tarayici():
                     if adx < MIN_ADX_GUCU:
                         continue
 
-                    # Yön belirleme
                     if ema7 > ema21 and 45 <= rsi <= 65:
                         yon = "LONG"
-                        # Güç puanı: ADX ne kadar yüksekse ve RSI orta-güçlü bölgedeyse puan artar
                         puan = adx + (rsi - 45)
                     elif ema7 < ema21 and 35 <= rsi <= 55:
                         yon = "SHORT"
@@ -365,7 +355,6 @@ def otomatik_arkaplan_tarayici():
                     else:
                         continue
 
-                    # Geçmiş başarısız hata filtresi
                     son_hatalar = [h for h in ANALitik_HAFIZA["basarisiz_analizler"] if h["symbol"] == symbol]
                     if son_hatalar:
                         son_hata = son_hatalar[-1]
@@ -381,10 +370,8 @@ def otomatik_arkaplan_tarayici():
                         "fiyat": guncel_fiyat
                     })
 
-                # EN İYİ SINYALLERE ÖNCELİK VER (PUANA GÖRE BÜYÜKTEN KÜÇÜĞE SIRALA)
                 taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
-                # --- 3. EN GÜÇLÜ COİNLERE İŞLEM AÇMA ---
                 for sinyal in taranan_sinyaller:
                     if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
                         break
@@ -462,7 +449,7 @@ if __name__ == '__main__':
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("pozisyonlar", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
-    app_tg.add_handler(CommandHangler("durdur" if 'durdur_komutu' else "durdur", durdur_komutu))
+    app_tg.add_handler(CommandHandler("durdur", durdur_komutu)) # DÜZELTİLEN YER (CommandHangler -> CommandHandler)
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
     app_tg.run_polling(drop_pending_updates=True)
