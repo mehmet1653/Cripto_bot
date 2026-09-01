@@ -94,8 +94,8 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
     "egitim_verileri": []
 })
 
-MIN_ADX_GUCU = 20.0
 MAKSIMUM_AYNI_YON_SAYISI = 3
+MAKSIMUM_TOPLAM_POZISYON = 5
 
 # ==================== YAPAY ZEKA MODELİ (ML) ====================
 ai_model = RandomForestClassifier(n_estimators=50, random_state=42)
@@ -128,7 +128,7 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod):
     except Exception:
         return True
 
-# ==================== YENİ NESİL ATR & LİKİDİTE FİLTRELERİ ====================
+# ==================== ATR & LİKİDİTE FİLTRELERİ ====================
 def atr_ve_volatilite_hesapla(df, period=14):
     try:
         atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=period).average_true_range().iloc[-1]
@@ -158,7 +158,7 @@ def telegram_mesaj_gonder(mesaj):
 
 @app.route('/')
 def home():
-    return f"Testnet Dinamik Sinyal Botu | Aktif Hafıza: {len(AKTIF_GRID_SISTEMLERI)} | Yapay Zeka Durumu: {'Eğitildi' if ai_model_egitildi else 'Eğitiliyor'}"
+    return f"Melez Sinyal Botu | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)} | AI: {'Eğitildi' fiş ai_model_egitildi else 'Topluyor'}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -224,15 +224,13 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         basari_orani = (basarili_sayisi / toplam_islem * 100) if toplam_islem > 0 else 0.0
 
         mesaj = (
-            f"📊 *DİNAMİK BOT DURUMU*\n\n"
+            f"📊 *MELEZ SİNYAL BOTU DURUMU*\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
-            f"{pnl_ikon} Anlık Toplam Kâr/Zarar: `{toplam_pnl:+.2f} USDT`\n"
-            f"📌 Açık Pozisyon Sayısı: `{len(borsa_poslari)}`\n\n"
-            f"🎯 *İşlem İstatistikleri:*\n"
-            f"✅ Başarılı (TP): `{basarili_sayisi}` adet\n"
-            f"❌ Başarısız (SL): `{basarisiz_sayisi}` adet\n"
+            f"{pnl_ikon} Anlık Kâr/Zarar: `{toplam_pnl:+.2f} USDT`\n"
+            f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n\n"
+            f"🎯 *İstatistikler:*\n"
+            f"✅ Başarılı (TP): `{basarili_sayisi}` | ❌ Başarısız (SL): `{basarisiz_sayisi}`\n"
             f"📈 Başarı Oranı: `%{basari_orani:.1f}`\n\n"
-            f"🤖 Yapay Zeka: `{'Aktif ve Öğreniyor' if ai_model_egitildi else 'Veri Topluyor'}`\n\n"
         )
         
         if borsa_poslari:
@@ -244,9 +242,9 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pnl = float(pos.get('unrealizedPnl', 0))
                 yuzde = float(pos.get('percentage', 0))
                 isaret = "🟢" if pnl >= 0 else "🔴"
-                mesaj += f"🔹 *{sym}* (`{yon}` {kaldirac}x)\n   {isaret} Kâr/Zarar: `{pnl:+.2f} USDT` (`%{yuzde:+.2f}`)\n"
+                mesaj += f"🔹 *{sym}* (`{yon}` {kaldirac}x)\n   {isaret} `{pnl:+.2f} USDT` (`%{yuzde:+.2f}`)\n"
         else:
-            mesaj += "ℹ️ Şu an borsada açık aktif pozisyon bulunmuyor."
+            mesaj += "ℹ️ Açık pozisyon bulunmuyor."
             AKTIF_GRID_SISTEMLERI.clear()
             hafizayi_kaydet()
 
@@ -257,7 +255,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 *Bot taramaya ve yapay zeka analize başladı!*", parse_mode='Markdown')
+    await update.message.reply_text("🟢 *Melez Bot (Trend + Testere + Sniper) Aktif!*", parse_mode='Markdown')
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -272,16 +270,16 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pozisyonu_garantili_kapat(pos['symbol'], str(pos.get('side', '')).upper(), float(pos['contracts']), f"🛑 *MANUEL KAPATMA* - `{pos['symbol']}`", basarili=False)
         AKTIF_GRID_SISTEMLERI.clear()
         hafizayi_kaydet()
-        await update.message.reply_text("✅ Tüm pozisyonlar kapatıldı.", parse_mode='Markdown')
+        await update.message.reply_text("✅ Tüm pozisyonlar kapatıldı ve sıfırlandı.", parse_mode='Markdown')
     except Exception as e:
         AKTIF_GRID_SISTEMLERI.clear()
         hafizayi_kaydet()
         await update.message.reply_text(f"✅ Hafıza temizlendi. (Not: {e})", parse_mode='Markdown')
 
-# ==================== 10 SANİYELİK ARKA PLAN TARAYICI ====================
+# ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 Dinamik Sinyal Tarayıcı ve Yapay Zeka Aktif (10 sn döngü).")
+    print("🚀 Melez Tarayıcı (Trend + Testere + Sniper) Devrede.")
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -344,7 +342,7 @@ def otomatik_arkaplan_tarayici():
                         rsi=rsi_val, adx=adx_val, ema_fark=ema_fark_val, basarili=False
                     )
 
-            # --- 2. TÜM COIN'LERİ TARAYIP GÜCÜNE GÖRE SIRALAMA ---
+            # --- 2. COİN TARAMA VE MOD SEÇİMİ (TREND vs TESTERE vs SNIPER) ---
             taranan_sinyaller = []
 
             for symbol in TAKIP_EDILENLER:
@@ -369,24 +367,41 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
-                if adx_val < MIN_ADX_GUCU:
-                    continue
+                # PİYASA DURUMU ANALİZİ (MELEZ MOD)
+                is_tester = adx_val < 18.0
+                
+                if is_tester:
+                    # YATAY TESTERE MODU (Destek/Direnç veya Aşırı RSI Avı)
+                    if rsi < 32:
+                        grid_yonu = "LONG"
+                        sinyal_puani = 62 # Testere fırsat puanı
+                    elif rsi > 68:
+                        grid_yonu = "SHORT"
+                        sinyal_puani = 62
+                    else:
+                        continue
+                else:
+                    # NORMAL TREND / GÜÇLÜ SİNYAL MODU
+                    if adx_val < 20.0:
+                        continue
+                    
+                    grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
+                    if grid_yonu == "SHORT" and rsi < 42: continue 
+                    if grid_yonu == "LONG" and rsi > 58: continue 
 
-                grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
-                if grid_yonu == "SHORT" and rsi < 42: continue 
-                if grid_yonu == "LONG" and rsi > 58: continue 
-
-                sinyal_puani = 50
-                if adx_val > 30: sinyal_puani += 20
-                if abs(ema7 - ema21) / guncel_fiyat > 0.002: sinyal_puani += 15
-                if atr_yuzdesi > 3.5:
-                    sinyal_puani -= 10
+                    sinyal_puani = 50
+                    if adx_val > 30: sinyal_puani += 20
+                    if abs(ema7 - ema21) / guncel_fiyat > 0.002: sinyal_puani += 15
+                    if atr_yuzdesi > 3.5:
+                        sinyal_puani -= 10
 
                 ema_fark_val = float(ema7 - ema21)
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 
-                if not yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod):
-                    continue
+                # Kesin sinyal (>=85) veya Testere modunda AI filtresini esnet, diğerlerinde uygula
+                if sinyal_puani < 85 and not is_tester:
+                    if not yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod):
+                        continue
 
                 taranan_sinyaller.append({
                     "symbol": symbol,
@@ -396,14 +411,19 @@ def otomatik_arkaplan_tarayici():
                     "adx": adx_val,
                     "ema_fark": ema_fark_val,
                     "fiyat": guncel_fiyat,
-                    "atr": atr_yuzdesi
+                    "atr": atr_yuzdesi,
+                    "tester": is_tester
                 })
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
-            # --- 3. SIRALANAN EN GÜÇLÜ COIN'LERE İŞLEM AÇMA ---
+            # --- 3. İŞLEM LİMİTLERİ VE SİPARİŞ AÇMA ---
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU:
+                    break
+
+                # Toplam Pozisyon Sınırı Kontrolü
+                if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON and sinyal["puan"] < 85:
                     break
 
                 symbol = sinyal["symbol"]
@@ -414,13 +434,27 @@ def otomatik_arkaplan_tarayici():
                 ema_fark_val = sinyal["ema_fark"]
                 guncel_fiyat = sinyal["fiyat"]
                 atr_yuzdesi = sinyal["atr"]
+                is_tester = sinyal["tester"]
 
+                # Aynı Yön Sınırı Kontrolü (Sniper p >= 85 ise kuralı deler geçer)
                 ayni_yon_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == grid_yonu)
-                if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI and sinyal_puani < 80:
+                if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI and sinyal_puani < 85:
                     continue 
 
-                # Kademeli Risk Dağılımı (Düşük sinyaller %5 kaldıraç / %10 kasa)
-                if sinyal_puani >= 80:
+                # Risk, Kaldıraç ve Hedef Dağılımı (Sniper ve Testere Ayarları Dahil)
+                if sinyal_puani >= 85:
+                    # ALTIN KURAL: KESİN (SNIPER) SİNYAL
+                    dinamik_kaldirac = 20
+                    kasa_orani = 0.30
+                    hedef_roe = max(30.0, atr_yuzdesi * 10)
+                    stop_roe = max(8.0, atr_yuzdesi * 3)
+                elif is_tester:
+                    # YATAY TESTERE MODU (Mikro Scalp Hedefleri)
+                    dinamik_kaldirac = 5
+                    kasa_orani = 0.08
+                    hedef_roe = 5.0
+                    stop_roe = 4.0
+                elif sinyal_puani >= 80:
                     dinamik_kaldirac = 20
                     kasa_orani = 0.30
                     hedef_roe = max(20.0, atr_yuzdesi * 8)
@@ -465,15 +499,19 @@ def otomatik_arkaplan_tarayici():
                         "stop_roe": stop_roe
                     }
                     hafizayi_kaydet()
+                    
+                    mod_etiketi = "🎯 *ALTIN KURAL (SNIPER)*" if sinyal_puani >= 85 else ("⚡ *YATAY TESTERE AVCI* " if is_tester else "🚀 *TREND SİNYALİ*")
                     telegram_mesaj_gonder(
-                        f"🚀 *YENİ İŞLEM AÇILDI (Akıllı Filtreli)*\n\n"
+                        f"{mod_etiketi}\n\n"
                         f"📌 *Coin:* `{symbol}`\n"
-                        f"📊 *Yön:* `{grid_yonu}`\n"
-                        f"⭐ *Sinyal Puanı:* `{sinyal_puani}`\n"
-                        f"⚙️ *Kaldıraç:* `{dinamik_kaldirac}x`\n"
+                        f"📊 *Yön:* `{grid_yonu}` | ⭐ *Puan:* `{sinyal_puani}`\n"
+                        f"⚙️ *Kaldıraç:* `{dinamik_kaldirac}x` | 💰 *Kasa Oranı:* `%{kasa_orani*100:.0f}`\n"
                         f"📈 *RSI:* `{rsi:.1f}` | *ADX:* `{adx_val:.1f}`\n"
                         f"🎯 *Hedef TP:* `+{hedef_roe:.1f}%` | 🛑 *Stop SL:* `-{stop_roe:.1f}%`"
                     )
+                    
+                    # Anlık listeyi güncelle ki döngü içinde limitler anında işlesin
+                    aktif_borsa_map[symbol] = {'symbol': symbol, 'side': grid_yonu, 'contracts': miktar}
                 except Exception as e:
                     print(f"Emir hatası ({symbol}): {e}")
 
