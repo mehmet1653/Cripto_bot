@@ -510,17 +510,21 @@ def otomatik_arkaplan_tarayici():
                         {'timeInForce': 'IOC'}
                     )
 
-                    # 2. Borsa Tarafına Kâr Al (TP) Emri Bırak
+                    # 2. Borsa Tarafına Kâr Al (TP) Emri Bırak (Gate.io / CCXT V5 Destekli Parametrelerle)
                     try:
-                        exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, tp_fiyat, {'reduce_only': True})
+                        exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, tp_fiyat, {
+                            'reduce_only': True,
+                            'price_high': tp_fiyat
+                        })
                     except Exception as e:
                         print(f"Borsa TP emir hatası ({symbol}): {e}")
 
-                    # 3. Borsa Tarafına Zarar Kes (SL) Emri Bırak
+                    # 3. Borsa Tarafına Zarar Kes (SL) Emri Bırak (Gate.io V5 Standart Koşullu / Stop Emri)
                     try:
-                        exchange.create_order(symbol, 'stop-market', kapatma_yonu, miktar, None, {
-                            'triggerPrice': sl_fiyat,
-                            'reduce_only': True
+                        exchange.create_order(symbol, 'stop', kapatma_yonu, miktar, sl_fiyat, {
+                            'stopPrice': sl_fiyat,
+                            'reduce_only': True,
+                            'price': sl_fiyat
                         })
                     except Exception as e:
                         print(f"Borsa SL emir hatası ({symbol}): {e}")
