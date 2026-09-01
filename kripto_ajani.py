@@ -303,7 +303,7 @@ def otomatik_arkaplan_tarayici():
                     del AKTIF_GRID_SISTEMLERI[sym]
                     hafizayi_kaydet()
 
-            # --- 1. AÇIK POZİSYON HEDEF (TP) / ZARAR KES (SL) KONTROLÜ (Bot İçi Ek Güvenlik) ---
+            # --- 1. AÇIK POZİSYON HEDEF (TP) / ZARAR KES (SL) KONTROLÜ (Borsa Emirleri Dışında Ek Güvenlik) ---
             for symbol, pos in aktif_borsa_map.items():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
@@ -413,7 +413,7 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
-            # --- 3. İŞLEM LİMİTLERİ VE SİPARİŞ AÇMA (DOĞRU YÖNLÜ TP/SL İLE) ---
+            # --- 3. İŞLEM LİMİTLERİ VE SİPARİŞ AÇMA (BORSA TARAFI TP/SL İLE) ---
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU:
                     break
@@ -497,7 +497,6 @@ def otomatik_arkaplan_tarayici():
                         emir_fiyati = max(guncel_fiyat, mark_price * 0.985)
                         emir_yonu = 'sell'
                         kapatma_yonu = 'buy'
-                        # Short işlemde TP fiyatı girişin ALTINDA, SL fiyatı girişin ÜSTÜNDE olmalıdır
                         tp_fiyat = emir_fiyati * (1 - (hedef_roe / 100 / dinamik_kaldirac))
                         sl_fiyat = emir_fiyati * (1 + (stop_roe / 100 / dinamik_kaldirac))
 
@@ -511,19 +510,21 @@ def otomatik_arkaplan_tarayici():
                         {'timeInForce': 'IOC'}
                     )
 
-                    # 2. Borsa Tarafına Kâr Al (TP) Emri Bırak (Doğru Yön / Fiyat Kademesiyle)
+                    # 2. Borsa Tarafına Kâr Al (TP) Emri Bırak (Gate.io / CCXT V5 Destekli Parametrelerle)
                     try:
                         exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, tp_fiyat, {
-                            'reduce_only': True
+                            'reduce_only': True,
+                            'price_high': tp_fiyat
                         })
                     except Exception as e:
                         print(f"Borsa TP emir hatası ({symbol}): {e}")
 
-                    # 3. Borsa Tarafına Zarar Kes (SL) Emri Bırak (Doğru Tetikleme Yönüyle)
+                    # 3. Borsa Tarafına Zarar Kes (SL) Emri Bırak (Gate.io V5 Standart Koşullu / Stop Emri)
                     try:
                         exchange.create_order(symbol, 'stop', kapatma_yonu, miktar, sl_fiyat, {
                             'stopPrice': sl_fiyat,
-                            'reduce_only': True
+                            'reduce_only': True,
+                            'price': sl_fiyat
                         })
                     except Exception as e:
                         print(f"Borsa SL emir hatası ({symbol}): {e}")
