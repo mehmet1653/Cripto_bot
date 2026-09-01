@@ -128,6 +128,25 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod):
     except Exception:
         return True
 
+# ==================== YENİ NESİL ATR & LİKİDİTE FİLTRELERİ ====================
+def atr_ve_volatilite_hesapla(df, period=14):
+    try:
+        atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=period).average_true_range().iloc[-1]
+        fiyat = df['close'].iloc[-1]
+        return float((atr / fiyat) * 100)
+    except Exception:
+        return 1.5
+
+def hacim_ve_likidite_kontrolu(df):
+    try:
+        ortalama_hacim = df['volume'].rolling(window=20).mean().iloc[-1]
+        son_hacim = df['volume'].iloc[-1]
+        if son_hacim < (ortalama_hacim * 0.2):
+            return False
+        return True
+    except Exception:
+        return True
+
 def telegram_mesaj_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID:
         return
@@ -338,10 +357,15 @@ def otomatik_arkaplan_tarayici():
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    
+                    if not hacim_ve_likidite_kontrolu(df):
+                        continue
+
                     ema7 = ta.trend.ema_indicator(df['close'], window=7).iloc[-1]
                     ema21 = ta.trend.ema_indicator(df['close'], window=21).iloc[-1]
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
                     adx_val = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx().iloc[-1]
+                    atr_yuzdesi = atr_ve_volatilite_hesapla(df)
                 except Exception:
                     continue
 
@@ -355,6 +379,8 @@ def otomatik_arkaplan_tarayici():
                 sinyal_puani = 50
                 if adx_val > 30: sinyal_puani += 20
                 if abs(ema7 - ema21) / guncel_fiyat > 0.002: sinyal_puani += 15
+                if atr_yuzdesi > 3.5:
+                    sinyal_puani -= 10
 
                 ema_fark_val = float(ema7 - ema21)
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
@@ -369,7 +395,8 @@ def otomatik_arkaplan_tarayici():
                     "rsi": rsi,
                     "adx": adx_val,
                     "ema_fark": ema_fark_val,
-                    "fiyat": guncel_fiyat
+                    "fiyat": guncel_fiyat,
+                    "atr": atr_yuzdesi
                 })
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
@@ -386,27 +413,28 @@ def otomatik_arkaplan_tarayici():
                 adx_val = sinyal["adx"]
                 ema_fark_val = sinyal["ema_fark"]
                 guncel_fiyat = sinyal["fiyat"]
+                atr_yuzdesi = sinyal["atr"]
 
-                # 🛡️ **AYNI YÖN FİLTRESİ VE GÜÇLÜ FIRSAT İSTİSNASI (>= 80 PUANSA 4. İŞLEME İZİN VER)**
                 ayni_yon_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == grid_yonu)
                 if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI and sinyal_puani < 80:
                     continue 
 
+                # Kademeli Risk Dağılımı (Düşük sinyaller %5 kaldıraç / %10 kasa)
                 if sinyal_puani >= 80:
                     dinamik_kaldirac = 20
-                    kasa_orani = 0.35
-                    hedef_roe = 25.0
-                    stop_roe = 10.0
+                    kasa_orani = 0.30
+                    hedef_roe = max(20.0, atr_yuzdesi * 8)
+                    stop_roe = max(8.0, atr_yuzdesi * 3)
                 elif sinyal_puani >= 65:
                     dinamik_kaldirac = 10
-                    kasa_orani = 0.20
-                    hedef_roe = 18.0
-                    stop_roe = 10.0
+                    kasa_orani = 0.18
+                    hedef_roe = max(15.0, atr_yuzdesi * 6)
+                    stop_roe = max(8.0, atr_yuzdesi * 3)
                 else:
                     dinamik_kaldirac = 5
                     kasa_orani = 0.10
-                    hedef_roe = 12.0
-                    stop_roe = 12.0
+                    hedef_roe = max(10.0, atr_yuzdesi * 4)
+                    stop_roe = max(10.0, atr_yuzdesi * 3.5)
 
                 try:
                     balance = exchange.fetch_balance()
@@ -438,13 +466,13 @@ def otomatik_arkaplan_tarayici():
                     }
                     hafizayi_kaydet()
                     telegram_mesaj_gonder(
-                        f"🚀 *YENİ İŞLEM AÇILDI (Yapay Zeka Onaylı)*\n\n"
+                        f"🚀 *YENİ İŞLEM AÇILDI (Akıllı Filtreli)*\n\n"
                         f"📌 *Coin:* `{symbol}`\n"
                         f"📊 *Yön:* `{grid_yonu}`\n"
                         f"⭐ *Sinyal Puanı:* `{sinyal_puani}`\n"
                         f"⚙️ *Kaldıraç:* `{dinamik_kaldirac}x`\n"
                         f"📈 *RSI:* `{rsi:.1f}` | *ADX:* `{adx_val:.1f}`\n"
-                        f"🎯 *Hedef TP:* `+{hedef_roe}%` | 🛑 *Stop SL:* `-{stop_roe}%`"
+                        f"🎯 *Hedef TP:* `+{hedef_roe:.1f}%` | 🛑 *Stop SL:* `-{stop_roe:.1f}%`"
                     )
                 except Exception as e:
                     print(f"Emir hatası ({symbol}): {e}")
