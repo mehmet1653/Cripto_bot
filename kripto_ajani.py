@@ -36,8 +36,7 @@ exchange.set_sandbox_mode(True)
 
 TAKIP_EDILENLER = [
     'SOL/USDT:USDT', 'AVAX/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 
-    'SUI/USDT:USDT', 'HYPE/USDT:USDT', 'NEAR/USDT:USDT', 'PEPE/USDT:USDT', 
-    'RENDER/USDT:USDT', 'INJ/USDT:USDT'
+    'SUI/USDT:USDT', 'HYPE/USDT:USDT', 'NEAR/USDT:USDT', 'RENDER/USDT:USDT', 'INJ/USDT:USDT'
 ]
 
 BOT_CALISIYOR_MU = True
@@ -497,23 +496,10 @@ def otomatik_arkaplan_tarayici():
                     if miktar < min_amount:
                         miktar = min_amount
 
-                    # 🚀 TESTNET FİYAT SAPMA HATASI ÇÖZÜMÜ: Doğru kademeden IOC Limit Emir
-                    orderbook = exchange.fetch_order_book(symbol)
-                    if grid_yonu == 'LONG':
-                        emir_fiyati = orderbook['asks'][0][0] if orderbook['asks'] else guncel_fiyat * 1.005
-                        emir_yonu = 'buy'
-                    else:
-                        emir_fiyati = orderbook['bids'][0][0] if orderbook['bids'] else guncel_fiyat * 0.995
-                        emir_yonu = 'sell'
-
-                    exchange.create_order(
-                        symbol, 
-                        'limit', 
-                        emir_yonu, 
-                        miktar, 
-                        emir_fiyati, 
-                        {'timeInForce': 'IOC'}
-                    )
+                    # Genişletilmiş fiyat toleransı (PEPE gibi küçük fiyatlı coinler için)
+                    fiyat_toleransi = guncel_fiyat * 1.005 if grid_yonu == 'LONG' else guncel_fiyat * 0.995
+                    
+                    exchange.create_order(symbol, 'limit', 'buy' if grid_yonu == 'LONG' else 'sell', miktar, fiyat_toleransi, {'timeInForce': 'IOC'})
 
                     AKTIF_GRID_SISTEMLERI[symbol] = {
                         "giris_rsi": rsi,
