@@ -139,7 +139,7 @@ def hacim_ve_likidite_kontrolu(df):
     try:
         ortalama_hacim = df['volume'].rolling(window=20).mean().iloc[-1]
         son_hacim = df['volume'].iloc[-1]
-        if son_hacim < (ortalama_hacim * 0.2):
+        if son_hacim < (ortalama_hacim * 0.15):  # Likidite filtresi esnetildi
             return False
         return True
     except Exception:
@@ -156,7 +156,7 @@ def telegram_mesaj_gonder(mesaj):
 
 @app.route('/')
 def home():
-    return f"Güvenli Seçici Bot | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
+    return f"Güvenli Seçici Bot (Altın Atış Modlu) | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -223,7 +223,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         basari_orani = (basarili_sayisi / toplam_islem * 100) if toplam_islem > 0 else 0.0
 
         mesaj = (
-            f"📊 *GÜVENLİ SEÇİCİ BOT DURUMU*\n\n"
+            f"📊 *ALTIN ATIŞ BOT DURUMU*\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"{pnl_ikon} Anlık Kâr/Zarar: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n\n"
@@ -254,7 +254,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 *Güvenli Seçici Bot Aktif Edildi!*", parse_mode='Markdown')
+    await update.message.reply_text("🟢 *Altın Atış Bot Aktif Edildi!*", parse_mode='Markdown')
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -278,7 +278,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 Güvenli Seçici Tarayıcı Devrede.")
+    print("🚀 Altın Atış Tarayıcı Devrede.")
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -341,7 +341,7 @@ def otomatik_arkaplan_tarayici():
                         rsi=rsi_val, adx=adx_val, ema_fark=ema_fark_val, basarili=False
                     )
 
-            # --- TÜM LİSTEYİ TARA VE PUANLA ---
+            # --- TÜM LİSTEYİ DİNAMİK TARA VE PUANLA ---
             taranan_sinyaller = []
 
             for symbol in TAKIP_EDILENLER:
@@ -366,28 +366,37 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
-                is_tester = adx_val < 20.0  
-                
-                if is_tester:
-                    if rsi < 30:  
-                        grid_yonu = "LONG"
-                        sinyal_puani = 80  
-                    elif rsi > 70:  
-                        grid_yonu = "SHORT"
-                        sinyal_puani = 80
-                    else:
-                        continue
-                else:
-                    if adx_val < 25.0:  
-                        continue
-                        
-                    grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
-                    if grid_yonu == "SHORT" and rsi < 40: continue  
-                    if grid_yonu == "LONG" and rsi > 60: continue   
+                # Dinamik Puanlama ve Sinyal Üretimi
+                sinyal_puani = 50
+                grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
 
-                    sinyal_puani = 60
-                    if adx_val > 32: sinyal_puani += 15
-                    if abs(ema7 - ema21) / guncel_fiyat > 0.0025: sinyal_puani += 15
+                # Trend ve Momentum Kriterleri
+                if adx_val > 20:
+                    sinyal_puani += 15
+                if adx_val > 30:
+                    sinyal_puani += 10
+
+                # RSI Filtreleri ve Puan Ekleme
+                if grid_yonu == "LONG":
+                    if 40 <= rsi <= 58:  # İdeal trend içi geri çekilme
+                        sinyal_puani += 15
+                    elif rsi < 30:       # Aşırı satış (Altın Atış Adayı)
+                        sinyal_puani += 25
+                        grid_yonu = "LONG"
+                else:  # SHORT
+                    if 42 <= rsi <= 60:  # İdeal direnç dönüşü
+                        sinyal_puani += 15
+                    elif rsi > 70:       # Aşırı alım (Altın Atış Adayı)
+                        sinyal_puani += 25
+                        grid_yonu = "SHORT"
+
+                # EMA Farkı Güç Puanı
+                ema_fark_orani = abs(ema7 - ema21) / guncel_fiyat
+                if ema_fark_orani > 0.002:
+                    sinyal_puani += 10
+
+                # ALTIN ATIŞ KONTROLÜ (90 ve üzeri puanlar)
+                is_altin_atis = sinyal_puani >= 90
 
                 ema_fark_val = float(ema7 - ema21)
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
@@ -404,7 +413,7 @@ def otomatik_arkaplan_tarayici():
                     "ema_fark": ema_fark_val,
                     "fiyat": guncel_fiyat,
                     "atr": atr_yuzdesi,
-                    "tester": is_tester
+                    "altin_atis": is_altin_atis
                 })
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
@@ -424,16 +433,23 @@ def otomatik_arkaplan_tarayici():
                 adx_val = sinyal["adx"]
                 ema_fark_val = sinyal["ema_fark"]
                 guncel_fiyat = sinyal["fiyat"]
-                is_tester = sinyal["tester"]
+                is_altin_atis = sinyal["altin_atis"]
 
                 ayni_yon_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == grid_yonu)
                 if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
                     continue 
 
-                dinamik_kaldirac = 5 if is_tester else 7
-                kasa_orani = 0.10
-                hedef_roe = 5.0
-                stop_roe = 12.0
+                # Altın Atış Özel Parametreleri (x20 kaldıraç, %20 TP, %10 SL)
+                if is_altin_atis:
+                    dinamik_kaldirac = 20
+                    kasa_orani = 0.15  # Daha yüksek güven için biraz daha fazla bakiye payı
+                    hedef_roe = 20.0
+                    stop_roe = 10.0
+                else:
+                    dinamik_kaldirac = 7
+                    kasa_orani = 0.10
+                    hedef_roe = 6.0
+                    stop_roe = 12.0
 
                 try:
                     balance = exchange.fetch_balance()
@@ -470,10 +486,11 @@ def otomatik_arkaplan_tarayici():
                     }
                     hafizayi_kaydet()
                     
+                    baslik = "🌟 *ALTIN ATIŞ İŞLEMİ AÇILDI!*" if is_altin_atis else "🛡️ *STANDART İŞLEM AÇILDI*"
                     telegram_mesaj_gonder(
-                        f"🛡️ *EN POTANSİYELLİ İŞLEM AÇILDI*\n\n"
+                        f"{baslik}\n\n"
                         f"📌 *Coin:* `{symbol}`\n"
-                        f"📊 *Yön:* `{grid_yonu}` | ⭐ *Konfluans Puanı:* `{sinyal_puani}`\n"
+                        f"📊 *Yön:* `{grid_yonu}` | ⭐ *Puan:* `{sinyal_puani}/100`\n"
                         f"⚙️ *Kaldıraç:* `{dinamik_kaldirac}x` | 💰 *Kasa Oranı:* `%{kasa_orani*100:.0f}`\n"
                         f"📈 *RSI:* `{rsi:.1f}` | *ADX:* `{adx_val:.1f}`\n"
                         f"🎯 *Hedef TP ROE:* `+{hedef_roe:.1f}%`\n"
