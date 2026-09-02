@@ -446,15 +446,15 @@ def otomatik_arkaplan_tarayici():
 
                 # Altın Atış Özel Parametreleri (x20 kaldıraç, %20 TP, %10 SL)
                 if is_altin_atis:
-                    dinamik_kaldirac = 100
+                    dinamik_kaldirac = 25
                     kasa_orani = 0.15
                     hedef_roe = 20.0
                     stop_roe = 10.0
                 else:
-                    dinamik_kaldirac = 50
+                    dinamik_kaldirac = 10
                     kasa_orani = 0.10
-                    hedef_roe = 20
-                    stop_roe = 10
+                    hedef_roe = 20.0
+                    stop_roe = 10.0
 
                 try:
                     balance = exchange.fetch_balance()
