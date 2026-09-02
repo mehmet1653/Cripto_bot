@@ -495,4 +495,6 @@ def otomatik_arkaplan_tarayici():
             
         time.sleep(10)
 
-def flask
+def flask_web_server():
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+    
