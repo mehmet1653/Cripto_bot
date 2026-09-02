@@ -156,7 +156,7 @@ def telegram_mesaj_gonder(mesaj):
 
 @app.route('/')
 def home():
-    return f"Güvenli Seçici Bot (Katı ADX Filtreli) | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
+    return f"Altın Atış Botu Aktif | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -427,9 +427,6 @@ def otomatik_arkaplan_tarayici():
                 if not BOT_CALISIYOR_MU:
                     break
 
-                if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
-                    break
-
                 symbol = sinyal["symbol"]
                 grid_yonu = sinyal["yon"]
                 sinyal_puani = sinyal["puan"]
@@ -438,6 +435,10 @@ def otomatik_arkaplan_tarayici():
                 ema_fark_val = sinyal["ema_fark"]
                 guncel_fiyat = sinyal["fiyat"]
                 is_altin_atis = sinyal["altin_atis"]
+
+                # MAKSİMUM POZİSYON KONTROLÜ: Altın Atış değilse ve sınır dolduysa bu coini atla (diğerlerine bak)
+                if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON and not is_altin_atis:
+                    continue
 
                 ayni_yon_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == grid_yonu)
                 if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
