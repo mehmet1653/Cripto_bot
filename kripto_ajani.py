@@ -318,8 +318,8 @@ def otomatik_arkaplan_tarayici():
                 pnl = float(pos.get('unrealizedPnl', 0))
 
                 kayitli = AKTIF_GRID_SISTEMLERI.get(symbol, {})
-                hedef_roe = kayitli.get("hedef_roe", 5.0)
-                stop_roe = kayitli.get("stop_roe", 12.0)
+                hedef_roe = kayitli.get("hedef_roe", 20.0)
+                stop_roe = kayitli.get("stop_roe", 10.0)
                 rsi_val = kayitli.get("giris_rsi", 50)
                 adx_val = kayitli.get("giris_adx", 25)
                 ema_fark_val = kayitli.get("ema_fark", 0.0)
@@ -451,10 +451,10 @@ def otomatik_arkaplan_tarayici():
                     hedef_roe = 20.0
                     stop_roe = 10.0
                 else:
-                    dinamik_kaldirac = 7
+                    dinamik_kaldirac = 50
                     kasa_orani = 0.10
-                    hedef_roe = 6.0
-                    stop_roe = 12.0
+                    hedef_roe = 20
+                    stop_roe = 10
 
                 try:
                     balance = exchange.fetch_balance()
