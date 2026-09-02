@@ -446,7 +446,7 @@ def otomatik_arkaplan_tarayici():
 
                 # Altın Atış Özel Parametreleri (x20 kaldıraç, %20 TP, %10 SL)
                 if is_altin_atis:
-                    dinamik_kaldirac = 20
+                    dinamik_kaldirac = 100
                     kasa_orani = 0.15
                     hedef_roe = 20.0
                     stop_roe = 10.0
