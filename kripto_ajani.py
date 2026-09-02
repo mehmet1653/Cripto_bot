@@ -161,12 +161,13 @@ def home():
 def set_isolated_leverage_safely(symbol, leverage):
     try:
         exchange.set_margin_mode('isolated', symbol, {'leverage': leverage})
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Margin mode hatası ({symbol}): {e}")
     try:
         exchange.set_leverage(leverage, symbol)
         return True
-    except Exception:
+    except Exception as e:
+        print(f"Kaldıraç ayarlama hatası ({symbol} - {leverage}x): {e}")
         return False
 
 def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=50, adx=25, ema_fark=0.0, basarili=True):
@@ -318,7 +319,7 @@ def otomatik_arkaplan_tarayici():
                 pnl = float(pos.get('unrealizedPnl', 0))
 
                 kayitli = AKTIF_GRID_SISTEMLERI.get(symbol, {})
-                hedef_roe = kayitli.get("hedef_roe", 20.0)
+                hedef_roe = kayitli.get("hedef_roe", 15.0)
                 stop_roe = kayitli.get("stop_roe", 10.0)
                 rsi_val = kayitli.get("giris_rsi", 50)
                 adx_val = kayitli.get("giris_adx", 25)
@@ -366,42 +367,37 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
-                # KATI ADX FİLTRESİ: ADX 20'nin altındaysa ve piyasa aşırı alım/satımda (Altın Atış) değilse işlemi baştan ele!
+                # KATI ADX FİLTRESİ
                 if adx_val < 20.0 and not (rsi < 30 or rsi > 70):
                     continue
 
-                # Dinamik Puanlama ve Sinyal Üretimi
+                # Dinamik Puanlama
                 sinyal_puani = 50
                 grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
 
-                # Trend ve Momentum Kriterleri
                 if adx_val >= 20:
                     sinyal_puani += 15
                 if adx_val >= 30:
                     sinyal_puani += 10
 
-                # RSI Filtreleri ve Puan Ekleme
                 if grid_yonu == "LONG":
                     if 40 <= rsi <= 58:
                         sinyal_puani += 15
-                    elif rsi < 30:       # Aşırı satış (Altın Atış Adayı)
+                    elif rsi < 30:
                         sinyal_puani += 25
                         grid_yonu = "LONG"
-                else:  # SHORT
+                else:
                     if 42 <= rsi <= 60:
                         sinyal_puani += 15
-                    elif rsi > 70:       # Aşırı alım (Altın Atış Adayı)
+                    elif rsi > 70:
                         sinyal_puani += 25
                         grid_yonu = "SHORT"
 
-                # EMA Farkı Güç Puanı
                 ema_fark_orani = abs(ema7 - ema21) / guncel_fiyat
                 if ema_fark_orani > 0.002:
                     sinyal_puani += 10
 
-                # ALTIN ATIŞ KONTROLÜ (90 ve üzeri puanlar)
                 is_altin_atis = sinyal_puani >= 90
-
                 ema_fark_val = float(ema7 - ema21)
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 
@@ -436,7 +432,6 @@ def otomatik_arkaplan_tarayici():
                 guncel_fiyat = sinyal["fiyat"]
                 is_altin_atis = sinyal["altin_atis"]
 
-                # MAKSİMUM POZİSYON KONTROLÜ: Altın Atış değilse ve sınır dolduysa bu coini atla (diğerlerine bak)
                 if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON and not is_altin_atis:
                     continue
 
@@ -444,16 +439,16 @@ def otomatik_arkaplan_tarayici():
                 if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
                     continue 
 
-                # Altın Atış Özel Parametreleri (x20 kaldıraç, %20 TP, %10 SL)
+                # Gerçekçi ve Testnet'i patlatmayacak optimize edilmiş kaldıraç / TP-SL oranları (Altcoinler için 20x güvenlidir)
                 if is_altin_atis:
-                    dinamik_kaldirac = 25
+                    dinamik_kaldirac = 20
                     kasa_orani = 0.15
                     hedef_roe = 20.0
                     stop_roe = 10.0
                 else:
                     dinamik_kaldirac = 10
                     kasa_orani = 0.10
-                    hedef_roe = 20.0
+                    hedef_roe = 15.0
                     stop_roe = 10.0
 
                 try:
@@ -462,7 +457,9 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
-                set_isolated_leverage_safely(symbol, dinamik_kaldirac)
+                # Kaldıraç set edilemezse hata loglanacak ve emrin patlaması önlenecek
+                if not set_isolated_leverage_safely(symbol, dinamik_kaldirac):
+                    continue
                 
                 hedef_marjin = toplam_bakiye * kasa_orani
                 hedef_pozisyon_usdt = hedef_marjin * dinamik_kaldirac
