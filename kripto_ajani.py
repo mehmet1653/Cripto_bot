@@ -139,7 +139,7 @@ def hacim_ve_likidite_kontrolu(df):
     try:
         ortalama_hacim = df['volume'].rolling(window=20).mean().iloc[-1]
         son_hacim = df['volume'].iloc[-1]
-        if son_hacim < (ortalama_hacim * 0.15):  # Likidite filtresi esnetildi
+        if son_hacim < (ortalama_hacim * 0.15):
             return False
         return True
     except Exception:
@@ -156,7 +156,7 @@ def telegram_mesaj_gonder(mesaj):
 
 @app.route('/')
 def home():
-    return f"Güvenli Seçici Bot (Altın Atış Modlu) | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
+    return f"Güvenli Seçici Bot (Katı ADX Filtreli) | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
 
 def set_isolated_leverage_safely(symbol, leverage):
     try:
@@ -366,25 +366,29 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
+                # KATI ADX FİLTRESİ: ADX 20'nin altındaysa ve piyasa aşırı alım/satımda (Altın Atış) değilse işlemi baştan ele!
+                if adx_val < 20.0 and not (rsi < 30 or rsi > 70):
+                    continue
+
                 # Dinamik Puanlama ve Sinyal Üretimi
                 sinyal_puani = 50
                 grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
 
                 # Trend ve Momentum Kriterleri
-                if adx_val > 20:
+                if adx_val >= 20:
                     sinyal_puani += 15
-                if adx_val > 30:
+                if adx_val >= 30:
                     sinyal_puani += 10
 
                 # RSI Filtreleri ve Puan Ekleme
                 if grid_yonu == "LONG":
-                    if 40 <= rsi <= 58:  # İdeal trend içi geri çekilme
+                    if 40 <= rsi <= 58:
                         sinyal_puani += 15
                     elif rsi < 30:       # Aşırı satış (Altın Atış Adayı)
                         sinyal_puani += 25
                         grid_yonu = "LONG"
                 else:  # SHORT
-                    if 42 <= rsi <= 60:  # İdeal direnç dönüşü
+                    if 42 <= rsi <= 60:
                         sinyal_puani += 15
                     elif rsi > 70:       # Aşırı alım (Altın Atış Adayı)
                         sinyal_puani += 25
@@ -442,7 +446,7 @@ def otomatik_arkaplan_tarayici():
                 # Altın Atış Özel Parametreleri (x20 kaldıraç, %20 TP, %10 SL)
                 if is_altin_atis:
                     dinamik_kaldirac = 20
-                    kasa_orani = 0.15  # Daha yüksek güven için biraz daha fazla bakiye payı
+                    kasa_orani = 0.15
                     hedef_roe = 20.0
                     stop_roe = 10.0
                 else:
