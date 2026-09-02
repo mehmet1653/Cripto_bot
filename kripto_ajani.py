@@ -279,7 +279,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 Altın Atış Tarayıcı Devrede.")
+    print("🚀 Altın Atış Tarayıcı Devrede ve Loglama Aktif.")
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -342,13 +342,15 @@ def otomatik_arkaplan_tarayici():
                         rsi=rsi_val, adx=adx_val, ema_fark=ema_fark_val, basarili=False
                     )
 
-            # --- TÜM LİSTEYİ DİNAMİK TARA VE PUANLA ---
+            # --- TÜM LİSTEYİ DİNAMİK TARA VE LOGLA ---
             taranan_sinyaller = []
+            print("\n--- Yeni Tarama Döngüsü Başladı ---")
 
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU:
                     break
                 if symbol in aktif_borsa_map:
+                    print(f"[{symbol}] Zaten açık pozisyon var, atlanıyor.")
                     continue
 
                 try:
@@ -357,6 +359,7 @@ def otomatik_arkaplan_tarayici():
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     
                     if not hacim_ve_likidite_kontrolu(df):
+                        print(f"[{symbol}] ❌ Düşük hacim nedeniyle elendi.")
                         continue
 
                     ema7 = ta.trend.ema_indicator(df['close'], window=7).iloc[-1]
@@ -364,11 +367,13 @@ def otomatik_arkaplan_tarayici():
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
                     adx_val = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx().iloc[-1]
                     atr_yuzdesi = atr_ve_volatilite_hesapla(df)
-                except Exception:
+                except Exception as e:
+                    print(f"[{symbol}] Veri çekme hatası: {e}")
                     continue
 
-                # KATI ADX FİLTRESİ
+                # KATI ADX FİLTRESİ LOGU
                 if adx_val < 20.0 and not (rsi < 30 or rsi > 70):
+                    print(f"[{symbol}] ❌ ADX düşük ({adx_val:.1f}) ve RSI normal sınırda ({rsi:.1f}). Elendi.")
                     continue
 
                 # Dinamik Puanlama
@@ -385,13 +390,11 @@ def otomatik_arkaplan_tarayici():
                         sinyal_puani += 15
                     elif rsi < 30:
                         sinyal_puani += 25
-                        grid_yonu = "LONG"
                 else:
                     if 42 <= rsi <= 60:
                         sinyal_puani += 15
                     elif rsi > 70:
                         sinyal_puani += 25
-                        grid_yonu = "SHORT"
 
                 ema_fark_orani = abs(ema7 - ema21) / guncel_fiyat
                 if ema_fark_orani > 0.002:
@@ -401,8 +404,13 @@ def otomatik_arkaplan_tarayici():
                 ema_fark_val = float(ema7 - ema21)
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 
-                if not yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod):
+                # YAPAY ZEKA ONAY LOGU
+                ai_onay = yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod)
+                if not ai_onay:
+                    print(f"[{symbol}] ❌ Yapay Zeka (ML) modelinden onay alamadı! Puan: {sinyal_puani}")
                     continue
+
+                print(f"[{symbol}] ✅ Başarılı Sinyal! Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}")
 
                 taranan_sinyaller.append({
                     "symbol": symbol,
@@ -433,13 +441,14 @@ def otomatik_arkaplan_tarayici():
                 is_altin_atis = sinyal["altin_atis"]
 
                 if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON and not is_altin_atis:
+                    print(f"[{symbol}] Maksimum toplam pozisyon sınırına ulaşıldı, Altın Atış değilse geçiliyor.")
                     continue
 
                 ayni_yon_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == grid_yonu)
                 if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
+                    print(f"[{symbol}] Aynı yönde maksimum pozisyon sınırına ulaşıldı ({grid_yonu}), geçiliyor.")
                     continue 
 
-                # Gerçekçi ve Testnet'i patlatmayacak optimize edilmiş kaldıraç / TP-SL oranları (Altcoinler için 20x güvenlidir)
                 if is_altin_atis:
                     dinamik_kaldirac = 20
                     kasa_orani = 0.15
@@ -454,11 +463,12 @@ def otomatik_arkaplan_tarayici():
                 try:
                     balance = exchange.fetch_balance()
                     toplam_bakiye = float(balance['total'].get('USDT', 0))
-                except Exception:
+                except Exception as e:
+                    print(f"Bakiye okuma hatası: {e}")
                     continue
 
-                # Kaldıraç set edilemezse hata loglanacak ve emrin patlaması önlenecek
                 if not set_isolated_leverage_safely(symbol, dinamik_kaldirac):
+                    print(f"[{symbol}] Kaldıraç ayarlanamadığı için emir iptal edildi.")
                     continue
                 
                 hedef_marjin = toplam_bakiye * kasa_orani
@@ -498,15 +508,15 @@ def otomatik_arkaplan_tarayici():
                         f"🎯 *Hedef TP ROE:* `+{hedef_roe:.1f}%`\n"
                         f"🛑 *Stop SL ROE:* `-{stop_roe:.1f}%`"
                     )
-                    
+                    print(f"🎯 BAŞARIYLA İŞLEM AÇILDI: {symbol} - {grid_yonu}")
                     aktif_borsa_map[symbol] = {'symbol': symbol, 'side': grid_yonu, 'contracts': miktar}
                 except Exception as e:
-                    print(f"Market emir hatası ({symbol}): {e}")
+                    print(f"❌ Market emir açma hatası ({symbol}): {e}")
 
                 break
 
         except Exception as e:
-            print(f"Tarayıcı döngü hatası: {e}")
+            print(f"Tarayıcı döngü genel hatası: {e}")
             
         time.sleep(10)
 
