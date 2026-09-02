@@ -275,7 +275,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         hafizayi_kaydet()
         await update.message.reply_text(f"✅ Hafıza temizlendi. (Not: {e})", parse_mode='Markdown')
 
-# ==================== ARKA PLAN TARAYICI (TAM LİSTE ANALİZİ & EN POTANSİYELLİ SEÇİMİ) ====================
+# ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
     print("🚀 Güvenli Seçici Tarayıcı Devrede.")
@@ -302,7 +302,7 @@ def otomatik_arkaplan_tarayici():
                     del AKTIF_GRID_SISTEMLERI[sym]
                     hafizayi_kaydet()
 
-            # --- 1. HEDEF (TP) / ZARAR KES (SL) KONTROLÜ ---
+            # --- TP / SL KONTROLÜ ---
             for symbol, pos in aktif_borsa_map.items():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
@@ -341,7 +341,7 @@ def otomatik_arkaplan_tarayici():
                         rsi=rsi_val, adx=adx_val, ema_fark=ema_fark_val, basarili=False
                     )
 
-            # --- 2. TÜM LİSTEYİ TARA VE PUANLA (SEÇİCİLİK FİLTRELERİ İLE) ---
+            # --- TÜM LİSTEYİ TARA VE PUANLA ---
             taranan_sinyaller = []
 
             for symbol in TAKIP_EDILENLER:
@@ -366,7 +366,6 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
-                # Bir tık seçici eşikler
                 is_tester = adx_val < 20.0  
                 
                 if is_tester:
@@ -379,7 +378,7 @@ def otomatik_arkaplan_tarayici():
                     else:
                         continue
                 else:
-                    if adx_val < 25.0:  # Trend gücü standardı yukarı çekildi
+                    if adx_val < 25.0:  
                         continue
                         
                     grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
@@ -408,10 +407,9 @@ def otomatik_arkaplan_tarayici():
                     "tester": is_tester
                 })
 
-            # Tüm coinler tarandıktan sonra en yüksek puana (en potansiyelliye) göre sırala
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
-            # --- 3. SADECE EN YÜKSEK POTANSİYELLİ OLANLARA İŞLEM AÇ ---
+            # --- EN YÜKSEK POTANSİYELLİYE İŞLEM AÇ ---
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU:
                     break
@@ -426,7 +424,6 @@ def otomatik_arkaplan_tarayici():
                 adx_val = sinyal["adx"]
                 ema_fark_val = sinyal["ema_fark"]
                 guncel_fiyat = sinyal["fiyat"]
-                atr_yuzdesi = sinyal["atr"]
                 is_tester = sinyal["tester"]
 
                 ayni_yon_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == grid_yonu)
@@ -487,7 +484,6 @@ def otomatik_arkaplan_tarayici():
                 except Exception as e:
                     print(f"Market emir hatası ({symbol}): {e}")
 
-                # Listede puan sırasına göre en yüksek olanı işleme aldıktan sonra diğer adaylara geçişi kontrol et
                 break
 
         except Exception as e:
@@ -497,4 +493,15 @@ def otomatik_arkaplan_tarayici():
 
 def flask_web_server():
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+
+if __name__ == '__main__':
+    threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
+    threading.Thread(target=flask_web_server, daemon=True).start()
     
+    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app_tg.add_handler(CommandHandler("durum", durum_komutu))
+    app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
+    app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
+    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
+    
+    app_tg.run_polling()
