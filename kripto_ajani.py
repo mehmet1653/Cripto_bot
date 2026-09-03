@@ -226,8 +226,13 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             raw_positions = exchange.fetch_positions()
-            borsa_poslari = [p for p in raw_positions if float(p.get('contracts', 0)) > 0]
-        except Exception:
+            borsa_poslari = []
+            for p in raw_positions:
+                kontrat = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+                if kontrat > 0:
+                    borsa_poslari.append(p)
+        except Exception as e:
+            print(f"Pozisyon çekme hatası: {e}")
             borsa_poslari = []
 
         toplam_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in borsa_poslari)
@@ -238,15 +243,28 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         toplam_islem = basarili_sayisi + basarisiz_sayisi
         basari_orani = (basarili_sayisi / toplam_islem * 100) if toplam_islem > 0 else 0.0
 
+        pozisyon_detaylari = ""
+        if borsa_poslari:
+            pozisyon_detaylari = "\n🔍 *Açık Pozisyonlar:*\n"
+            for p in borsa_poslari:
+                sym = p.get('symbol', 'Bilinmeyen')
+                yon = str(p.get('side', '')).upper()
+                pnl_val = float(p.get('unrealizedPnl', 0))
+                roe_val = float(p.get('percentage', 0))
+                pozisyon_detaylari += f"• `{sym}` | {yon} | PnL: `{pnl_val:+.2f} USDT` (`%{roe_val:.2f}`)\n"
+        else:
+            pozisyon_detaylari = "\n🔍 *Açık Pozisyon:* `Yok`\n"
+
         mesaj = (
             f"📊 *PROFESYONEL BOT DURUMU*\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"{pnl_ikon} Anlık Kâr/Zarar: `{toplam_pnl:+.2f} USDT`\n"
-            f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n\n"
+            f"📌 Açık Pozisyon Sayısı: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n"
+            f"{pozisyon_detaylari}\n"
             f"🎯 *İstatistikler:*\n"
             f"✅ Başarılı (TP): `{basarili_sayisi}` | ❌ Başarısız (SL): `{basarisiz_sayisi}`\n"
             f"📈 Başarı Oranı: `%{basari_orani:.1f}`\n"
-            f"🧠 Eğitim Verisi: `{len(ANALitik_HAFIZA.get('egitim_verileri', []))}/3`\n\n"
+            f"🧠 Eğitim Verisi: `{len(ANALitik_HAFIZA.get('egitim_verileri', []))}/3`\n"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
     except Exception as e:
@@ -266,8 +284,9 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔄 *Tüm pozisyonlar kapatılıyor...*", parse_mode='Markdown')
     try:
         for pos in exchange.fetch_positions():
-            if float(pos.get('contracts', 0)) > 0:
-                pozisyonu_garantili_kapat(pos['symbol'], str(pos.get('side', '')).upper(), float(pos['contracts']), f"🛑 *MANUEL KAPATMA* - `{pos['symbol']}`", basarili=False)
+            kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
+            if kontrat > 0:
+                pozisyonu_garantili_kapat(pos['symbol'], str(pos.get('side', '')).upper(), kontrat, f"🛑 *MANUEL KAPATMA* - `{pos['symbol']}`", basarili=False)
         AKTIF_GRID_SISTEMLERI.clear()
         hafizayi_kaydet()
         await update.message.reply_text("✅ Tüm pozisyonlar kapatıldı.", parse_mode='Markdown')
@@ -294,7 +313,11 @@ def otomatik_arkaplan_tarayici():
 
             try:
                 raw_positions = exchange.fetch_positions()
-                aktif_borsa_map = {p['symbol']: p for p in raw_positions if float(p.get('contracts', 0)) > 0}
+                aktif_borsa_map = {}
+                for p in raw_positions:
+                    kontrat = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+                    if kontrat > 0:
+                        aktif_borsa_map[p['symbol']] = p
             except Exception:
                 aktif_borsa_map = {}
 
@@ -317,6 +340,7 @@ def otomatik_arkaplan_tarayici():
                 fark = (guncel_fiyat - merkez) / merkez if yon == "LONG" else (merkez - guncel_fiyat) / merkez
                 roe = fark * 100 * kaldirac_kullanilan
                 pnl = float(pos.get('unrealizedPnl', 0))
+                kontrat_miktari = float(pos.get('contracts', 0) or pos.get('size', 0) or 1.0)
 
                 kayitli = AKTIF_GRID_SISTEMLERI.get(symbol, {})
                 hedef_roe = kayitli.get("hedef_roe", 15.0)
@@ -330,7 +354,7 @@ def otomatik_arkaplan_tarayici():
                     ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
                     hafizayi_kaydet()
                     pozisyonu_garantili_kapat(
-                        symbol, yon, float(pos['contracts']), 
+                        symbol, yon, kontrat_miktari, 
                         f"🎯 *KÂR ALINDI (TP)*\n\n📌 *Coin:* `{symbol}`\n📊 *Yön:* `{yon}`\n💰 *Kâr:* `+{pnl:.2f} USDT` (`%{roe:.2f}`)", 
                         rsi=rsi_val, adx=adx_val, ema_fark=ema_fark_val, atr_yuzde=atr_val, basarili=True
                     )
@@ -338,7 +362,7 @@ def otomatik_arkaplan_tarayici():
                     ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
                     hafizayi_kaydet()
                     pozisyonu_garantili_kapat(
-                        symbol, yon, float(pos['contracts']), 
+                        symbol, yon, kontrat_miktari, 
                         f"🛑 *ZARAR KESİLDİ (SL)*\n\n📌 *Coin:* `{symbol}`\n📊 *Yön:* `{yon}`\n📉 *Zarar:* `{pnl:.2f} USDT` (`%{roe:.2f}`)", 
                         rsi=rsi_val, adx=adx_val, ema_fark=ema_fark_val, atr_yuzde=atr_val, basarili=False
                     )
@@ -356,14 +380,12 @@ def otomatik_arkaplan_tarayici():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
                     
-                    # 15m verileri
                     ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     
                     if not hacim_ve_likidite_kontrolu(df_15m):
                         continue
 
-                    # 4h verileri (Düzeltme ve Tepe Analizi için)
                     ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=20)
                     df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     rsi_4h = ta.momentum.rsi(df_4h['close'], window=14).iloc[-1]
@@ -383,8 +405,6 @@ def otomatik_arkaplan_tarayici():
                 sinyal_puani = 50
                 grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
 
-                # ESNEK 4 SAATLİK (4H) PİYASA SÜZGECİ (Ceza / Puan Kırpma Mekanizması)
-                # 4h'de aşırı şişmişse (RSI > 75) ve bot LONG açmaya çalışıyorsa puanı kırparız (keskin engelleme yerine esnek denge)
                 if grid_yonu == "LONG" and rsi_4h > 75:
                     sinyal_puani -= 20
                     print(f"[{symbol}] ⚠️ 4h RSI aşırı yüksek ({rsi_4h:.1f}), Long için puan kırpıldı (-20).")
@@ -452,7 +472,6 @@ def otomatik_arkaplan_tarayici():
                 is_altin_atis = sinyal["altin_atis"]
                 rsi_4h = sinyal["rsi_4h"]
 
-                # Puanı düşen sinyal 70 puanın altına indiyse işlem açma
                 if sinyal_puani < 70 and not is_altin_atis:
                     print(f"[{symbol}] ❌ Esnek süzgeç/puan kırpılması sonrası puan yetersiz ({sinyal_puani}), atlanıyor.")
                     continue
@@ -464,10 +483,9 @@ def otomatik_arkaplan_tarayici():
                 if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI and not is_altin_atis:
                     continue 
 
-                # 4h RSI şişmiş bölgelerde risk yönetimi (Dinamik Kaldıraç ve Kasa Oranı Kısıntısı)
                 if (grid_yonu == "LONG" and rsi_4h > 75) or (grid_yonu == "SHORT" and rsi_4h < 25):
-                    dinamik_kaldirac = 5   # Daha düşük kaldıraç
-                    kasa_orani = 0.05      # Daha düşük bakiye payı
+                    dinamik_kaldirac = 5
+                    kasa_orani = 0.05
                     hedef_roe = 12.0
                     stop_roe = 7.0
                     print(f"[{symbol}] 🛡️ Riskli bölge tespiti: Kaldıraç 5x ve düşük bakiye oranı (%5) ile temkinli giriliyor.")
