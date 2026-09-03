@@ -6,6 +6,7 @@ import pandas as pd
 import ta
 import os
 import numpy as np
+from datetime import datetime
 from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
@@ -37,6 +38,15 @@ exchange.set_sandbox_mode(True)
 TAKIP_EDILENLER = [
     'SOL/USDT:USDT', 'AVAX/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'SUI/USDT:USDT'
 ]
+
+# Coin isimlerini sayısal ID'lere dönüştürmek için harita (Yapay zekanın anlaması için)
+COIN_ID_MAP = {
+    'SOL/USDT:USDT': 1,
+    'AVAX/USDT:USDT': 2,
+    'XRP/USDT:USDT': 3,
+    'DOGE/USDT:USDT': 4,
+    'SUI/USDT:USDT': 5
+}
 
 BOT_CALISIYOR_MU = True
 
@@ -96,39 +106,39 @@ MAKSIMUM_AYNI_YON_SAYISI = 2
 MAKSIMUM_TOPLAM_POZISYON = 3
 
 # ==================== GELİŞTİRİLMİŞ YAPAY ZEKA MODELİ ====================
-ai_model = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)
+ai_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
 ai_model_egitildi = False
 
 def yapay_zekayi_egit_ve_guncelle():
     global ai_model, ai_model_egitildi
     veriler = ANALitik_HAFIZA.get("egitim_verileri", [])
     
-    # Eşik değer hızlı test ve çıktı alınabilmesi için 3'e düşürüldü
     if len(veriler) < 3:
         ai_model_egitildi = False
         print(f"🧠 Yapay Zeka gözlem modunda: {len(veriler)}/3 veri toplandı.")
         return
 
     try:
-        X = [item[:5] for item in veriler]
-        y = [item[5] for item in veriler]
+        # Veri formatı: [rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id, sonuc (0 veya 1)]
+        X = [item[:6] for item in veriler]
+        y = [item[6] for item in veriler]
         if len(set(y)) < 2:
             ai_model_egitildi = False
             return
             
         ai_model.fit(np.array(X), np.array(y))
         ai_model_egitildi = True
-        print("🧠 Yapay Zeka optimize edildi ve aktif filtre moduna geçti!")
+        print("🧠 Yapay Zeka (Coin Tanıma Özellikli) optimize edildi ve aktif filtre moduna geçti!")
     except Exception as e:
         print(f"Yapay zeka eğitim hatası: {e}")
         ai_model_egitildi = False
 
-def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, symbol):
+def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id, symbol):
     if not ai_model_egitildi:
         print(f"[{symbol}] 🧠 Yapay Zeka henüz eğitim aşamasında (Gözlem modu). Doğrudan onay verildi.")
         return True
     try:
-        tahmin = ai_model.predict(np.array([[rsi, adx, ema_fark, yon_kod, atr_yuzde]]))[0]
+        tahmin = ai_model.predict(np.array([[rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id]]))[0]
         sonuc = bool(tahmin == 1)
         if sonuc:
             print(f"[{symbol}] 🧠 Yapay Zeka Süzgeci: ONAYLANDI ✅")
@@ -199,9 +209,11 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=50, adx=25,
 
     yon_kod = 1 if yon == 'LONG' else -1
     sonuc_kod = 1 if basarili else 0
+    coin_id = COIN_ID_MAP.get(symbol, 0)
     
-    ANALitik_HAFIZA["egitim_verileri"].append([rsi, adx, ema_fark, yon_kod, atr_yuzde, sonuc_kod])
-    if len(ANALitik_HAFIZA["egitim_verileri"]) > 120:
+    # Eğitim verisine artık COIN_ID de ekleniyor
+    ANALitik_HAFIZA["egitim_verileri"].append([rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id, sonuc_kod])
+    if len(ANALitik_HAFIZA["egitim_verileri"]) > 150:
         ANALitik_HAFIZA["egitim_verileri"].pop(0)
     yapay_zekayi_egit_ve_guncelle()
 
@@ -240,7 +252,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🎯 *İstatistikler:*\n"
             f"✅ Başarılı (TP): `{basarili_sayisi}` | ❌ Başarısız (SL): `{basarisiz_sayisi}`\n"
             f"📈 Başarı Oranı: `%{basari_orani:.1f}`\n"
-            f"🧠 Eğitim Verisi: `{len(ANALitik_HAFIZA.get('egitim_verileri', []))}/3`\n\n"
+            f"🧠 Eğitim Verisi: `{len(ANALitik_HAFIZA.get('egitim_verileri', []))}/3` (Coin Tanımalı)\n\n"
         )
         
         if borsa_poslari:
@@ -412,9 +424,10 @@ def otomatik_arkaplan_tarayici():
                 is_altin_atis = sinyal_puani >= 90
                 ema_fark_val = float(ema7 - ema21)
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
+                coin_id = COIN_ID_MAP.get(symbol, 0)
                 
-                # Gelişmiş Yapay Zeka Süzgeci
-                ai_onay = yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod, atr_yuzdesi, symbol)
+                # Gelişmiş Coin Tanımlı Yapay Zeka Süzgeci
+                ai_onay = yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod, atr_yuzdesi, coin_id, symbol)
                 if not ai_onay:
                     print(f"[{symbol}] ❌ Yapay Zeka (ML) süzgecinden geçemediği için elendi! Puan: {sinyal_puani}")
                     continue
@@ -450,7 +463,7 @@ def otomatik_arkaplan_tarayici():
                 atr_yuzdesi = sinyal["atr"]
                 is_altin_atis = sinyal["altin_atis"]
 
-                # ALTIN ATIŞ (%90+) İSE SINIRLARI BYPASS ET, DİĞER DURUMLARDA KONTROL ET
+                # ALTIN ATIŞ (%90+) İSE SINIRLARI BYPASS ET
                 if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON and not is_altin_atis:
                     print(f"[{symbol}] Maksimum toplam pozisyon sınırına ulaşıldı, Altın Atış değilse geçiliyor.")
                     continue
