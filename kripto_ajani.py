@@ -103,14 +103,12 @@ def yapay_zekayi_egit_ve_guncelle():
     global ai_model, ai_model_egitildi
     veriler = ANALitik_HAFIZA.get("egitim_verileri", [])
     
-    # Güvenli öğrenme eşiği 15 veriye çıkarıldı (Overfitting koruması)
     if len(veriler) < 15:
         ai_model_egitildi = False
         print(f"🧠 Yapay Zeka gözlem modunda: {len(veriler)}/15 veri toplandı.")
         return
 
     try:
-        # Özellikler: [rsi, adx, ema_fark, yon_kod, atr_yuzde]
         X = [item[:5] for item in veriler]
         y = [item[5] for item in veriler]
         if len(set(y)) < 2:
@@ -139,7 +137,6 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, symbol):
     except Exception as e:
         print(f"[{symbol}] 🧠 Yapay Zeka tahmin hatası ({e}), varsayılan onay verildi.")
         return True
-
 
 def atr_ve_volatilite_hesapla(df, period=14):
     try:
@@ -202,7 +199,6 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=50, adx=25,
     yon_kod = 1 if yon == 'LONG' else -1
     sonuc_kod = 1 if basarili else 0
     
-    # Hafızaya yeni genişletilmiş veri seti ekleniyor
     ANALitik_HAFIZA["egitim_verileri"].append([rsi, adx, ema_fark, yon_kod, atr_yuzde, sonuc_kod])
     if len(ANALitik_HAFIZA["egitim_verileri"]) > 120:
         ANALitik_HAFIZA["egitim_verileri"].pop(0)
@@ -416,12 +412,11 @@ def otomatik_arkaplan_tarayici():
                 ema_fark_val = float(ema7 - ema21)
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 
-                # Gelişmiş Yapay Zeka Süzgeci (Sembol argümanı eklendi)
-            ai_onay = yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod, atr_yuzdesi, symbol)
+                # Gelişmiş Yapay Zeka Süzgeci (Doğru girinti ile düzeltildi)
+                ai_onay = yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod, atr_yuzdesi, symbol)
                 if not ai_onay:
-                print(f"[{symbol}] ❌ Yapay Zeka (ML) süzgecinden geçemediği için elendi! Puan: {sinyal_puani}")
-                   continue
-
+                    print(f"[{symbol}] ❌ Yapay Zeka (ML) süzgecinden geçemediği için elendi! Puan: {sinyal_puani}")
+                    continue
 
                 print(f"[{symbol}] ✅ Başarılı Sinyal! Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ATR: %{atr_yuzdesi:.2f}")
 
