@@ -166,10 +166,10 @@ def emir_defteri_derinlik_analizi(symbol):
             
         bid_orani = toplam_bid_hacim / (toplam_bid_hacim + toplam_ask_hacim)
         
-        if bid_orani > 0.60:
-            return "ALICI_BASKIN" # Dipte destek duvarı / Long iştahı
-        elif bid_orani < 0.40:
-            return "SATICI_BASKIN" # Tepede direnç duvarı / Short iştahı
+        if bid_orani > 0.55:
+            return "ALICI_BASKIN"
+        elif bid_orani < 0.45:
+            return "SATICI_BASKIN"
         return "DENGELI"
     except Exception:
         return "DENGELI"
@@ -178,7 +178,8 @@ def hacim_ve_likidite_kontrolu(df):
     try:
         ortalama_hacim = df['volume'].rolling(window=20).mean().iloc[-1]
         son_hacim = df['volume'].iloc[-1]
-        if son_hacim < (ortalama_hacim * 0.15):
+        # Gece saatleri ve yatay piyasa için hacim eşiği %10'a esnetildi
+        if son_hacim < (ortalama_hacim * 0.10):
             return False
         return True
     except Exception:
@@ -429,42 +430,39 @@ def otomatik_arkaplan_tarayici():
                 grid_yonu = "LONG"
                 detay_bilgi = []
 
-                # SİMETRİK MANTIK: TEPE (SHORT) VEYA DİP (LONG) TESPİTİ
-                # Senaryo A: Sert Yükseliş Sonrası Tepe / Direnç Short Fırsatı
-                if degisim_yuzdesi >= 4.0 and rsi > 68 and derinlik_durumu == "SATICI_BASKIN":
+                # SİMETRİK MANTIK: TEPE (SHORT) VEYA DİP (LONG) TESPİTİ (Eşikler yatay piyasa için esnetildi: %2.5 ve RSI 62/38)
+                if degisim_yuzdesi >= 2.5 and rsi > 62 and derinlik_durumu in ["SATICI_BASKIN", "DENGELI"]:
                     grid_yonu = "SHORT"
-                    sinyal_puani = 92 # Yüksek kaliteli tepe short sinyali
-                    detay_bilgi.append(f"🏔️ Tepe Tespiti Başarılı (Değişim: +%{degisim_yuzdesi:.1f}, RSI: {rsi:.1f}, Defter: {derinlik_durumu}) -> Puan: 92")
+                    sinyal_puani = 88 
+                    detay_bilgi.append(f"🏔️ Tepe Tespiti Başarılı (Değişim: +%{degisim_yuzdesi:.1f}, RSI: {rsi:.1f}, Defter: {derinlik_durumu}) -> Puan: 88")
                 
-                # Senaryo B: Sert Düşüş Sonrası Dip / Destek Long Fırsatı
-                elif degisim_yuzdesi <= -4.0 and rsi < 32 and derinlik_durumu == "ALICI_BASKIN":
+                elif degisim_yuzdesi <= -2.5 and rsi < 38 and derinlik_durumu in ["ALICI_BASKIN", "DENGELI"]:
                     grid_yonu = "LONG"
-                    sinyal_puani = 92 # Yüksek kaliteli dip long sinyali
-                    detay_bilgi.append(f"🎯 Dip Tespiti Başarılı (Değişim: %{degisim_yuzdesi:.1f}, RSI: {rsi:.1f}, Defter: {derinlik_durumu}) -> Puan: 92")
+                    sinyal_puani = 88 
+                    detay_bilgi.append(f"🎯 Dip Tespiti Başarılı (Değişim: %{degisim_yuzdesi:.1f}, RSI: {rsi:.1f}, Defter: {derinlik_durumu}) -> Puan: 88")
                 
-                # Senaryo C: Trend ve Klasik Yapı Fırsatları
                 else:
                     grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
                     detay_bilgi.append(f"Trend Yönü: {grid_yonu} (EMA7/21)")
                     
-                    if adx_val >= 20:
+                    if adx_val >= 18:
                         sinyal_puani += 15
-                        detay_bilgi.append(f"ADX güçlü ({adx_val:.1f}) +15")
+                        detay_bilgi.append(f"ADX yeterli ({adx_val:.1f}) +15")
                     else:
-                        detay_bilgi.append(f"ADX zayıf ({adx_val:.1f}) +0")
+                        detay_bilgi.append(f"ADX düşük ({adx_val:.1f}) +0")
                         
-                    if grid_yonu == "LONG" and rsi < 45:
+                    if grid_yonu == "LONG" and rsi < 50:
                         sinyal_puani += 20
                         detay_bilgi.append(f"Long & uygun RSI ({rsi:.1f}) +20")
-                    elif grid_yonu == "SHORT" and rsi > 55:
+                    elif grid_yonu == "SHORT" and rsi > 50:
                         sinyal_puani += 20
                         detay_bilgi.append(f"Short & uygun RSI ({rsi:.1f}) +20")
                     else:
-                        detay_bilgi.append(f"RSI nötr/uygun değil ({rsi:.1f}) +0")
+                        detay_bilgi.append(f"RSI nötr ({rsi:.1f}) +0")
 
                 print(f"[{symbol}] 🔍 Karne -> Yön: {grid_yonu} | Toplam Puan: {sinyal_puani} | Değişim: %{degisim_yuzdesi:.1f} | RSI: {rsi:.1f} | Defter: {derinlik_durumu} | Notlar: {' | '.join(detay_bilgi)}", flush=True)
 
-                is_altin_atis = sinyal_puani >= 90
+                is_altin_atis = sinyal_puani >= 85
                 ema_fark_val = float(ema7 - ema21)
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 coin_id = COIN_ID_MAP.get(symbol, 0)
@@ -502,11 +500,11 @@ def otomatik_arkaplan_tarayici():
                 atr_yuzdesi = sinyal["atr"]
                 is_altin_atis = sinyal["altin_atis"]
 
-                if sinyal_puani < 70 and not is_altin_atis:
-                    print(f"[{symbol}] ❌ Puan yetersiz ({sinyal_puani} < 70), atlanıyor.", flush=True)
+                # Eşik 65'e düşürüldü ki kaliteli trend ve tepe/dip fırsatları kaçmasın
+                if sinyal_puani < 65 and not is_altin_atis:
+                    print(f"[{symbol}] ❌ Puan yetersiz ({sinyal_puani} < 65), atlanıyor.", flush=True)
                     continue
 
-                # Puan 100 (mutlak zirve / altın atış tepe-dip) ise sınırları baypas et
                 if sinyal_puani < 100:
                     if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
                         print(f"[{symbol}] ❌ Maksimum toplam pozisyona ulaşıldı ({len(aktif_borsa_map)}/{MAKSIMUM_TOPLAM_POZISYON}), atlanıyor.", flush=True)
@@ -518,12 +516,7 @@ def otomatik_arkaplan_tarayici():
                         continue 
 
                 # Risk ve Kasa Parametreleri
-                if is_altin_atis and sinyal_puani == 100:
-                    dinamik_kaldirac = 20
-                    kasa_orani = 0.20
-                    hedef_roe = 25.0
-                    stop_roe = 10.0
-                elif is_altin_atis:
+                if is_altin_atis:
                     dinamik_kaldirac = 20
                     kasa_orani = 0.15
                     hedef_roe = 20.0
