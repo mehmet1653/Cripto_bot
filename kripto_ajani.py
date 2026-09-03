@@ -416,11 +416,12 @@ def otomatik_arkaplan_tarayici():
                 ema_fark_val = float(ema7 - ema21)
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 
-                # Gelişmiş Yapay Zeka Süzgeci (ATR dahil 5 parametre)
-                ai_onay = yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod, atr_yuzdesi)
+                # Gelişmiş Yapay Zeka Süzgeci (Sembol argümanı eklendi)
+               ai_onay = yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod, atr_yuzdesi, symbol)
                 if not ai_onay:
-                    print(f"[{symbol}] ❌ Yapay Zeka (ML) süzgecinden geçemedi! Puan: {sinyal_puani}")
-                    continue
+                print(f"[{symbol}] ❌ Yapay Zeka (ML) süzgecinden geçemediği için elendi! Puan: {sinyal_puani}")
+                   continue
+
 
                 print(f"[{symbol}] ✅ Başarılı Sinyal! Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ATR: %{atr_yuzdesi:.2f}")
 
