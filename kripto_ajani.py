@@ -125,7 +125,7 @@ def yapay_zekayi_egit_ve_guncelle():
             
         ai_model.fit(np.array(X), np.array(y))
         ai_model_egitildi = True
-        print("🧠 Yapay Zeka (Esnek Piyasa Modlu) optimize edildi!")
+        print("🧠 Yapay Zeka (Tepe/Dip Avcısı Modlu) optimize edildi!")
     except Exception as e:
         print(f"Yapay zeka eğitim hatası: {e}")
         ai_model_egitildi = False
@@ -152,6 +152,28 @@ def atr_ve_volatilite_hesapla(df, period=14):
     except Exception:
         return 1.5
 
+def emir_defteri_derinlik_analizi(symbol):
+    try:
+        order_book = exchange.fetch_order_book(symbol, limit=20)
+        bids = order_book.get('bids', [])
+        asks = order_book.get('asks', [])
+        
+        toplam_bid_hacim = sum(bid[1] for bid in bids)
+        toplam_ask_hacim = sum(ask[1] for ask in asks)
+        
+        if toplam_bid_hacim + toplam_ask_hacim == 0:
+            return "DENGELI"
+            
+        bid_orani = toplam_bid_hacim / (toplam_bid_hacim + toplam_ask_hacim)
+        
+        if bid_orani > 0.60:
+            return "ALICI_BASKIN" # Dipte destek duvarı / Long iştahı
+        elif bid_orani < 0.40:
+            return "SATICI_BASKIN" # Tepede direnç duvarı / Short iştahı
+        return "DENGELI"
+    except Exception:
+        return "DENGELI"
+
 def hacim_ve_likidite_kontrolu(df):
     try:
         ortalama_hacim = df['volume'].rolling(window=20).mean().iloc[-1]
@@ -173,7 +195,7 @@ def telegram_mesaj_gonder(mesaj):
 
 @app.route('/')
 def home():
-    return f"Profesyonel Altın Atış Botu Aktif | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
+    return f"Simetrik Tepe/Dip Avcısı Bot Aktif | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
 
 def set_leverage_safely(symbol, leverage):
     try:
@@ -256,7 +278,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pozisyon_detaylari = "\n🔍 *Açık Pozisyon:* `Yok`\n"
 
         mesaj = (
-            f"📊 *PROFESYONEL BOT DURUMU*\n\n"
+            f"📊 *SİMETRİK TEPE/DİP BOT DURUMU*\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"{pnl_ikon} Anlık Kâr/Zarar: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon Sayısı: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n"
@@ -298,7 +320,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 Profesyonel Tarayıcı Devrede.")
+    print("🚀 Simetrik Tepe/Dip Tarayıcı Devrede.")
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -367,9 +389,9 @@ def otomatik_arkaplan_tarayici():
                         rsi=rsi_val, adx=adx_val, ema_fark=ema_fark_val, atr_yuzde=atr_val, basarili=False
                     )
 
-            # --- DİNAMİK TARAMA VE ÇOKLU ZAMAN DİLİMİ (4H) ANALİZİ ---
+            # --- SİMETRİK TEPE / DİP VE DERİNLİK TARAMASI ---
             taranan_sinyaller = []
-            print("\n--- Yeni Profesyonel Tarama Döngüsü Başladı ---")
+            print("\n--- Yeni Simetrik Tarama Döngüsü Başladı ---")
 
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU:
@@ -386,51 +408,47 @@ def otomatik_arkaplan_tarayici():
                     if not hacim_ve_likidite_kontrolu(df_15m):
                         continue
 
-                    ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=20)
-                    df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    rsi_4h = ta.momentum.rsi(df_4h['close'], window=14).iloc[-1]
-                    
                     ema7 = ta.trend.ema_indicator(df_15m['close'], window=7).iloc[-1]
                     ema21 = ta.trend.ema_indicator(df_15m['close'], window=21).iloc[-1]
                     rsi = ta.momentum.rsi(df_15m['close'], window=14).iloc[-1]
                     adx_val = ta.trend.ADXIndicator(df_15m['high'], df_15m['low'], df_15m['close'], window=14).adx().iloc[-1]
                     atr_yuzdesi = atr_ve_volatilite_hesapla(df_15m)
+                    
+                    # Son 10 mumluk değişim oranı (Tepe / Dip ivmesi tespiti için)
+                    fiyat_10_mum_once = df_15m['close'].iloc[-10]
+                    degisim_yuzdesi = ((guncel_fiyat - fiyat_10_mum_once) / fiyat_10_mum_once) * 100
+                    
+                    # Emir defteri derinlik analizi
+                    derinlik_durumu = emir_defteri_derinlik_analizi(symbol)
                 except Exception as e:
                     print(f"[{symbol}] Veri çekme hatası: {e}")
                     continue
 
-                if adx_val < 20.0 and not (rsi < 30 or rsi > 70):
-                    continue
-
                 sinyal_puani = 50
-                grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
+                grid_yonu = "LONG"
 
-                if grid_yonu == "LONG" and rsi_4h > 75:
-                    sinyal_puani -= 20
-                    print(f"[{symbol}] ⚠️ 4h RSI aşırı yüksek ({rsi_4h:.1f}), Long için puan kırpıldı (-20).")
-                elif grid_yonu == "SHORT" and rsi_4h < 25:
-                    sinyal_puani -= 20
-                    print(f"[{symbol}] ⚠️ 4h RSI aşırı düşük ({rsi_4h:.1f}), Short için puan kırpıldı (-20).")
-
-                if adx_val >= 20:
-                    sinyal_puani += 15
-                if adx_val >= 30:
-                    sinyal_puani += 10
-
-                if grid_yonu == "LONG":
-                    if 40 <= rsi <= 58:
-                        sinyal_puani += 15
-                    elif rsi < 30:
-                        sinyal_puani += 25
+                # SİMETRİK MANTIK: TEPE (SHORT) VEYA DİP (LONG) TESPİTİ
+                # Senaryo A: Sert Yükseliş Sonrası Tepe / Direnç Short Fırsatı
+                if degisim_yuzdesi >= 4.0 and rsi > 68 and derinlik_durumu == "SATICI_BASKIN":
+                    grid_yonu = "SHORT"
+                    sinyal_puani = 92 # Yüksek kaliteli tepe short sinyali
+                    print(f"[{symbol}] 🏔️ Tepe Tespiti: Sert yükseliş (+%{degisim_yuzdesi:.1f}), yüksek RSI ({rsi:.1f}) ve satıcı baskın defter -> SHORT puanı verildi.")
+                
+                # Senaryo B: Sert Düşüş Sonrası Dip / Destek Long Fırsatı
+                elif degisim_yuzdesi <= -4.0 and rsi < 32 and derinlik_durumu == "ALICI_BASKIN":
+                    grid_yonu = "LONG"
+                    sinyal_puani = 92 # Yüksek kaliteli dip long sinyali
+                    print(f"[{symbol}] 🎯 Dip Tespiti: Sert düşüş (%{degisim_yuzdesi:.1f}), düşük RSI ({rsi:.1f}) ve alıcı baskın defter -> LONG puanı verildi.")
+                
+                # Senaryo C: Trend ve Klasik Yapı Fırsatları
                 else:
-                    if 42 <= rsi <= 60:
+                    grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
+                    if adx_val >= 20:
                         sinyal_puani += 15
-                    elif rsi > 70:
-                        sinyal_puani += 25
-
-                ema_fark_orani = abs(ema7 - ema21) / guncel_fiyat
-                if ema_fark_orani > 0.002:
-                    sinyal_puani += 10
+                    if grid_yonu == "LONG" and rsi < 45:
+                        sinyal_puani += 20
+                    elif grid_yonu == "SHORT" and rsi > 55:
+                        sinyal_puani += 20
 
                 is_altin_atis = sinyal_puani >= 90
                 ema_fark_val = float(ema7 - ema21)
@@ -450,8 +468,7 @@ def otomatik_arkaplan_tarayici():
                     "ema_fark": ema_fark_val,
                     "fiyat": guncel_fiyat,
                     "atr": atr_yuzdesi,
-                    "altin_atis": is_altin_atis,
-                    "rsi_4h": rsi_4h
+                    "altin_atis": is_altin_atis
                 })
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
@@ -470,13 +487,12 @@ def otomatik_arkaplan_tarayici():
                 guncel_fiyat = sinyal["fiyat"]
                 atr_yuzdesi = sinyal["atr"]
                 is_altin_atis = sinyal["altin_atis"]
-                rsi_4h = sinyal["rsi_4h"]
 
                 if sinyal_puani < 70 and not is_altin_atis:
-                    print(f"[{symbol}] ❌ Esnek süzgeç/puan kırpılması sonrası puan yetersiz ({sinyal_puani}), atlanıyor.")
+                    print(f"[{symbol}] ❌ Puan yetersiz ({sinyal_puani}), atlanıyor.")
                     continue
 
-                # Puan 100 (mutlak zirve) ise maksimum pozisyon ve aynı yön sınırlarını es geç/baypas et
+                # Puan 100 (mutlak zirve / altın atış tepe-dip) ise sınırları baypas et
                 if sinyal_puani < 100:
                     if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
                         continue
@@ -485,13 +501,8 @@ def otomatik_arkaplan_tarayici():
                     if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
                         continue 
 
-                if (grid_yonu == "LONG" and rsi_4h > 75) or (grid_yonu == "SHORT" and rsi_4h < 25):
-                    dinamik_kaldirac = 5
-                    kasa_orani = 0.05
-                    hedef_roe = 12.0
-                    stop_roe = 7.0
-                    print(f"[{symbol}] 🛡️ Riskli bölge tespiti: Kaldıraç 5x ve düşük bakiye oranı (%5) ile temkinli giriliyor.")
-                elif is_altin_atis and sinyal_puani == 100:
+                # Risk ve Kasa Parametreleri
+                if is_altin_atis and sinyal_puani == 100:
                     dinamik_kaldirac = 20
                     kasa_orani = 0.20
                     hedef_roe = 25.0
@@ -545,11 +556,11 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     telegram_mesaj_gonder(
-                        f"🛡️ *ESNEK DÖNGÜ İŞLEMİ AÇILDI*\n\n"
+                        f"⚡ *SİMETRİK TEPE/DİP İŞLEMİ AÇILDI*\n\n"
                         f"📌 *Coin:* `{symbol}`\n"
                         f"📊 *Yön:* `{grid_yonu}` | ⭐ *Puan:* `{sinyal_puani}/100`\n"
                         f"⚙️ *Kaldıraç:* `{dinamik_kaldirac}x` | 💰 *Kasa Oranı:* `%{kasa_orani*100:.0f}`\n"
-                        f"📈 *15m RSI:* `{rsi:.1f}` | *4h RSI:* `{rsi_4h:.1f}`\n"
+                        f"📈 *15m RSI:* `{rsi:.1f}`\n"
                         f"🎯 *Hedef TP ROE:* `+{hedef_roe:.1f}%`"
                     )
                     print(f"🎯 İŞLEM BAŞARIYLA AÇILDI: {symbol} - {grid_yonu}")
