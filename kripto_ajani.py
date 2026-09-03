@@ -103,9 +103,10 @@ def yapay_zekayi_egit_ve_guncelle():
     global ai_model, ai_model_egitildi
     veriler = ANALitik_HAFIZA.get("egitim_verileri", [])
     
-    if len(veriler) < 15:
+    # Eşik değer hızlı test ve çıktı alınabilmesi için 3'e düşürüldü
+    if len(veriler) < 3:
         ai_model_egitildi = False
-        print(f"🧠 Yapay Zeka gözlem modunda: {len(veriler)}/15 veri toplandı.")
+        print(f"🧠 Yapay Zeka gözlem modunda: {len(veriler)}/3 veri toplandı.")
         return
 
     try:
@@ -239,7 +240,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🎯 *İstatistikler:*\n"
             f"✅ Başarılı (TP): `{basarili_sayisi}` | ❌ Başarısız (SL): `{basarisiz_sayisi}`\n"
             f"📈 Başarı Oranı: `%{basari_orani:.1f}`\n"
-            f"🧠 Eğitim Verisi: `{len(ANALitik_HAFIZA.get('egitim_verileri', []))}/15`\n\n"
+            f"🧠 Eğitim Verisi: `{len(ANALitik_HAFIZA.get('egitim_verileri', []))}/3`\n\n"
         )
         
         if borsa_poslari:
@@ -412,7 +413,7 @@ def otomatik_arkaplan_tarayici():
                 ema_fark_val = float(ema7 - ema21)
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 
-                # Gelişmiş Yapay Zeka Süzgeci (Doğru girinti ile düzeltildi)
+                # Gelişmiş Yapay Zeka Süzgeci
                 ai_onay = yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod, atr_yuzdesi, symbol)
                 if not ai_onay:
                     print(f"[{symbol}] ❌ Yapay Zeka (ML) süzgecinden geçemediği için elendi! Puan: {sinyal_puani}")
@@ -449,13 +450,14 @@ def otomatik_arkaplan_tarayici():
                 atr_yuzdesi = sinyal["atr"]
                 is_altin_atis = sinyal["altin_atis"]
 
+                # ALTIN ATIŞ (%90+) İSE SINIRLARI BYPASS ET, DİĞER DURUMLARDA KONTROL ET
                 if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON and not is_altin_atis:
                     print(f"[{symbol}] Maksimum toplam pozisyon sınırına ulaşıldı, Altın Atış değilse geçiliyor.")
                     continue
 
                 ayni_yon_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == grid_yonu)
-                if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
-                    print(f"[{symbol}] Aynı yönde maksimum pozisyon sınırına ulaşıldı ({grid_yonu}), geçiliyor.")
+                if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI and not is_altin_atis:
+                    print(f"[{symbol}] Aynı yönde maksimum pozisyon sınırına ulaşıldı ({grid_yonu}), Altın Atış değilse geçiliyor.")
                     continue 
 
                 if is_altin_atis:
