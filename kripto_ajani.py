@@ -125,7 +125,7 @@ def yapay_zekayi_egit_ve_guncelle():
             
         ai_model.fit(np.array(X), np.array(y))
         ai_model_egitildi = True
-        print("🧠 Yapay Zeka (Tepe/Dip Avcısı Modlu) optimize edildi!", flush=True)
+        print("🧠 Yapay Zeka (ADX Filtreli Tepe/Dip Avcısı) optimize edildi!", flush=True)
     except Exception as e:
         print(f"Yapay zeka eğitim hatası: {e}", flush=True)
         ai_model_egitildi = False
@@ -178,7 +178,6 @@ def hacim_ve_likidite_kontrolu(df):
     try:
         ortalama_hacim = df['volume'].rolling(window=20).mean().iloc[-1]
         son_hacim = df['volume'].iloc[-1]
-        # Gece saatleri ve yatay piyasa için hacim eşiği %10'a esnetildi
         if son_hacim < (ortalama_hacim * 0.10):
             return False
         return True
@@ -196,7 +195,7 @@ def telegram_mesaj_gonder(mesaj):
 
 @app.route('/')
 def home():
-    return f"Simetrik Tepe/Dip Avcısı Bot Aktif | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
+    return f"ADX Filtreli Tepe/Dip Bot Aktif | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
 
 def set_leverage_safely(symbol, leverage):
     try:
@@ -279,7 +278,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pozisyon_detaylari = "\n🔍 *Açık Pozisyon:* `Yok`\n"
 
         mesaj = (
-            f"📊 *SİMETRİK TEPE/DİP BOT DURUMU*\n\n"
+            f"📊 *ADX FİLTRELİ TEPE/DİP BOT DURUMU*\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"{pnl_ikon} Anlık Kâr/Zarar: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon Sayısı: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n"
@@ -321,7 +320,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 Simetrik Tepe/Dip Tarayıcı Devrede.", flush=True)
+    print("🚀 ADX Filtreli Tepe/Dip Tarayıcı Devrede.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -390,9 +389,9 @@ def otomatik_arkaplan_tarayici():
                         rsi=rsi_val, adx=adx_val, ema_fark=ema_fark_val, atr_yuzde=atr_val, basarili=False
                     )
 
-            # --- SİMETRİK TEPE / DİP VE DERİNLİK TARAMASI ---
+            # --- ADX FİLTRELİ TEPE / DİP VE DERİNLİK TARAMASI ---
             taranan_sinyaller = []
-            print("\n--- Yeni Simetrik Tarama Döngüsü Başladı ---", flush=True)
+            print("\n--- Yeni ADX Filtreli Tarama Döngüsü Başladı ---", flush=True)
 
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU:
@@ -413,14 +412,17 @@ def otomatik_arkaplan_tarayici():
                     ema7 = ta.trend.ema_indicator(df_15m['close'], window=7).iloc[-1]
                     ema21 = ta.trend.ema_indicator(df_15m['close'], window=21).iloc[-1]
                     rsi = ta.momentum.rsi(df_15m['close'], window=14).iloc[-1]
-                    adx_val = ta.trend.ADXIndicator(df_15m['high'], df_15m['low'], df_15m['close'], window=14).adx().iloc[-1]
+                    
+                    adx_indicator = ta.trend.ADXIndicator(df_15m['high'], df_15m['low'], df_15m['close'], window=14)
+                    adx_val = adx_indicator.adx().iloc[-1]
+                    plus_di = adx_indicator.adx_pos().iloc[-1]
+                    minus_di = adx_indicator.adx_neg().iloc[-1]
+                    
                     atr_yuzdesi = atr_ve_volatilite_hesapla(df_15m)
                     
-                    # Son 10 mumluk değişim oranı (Tepe / Dip ivmesi tespiti için)
                     fiyat_10_mum_once = df_15m['close'].iloc[-10]
                     degisim_yuzdesi = ((guncel_fiyat - fiyat_10_mum_once) / fiyat_10_mum_once) * 100
                     
-                    # Emir defteri derinlik analizi
                     derinlik_durumu = emir_defteri_derinlik_analizi(symbol)
                 except Exception as e:
                     print(f"[{symbol}] Veri çekme hatası: {e}", flush=True)
@@ -430,37 +432,61 @@ def otomatik_arkaplan_tarayici():
                 grid_yonu = "LONG"
                 detay_bilgi = []
 
-                # SİMETRİK MANTIK: TEPE (SHORT) VEYA DİP (LONG) TESPİTİ (Eşikler yatay piyasa için esnetildi: %2.5 ve RSI 62/38)
-                if degisim_yuzdesi >= 2.5 and rsi > 62 and derinlik_durumu in ["SATICI_BASKIN", "DENGELI"]:
-                    grid_yonu = "SHORT"
-                    sinyal_puani = 88 
-                    detay_bilgi.append(f"🏔️ Tepe Tespiti Başarılı (Değişim: +%{degisim_yuzdesi:.1f}, RSI: {rsi:.1f}, Defter: {derinlik_durumu}) -> Puan: 88")
-                
-                elif degisim_yuzdesi <= -2.5 and rsi < 38 and derinlik_durumu in ["ALICI_BASKIN", "DENGELI"]:
-                    grid_yonu = "LONG"
-                    sinyal_puani = 88 
-                    detay_bilgi.append(f"🎯 Dip Tespiti Başarılı (Değişim: %{degisim_yuzdesi:.1f}, RSI: {rsi:.1f}, Defter: {derinlik_durumu}) -> Puan: 88")
-                
-                else:
-                    grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
-                    detay_bilgi.append(f"Trend Yönü: {grid_yonu} (EMA7/21)")
-                    
-                    if adx_val >= 18:
-                        sinyal_puani += 15
-                        detay_bilgi.append(f"ADX yeterli ({adx_val:.1f}) +15")
-                    else:
-                        detay_bilgi.append(f"ADX düşük ({adx_val:.1f}) +0")
-                        
-                    if grid_yonu == "LONG" and rsi < 50:
-                        sinyal_puani += 20
-                        detay_bilgi.append(f"Long & uygun RSI ({rsi:.1f}) +20")
-                    elif grid_yonu == "SHORT" and rsi > 50:
-                        sinyal_puani += 20
-                        detay_bilgi.append(f"Short & uygun RSI ({rsi:.1f}) +20")
-                    else:
-                        detay_bilgi.append(f"RSI nötr ({rsi:.1f}) +0")
+                # ADX TABANLI TREND & RÜZGAR KONTROLÜ
+                # Eğer ADX >= 25 ise piyasa güçlü trenddedir. Rüzgara karşı işlem (bıçak tutma) engellenir.
+                guclu_trend_var = adx_val >= 25
+                trend_yonu_boga = plus_di > minus_di
 
-                print(f"[{symbol}] 🔍 Karne -> Yön: {grid_yonu} | Toplam Puan: {sinyal_puani} | Değişim: %{degisim_yuzdesi:.1f} | RSI: {rsi:.1f} | Defter: {derinlik_durumu} | Notlar: {' | '.join(detay_bilgi)}", flush=True)
+                tepe_kosulu = (degisim_yuzdesi >= 2.5 and rsi > 62 and derinlik_durumu in ["SATICI_BASKIN", "DENGELI"])
+                dip_kosulu = (degisim_yuzdesi <= -2.5 and rsi < 38 and derinlik_durumu in ["ALICI_BASKIN", "DENGELI"])
+
+                if guclu_trend_var:
+                    if trend_yonu_boga:
+                        # Güçlü Boğa Trendi: Sadece DİP (Long) aranır, Tepe (Short) yasak!
+                        if dip_kosulu:
+                            grid_yonu = "LONG"
+                            sinyal_puani = 88
+                            detay_bilgi.append(f"🎯 Güçlü Boğa Trendinde Dip Tespiti (ADX: {adx_val:.1f}) -> Puan: 88")
+                        else:
+                            detay_bilgi.append(f"⚠️ Güçlü Boğa Trendi (ADX: {adx_val:.1f}) - Tepe Short'ları Susturuldu, Trend Yönü Bekleniyor")
+                    else:
+                        # Güçlü Ayı Trendi: Sadece TEPE (Short) aranır, Dip (Long) yasak!
+                        if tepe_kosulu:
+                            grid_yonu = "SHORT"
+                            sinyal_puani = 88
+                            detay_bilgi.append(f"🏔️ Güçlü Ayı Trendinde Tepe Tespiti (ADX: {adx_val:.1f}) -> Puan: 88")
+                        else:
+                            detay_bilgi.append(f"⚠️ Güçlü Ayı Trendi (ADX: {adx_val:.1f}) - Dip Long'ları Susturuldu, Trend Yönü Bekleniyor")
+                else:
+                    # Yatay / Zayıf Piyasa (ADX < 25): Çift yönlü tepe/dip avcılığı serbest
+                    if tepe_kosulu:
+                        grid_yonu = "SHORT"
+                        sinyal_puani = 88
+                        detay_bilgi.append(f"🏔️ Yatay Piyasada Tepe Tespiti (ADX: {adx_val:.1f}) -> Puan: 88")
+                    elif dip_kosulu:
+                        grid_yonu = "LONG"
+                        sinyal_puani = 88
+                        detay_bilgi.append(f"🎯 Yatay Piyasada Dip Tespiti (ADX: {adx_val:.1f}) -> Puan: 88")
+                    else:
+                        grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
+                        detay_bilgi.append(f"Trend Yönü: {grid_yonu} (EMA7/21) [Yatay/Zayıf ADX: {adx_val:.1f}]")
+                        
+                        if adx_val >= 18:
+                            sinyal_puani += 15
+                            detay_bilgi.append(f"ADX yeterli ({adx_val:.1f}) +15")
+                        else:
+                            detay_bilgi.append(f"ADX düşük ({adx_val:.1f}) +0")
+                            
+                        if grid_yonu == "LONG" and rsi < 50:
+                            sinyal_puani += 20
+                            detay_bilgi.append(f"Long & uygun RSI ({rsi:.1f}) +20")
+                        elif grid_yonu == "SHORT" and rsi > 50:
+                            sinyal_puani += 20
+                            detay_bilgi.append(f"Short & uygun RSI ({rsi:.1f}) +20")
+                        else:
+                            detay_bilgi.append(f"RSI nötr ({rsi:.1f}) +0")
+
+                print(f"[{symbol}] 🔍 Karne -> Yön: {grid_yonu} | Toplam Puan: {sinyal_puani} | Değişim: %{degisim_yuzdesi:.1f} | RSI: {rsi:.1f} | ADX: {adx_val:.1f} | Notlar: {' | '.join(detay_bilgi)}", flush=True)
 
                 is_altin_atis = sinyal_puani >= 85
                 ema_fark_val = float(ema7 - ema21)
@@ -500,7 +526,6 @@ def otomatik_arkaplan_tarayici():
                 atr_yuzdesi = sinyal["atr"]
                 is_altin_atis = sinyal["altin_atis"]
 
-                # Eşik 65'e düşürüldü ki kaliteli trend ve tepe/dip fırsatları kaçmasın
                 if sinyal_puani < 65 and not is_altin_atis:
                     print(f"[{symbol}] ❌ Puan yetersiz ({sinyal_puani} < 65), atlanıyor.", flush=True)
                     continue
@@ -515,7 +540,6 @@ def otomatik_arkaplan_tarayici():
                         print(f"[{symbol}] ❌ Aynı yönde ({grid_yonu}) maksimum pozisyona ulaşıldı, atlanıyor.", flush=True)
                         continue 
 
-                # Risk ve Kasa Parametreleri
                 if is_altin_atis:
                     dinamik_kaldirac = 20
                     kasa_orani = 0.15
@@ -565,11 +589,11 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     telegram_mesaj_gonder(
-                        f"⚡ *SİMETRİK TEPE/DİP İŞLEMİ AÇILDI*\n\n"
+                        f"⚡ *ADX FİLTRELİ TEPE/DİP İŞLEMİ AÇILDI*\n\n"
                         f"📌 *Coin:* `{symbol}`\n"
                         f"📊 *Yön:* `{grid_yonu}` | ⭐ *Puan:* `{sinyal_puani}/100`\n"
                         f"⚙️ *Kaldıraç:* `{dinamik_kaldirac}x` | 💰 *Kasa Oranı:* `%{kasa_orani*100:.0f}`\n"
-                        f"📈 *15m RSI:* `{rsi:.1f}`\n"
+                        f"📈 *15m RSI:* `{rsi:.1f}` | *ADX:* `{adx_val:.1f}`\n"
                         f"🎯 *Hedef TP ROE:* `+{hedef_roe:.1f}%`"
                     )
                     print(f"🎯 İŞLEM BAŞARIYLA AÇILDI: {symbol} - {grid_yonu}", flush=True)
@@ -593,7 +617,7 @@ if __name__ == '__main__':
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
-    app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
+    app_tg.add_handler(Cod_handler := CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
