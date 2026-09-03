@@ -65,7 +65,7 @@ def hafizayi_yukle():
                 })
             }
     except Exception as e:
-        print(f"Hafıza yükleme hatası: {e}")
+        print(f"Hafıza yükleme hatası: {e}", flush=True)
         
     varsayilan = {
         "aktif_sistemler": {},
@@ -88,7 +88,7 @@ def hafizayi_kaydet():
             "analitik": ANALitik_HAFIZA
         }).execute()
     except Exception as e:
-        print(f"Hafıza kaydetme hatası: {e}")
+        print(f"Hafıza kaydetme hatası: {e}", flush=True)
 
 kalici_veri = hafizayi_yukle()
 AKTIF_GRID_SISTEMLERI = kalici_veri.get("aktif_sistemler", {})
@@ -113,7 +113,7 @@ def yapay_zekayi_egit_ve_guncelle():
     
     if len(veriler) < 3:
         ai_model_egitildi = False
-        print(f"🧠 Yapay Zeka gözlem modunda: {len(veriler)}/3 veri toplandı.")
+        print(f"🧠 Yapay Zeka gözlem modunda: {len(veriler)}/3 veri toplandı.", flush=True)
         return
 
     try:
@@ -125,9 +125,9 @@ def yapay_zekayi_egit_ve_guncelle():
             
         ai_model.fit(np.array(X), np.array(y))
         ai_model_egitildi = True
-        print("🧠 Yapay Zeka (Tepe/Dip Avcısı Modlu) optimize edildi!")
+        print("🧠 Yapay Zeka (Tepe/Dip Avcısı Modlu) optimize edildi!", flush=True)
     except Exception as e:
-        print(f"Yapay zeka eğitim hatası: {e}")
+        print(f"Yapay zeka eğitim hatası: {e}", flush=True)
         ai_model_egitildi = False
 
 def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id, symbol):
@@ -137,9 +137,9 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id, symb
         tahmin = ai_model.predict(np.array([[rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id]]))[0]
         sonuc = bool(tahmin == 1)
         if sonuc:
-            print(f"[{symbol}] 🧠 Yapay Zeka Süzgeci: ONAYLANDI ✅")
+            print(f"[{symbol}] 🧠 Yapay Zeka Süzgeci: ONAYLANDI ✅", flush=True)
         else:
-            print(f"[{symbol}] 🧠 Yapay Zeka Süzgeci: REDDEDİLDİ ❌")
+            print(f"[{symbol}] 🧠 Yapay Zeka Süzgeci: REDDEDİLDİ ❌", flush=True)
         return sonuc
     except Exception as e:
         return True
@@ -191,7 +191,7 @@ def telegram_mesaj_gonder(mesaj):
     try:
         requests.post(url, json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}, timeout=10)
     except Exception as e:
-        print(f"Telegram Gönderme Hatası: {e}")
+        print(f"Telegram Gönderme Hatası: {e}", flush=True)
 
 @app.route('/')
 def home():
@@ -202,7 +202,7 @@ def set_leverage_safely(symbol, leverage):
         exchange.set_leverage(leverage, symbol)
         return True
     except Exception as e:
-        print(f"Kaldıraç ayarlama hatası ({symbol} - {leverage}x): {e}")
+        print(f"Kaldıraç ayarlama hatası ({symbol} - {leverage}x): {e}", flush=True)
         return False
 
 def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=50, adx=25, ema_fark=0.0, atr_yuzde=1.5, basarili=True):
@@ -222,7 +222,7 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=50, adx=25,
         
         exchange.create_order(symbol, 'market', kapatma_yonu, miktar, None, {'reduce_only': True})
     except Exception as e:
-        print(f"Kapatma API hatası: {e}")
+        print(f"Kapatma API hatası: {e}", flush=True)
 
     yon_kod = 1 if yon == 'LONG' else -1
     sonuc_kod = 1 if basarili else 0
@@ -254,7 +254,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if kontrat > 0:
                     borsa_poslari.append(p)
         except Exception as e:
-            print(f"Pozisyon çekme hatası: {e}")
+            print(f"Pozisyon çekme hatası: {e}", flush=True)
             borsa_poslari = []
 
         toplam_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in borsa_poslari)
@@ -320,12 +320,12 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 Simetrik Tepe/Dip Tarayıcı Devrede.")
+    print("🚀 Simetrik Tepe/Dip Tarayıcı Devrede.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
     except Exception as e:
-        print(f"Piyasalar yüklenemedi: {e}")
+        print(f"Piyasalar yüklenemedi: {e}", flush=True)
     
     while True:
         try:
@@ -391,7 +391,7 @@ def otomatik_arkaplan_tarayici():
 
             # --- SİMETRİK TEPE / DİP VE DERİNLİK TARAMASI ---
             taranan_sinyaller = []
-            print("\n--- Yeni Simetrik Tarama Döngüsü Başladı ---")
+            print("\n--- Yeni Simetrik Tarama Döngüsü Başladı ---", flush=True)
 
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU:
@@ -406,6 +406,7 @@ def otomatik_arkaplan_tarayici():
                     df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     
                     if not hacim_ve_likidite_kontrolu(df_15m):
+                        print(f"[{symbol}] ⚠️ Hacim düşük, atlanıyor.", flush=True)
                         continue
 
                     ema7 = ta.trend.ema_indicator(df_15m['close'], window=7).iloc[-1]
@@ -421,34 +422,47 @@ def otomatik_arkaplan_tarayici():
                     # Emir defteri derinlik analizi
                     derinlik_durumu = emir_defteri_derinlik_analizi(symbol)
                 except Exception as e:
-                    print(f"[{symbol}] Veri çekme hatası: {e}")
+                    print(f"[{symbol}] Veri çekme hatası: {e}", flush=True)
                     continue
 
                 sinyal_puani = 50
                 grid_yonu = "LONG"
+                detay_bilgi = []
 
                 # SİMETRİK MANTIK: TEPE (SHORT) VEYA DİP (LONG) TESPİTİ
                 # Senaryo A: Sert Yükseliş Sonrası Tepe / Direnç Short Fırsatı
                 if degisim_yuzdesi >= 4.0 and rsi > 68 and derinlik_durumu == "SATICI_BASKIN":
                     grid_yonu = "SHORT"
                     sinyal_puani = 92 # Yüksek kaliteli tepe short sinyali
-                    print(f"[{symbol}] 🏔️ Tepe Tespiti: Sert yükseliş (+%{degisim_yuzdesi:.1f}), yüksek RSI ({rsi:.1f}) ve satıcı baskın defter -> SHORT puanı verildi.")
+                    detay_bilgi.append(f"🏔️ Tepe Tespiti Başarılı (Değişim: +%{degisim_yuzdesi:.1f}, RSI: {rsi:.1f}, Defter: {derinlik_durumu}) -> Puan: 92")
                 
                 # Senaryo B: Sert Düşüş Sonrası Dip / Destek Long Fırsatı
                 elif degisim_yuzdesi <= -4.0 and rsi < 32 and derinlik_durumu == "ALICI_BASKIN":
                     grid_yonu = "LONG"
                     sinyal_puani = 92 # Yüksek kaliteli dip long sinyali
-                    print(f"[{symbol}] 🎯 Dip Tespiti: Sert düşüş (%{degisim_yuzdesi:.1f}), düşük RSI ({rsi:.1f}) ve alıcı baskın defter -> LONG puanı verildi.")
+                    detay_bilgi.append(f"🎯 Dip Tespiti Başarılı (Değişim: %{degisim_yuzdesi:.1f}, RSI: {rsi:.1f}, Defter: {derinlik_durumu}) -> Puan: 92")
                 
                 # Senaryo C: Trend ve Klasik Yapı Fırsatları
                 else:
                     grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
+                    detay_bilgi.append(f"Trend Yönü: {grid_yonu} (EMA7/21)")
+                    
                     if adx_val >= 20:
                         sinyal_puani += 15
+                        detay_bilgi.append(f"ADX güçlü ({adx_val:.1f}) +15")
+                    else:
+                        detay_bilgi.append(f"ADX zayıf ({adx_val:.1f}) +0")
+                        
                     if grid_yonu == "LONG" and rsi < 45:
                         sinyal_puani += 20
+                        detay_bilgi.append(f"Long & uygun RSI ({rsi:.1f}) +20")
                     elif grid_yonu == "SHORT" and rsi > 55:
                         sinyal_puani += 20
+                        detay_bilgi.append(f"Short & uygun RSI ({rsi:.1f}) +20")
+                    else:
+                        detay_bilgi.append(f"RSI nötr/uygun değil ({rsi:.1f}) +0")
+
+                print(f"[{symbol}] 🔍 Karne -> Yön: {grid_yonu} | Toplam Puan: {sinyal_puani} | Değişim: %{degisim_yuzdesi:.1f} | RSI: {rsi:.1f} | Defter: {derinlik_durumu} | Notlar: {' | '.join(detay_bilgi)}", flush=True)
 
                 is_altin_atis = sinyal_puani >= 90
                 ema_fark_val = float(ema7 - ema21)
@@ -489,16 +503,18 @@ def otomatik_arkaplan_tarayici():
                 is_altin_atis = sinyal["altin_atis"]
 
                 if sinyal_puani < 70 and not is_altin_atis:
-                    print(f"[{symbol}] ❌ Puan yetersiz ({sinyal_puani}), atlanıyor.")
+                    print(f"[{symbol}] ❌ Puan yetersiz ({sinyal_puani} < 70), atlanıyor.", flush=True)
                     continue
 
                 # Puan 100 (mutlak zirve / altın atış tepe-dip) ise sınırları baypas et
                 if sinyal_puani < 100:
                     if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
+                        print(f"[{symbol}] ❌ Maksimum toplam pozisyona ulaşıldı ({len(aktif_borsa_map)}/{MAKSIMUM_TOPLAM_POZISYON}), atlanıyor.", flush=True)
                         continue
 
                     ayni_yon_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == grid_yonu)
                     if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
+                        print(f"[{symbol}] ❌ Aynı yönde ({grid_yonu}) maksimum pozisyona ulaşıldı, atlanıyor.", flush=True)
                         continue 
 
                 # Risk ve Kasa Parametreleri
@@ -563,15 +579,15 @@ def otomatik_arkaplan_tarayici():
                         f"📈 *15m RSI:* `{rsi:.1f}`\n"
                         f"🎯 *Hedef TP ROE:* `+{hedef_roe:.1f}%`"
                     )
-                    print(f"🎯 İŞLEM BAŞARIYLA AÇILDI: {symbol} - {grid_yonu}")
+                    print(f"🎯 İŞLEM BAŞARIYLA AÇILDI: {symbol} - {grid_yonu}", flush=True)
                     aktif_borsa_map[symbol] = {'symbol': symbol, 'side': grid_yonu, 'contracts': miktar}
                 except Exception as e:
-                    print(f"❌ Emir açma hatası ({symbol}): {e}")
+                    print(f"❌ Emir açma hatası ({symbol}): {e}", flush=True)
 
                 break
 
         except Exception as e:
-            print(f"Tarayıcı döngü genel hatası: {e}")
+            print(f"Tarayıcı döngü genel hatası: {e}", flush=True)
             
         time.sleep(10)
 
