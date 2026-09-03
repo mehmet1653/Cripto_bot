@@ -124,14 +124,22 @@ def yapay_zekayi_egit_ve_guncelle():
         print(f"Yapay zeka eğitim hatası: {e}")
         ai_model_egitildi = False
 
-def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde):
+def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, symbol):
     if not ai_model_egitildi:
+        print(f"[{symbol}] 🧠 Yapay Zeka henüz eğitim aşamasında (Gözlem modu). Doğrudan onay verildi.")
         return True
     try:
         tahmin = ai_model.predict(np.array([[rsi, adx, ema_fark, yon_kod, atr_yuzde]]))[0]
-        return bool(tahmin == 1)
-    except Exception:
+        sonuc = bool(tahmin == 1)
+        if sonuc:
+            print(f"[{symbol}] 🧠 Yapay Zeka Süzgeci: ONAYLANDI ✅")
+        else:
+            print(f"[{symbol}] 🧠 Yapay Zeka Süzgeci: REDDEDİLDİ ❌")
+        return sonuc
+    except Exception as e:
+        print(f"[{symbol}] 🧠 Yapay Zeka tahmin hatası ({e}), varsayılan onay verildi.")
         return True
+
 
 def atr_ve_volatilite_hesapla(df, period=14):
     try:
