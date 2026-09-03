@@ -125,7 +125,7 @@ def yapay_zekayi_egit_ve_guncelle():
             
         ai_model.fit(np.array(X), np.array(y))
         ai_model_egitildi = True
-        print("🧠 Yapay Zeka (ADX Filtreli Tepe/Dip Avcısı) optimize edildi!", flush=True)
+        print("🧠 Yapay Zeka (Hibrit Trend/Tepe-Dip Modu) optimize edildi!", flush=True)
     except Exception as e:
         print(f"Yapay zeka eğitim hatası: {e}", flush=True)
         ai_model_egitildi = False
@@ -195,7 +195,7 @@ def telegram_mesaj_gonder(mesaj):
 
 @app.route('/')
 def home():
-    return f"ADX Filtreli Tepe/Dip Bot Aktif | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
+    return f"Hibrit Trend/Tepe-Dip Bot Aktif | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
 
 def set_leverage_safely(symbol, leverage):
     try:
@@ -278,7 +278,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pozisyon_detaylari = "\n🔍 *Açık Pozisyon:* `Yok`\n"
 
         mesaj = (
-            f"📊 *ADX FİLTRELİ TEPE/DİP BOT DURUMU*\n\n"
+            f"📊 *HİBRİT BOT DURUMU*\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"{pnl_ikon} Anlık Kâr/Zarar: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon Sayısı: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n"
@@ -320,7 +320,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 ADX Filtreli Tepe/Dip Tarayıcı Devrede.", flush=True)
+    print("🚀 Hibrit Trend/Tepe-Dip Tarayıcı Devrede.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -389,9 +389,9 @@ def otomatik_arkaplan_tarayici():
                         rsi=rsi_val, adx=adx_val, ema_fark=ema_fark_val, atr_yuzde=atr_val, basarili=False
                     )
 
-            # --- ADX FİLTRELİ TEPE / DİP VE DERİNLİK TARAMASI ---
+            # --- HİBRİT TARAMA VE KARAR MEKANİZMASI ---
             taranan_sinyaller = []
-            print("\n--- Yeni ADX Filtreli Tarama Döngüsü Başladı ---", flush=True)
+            print("\n--- Yeni Hibrit Tarama Döngüsü Başladı ---", flush=True)
 
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU:
@@ -432,8 +432,6 @@ def otomatik_arkaplan_tarayici():
                 grid_yonu = "LONG"
                 detay_bilgi = []
 
-                # ADX TABANLI TREND & RÜZGAR KONTROLÜ
-                # Eğer ADX >= 25 ise piyasa güçlü trenddedir. Rüzgara karşı işlem (bıçak tutma) engellenir.
                 guclu_trend_var = adx_val >= 25
                 trend_yonu_boga = plus_di > minus_di
 
@@ -442,23 +440,27 @@ def otomatik_arkaplan_tarayici():
 
                 if guclu_trend_var:
                     if trend_yonu_boga:
-                        # Güçlü Boğa Trendi: Sadece DİP (Long) aranır, Tepe (Short) yasak!
+                        # GÜÇLÜ BOĞA: Sert dipte 88 puan ver; normal trendde ise yavaş yükselişi kaçırmamak için EMA yönünde Long açtır!
                         if dip_kosulu:
                             grid_yonu = "LONG"
                             sinyal_puani = 88
                             detay_bilgi.append(f"🎯 Güçlü Boğa Trendinde Dip Tespiti (ADX: {adx_val:.1f}) -> Puan: 88")
                         else:
-                            detay_bilgi.append(f"⚠️ Güçlü Boğa Trendi (ADX: {adx_val:.1f}) - Tepe Short'ları Susturuldu, Trend Yönü Bekleniyor")
+                            grid_yonu = "LONG"
+                            sinyal_puani = 75
+                            detay_bilgi.append(f"📈 Güçlü Boğa Trendi Devam Ediyor (ADX: {adx_val:.1f}) -> Trend Yönü Long (Puan: 75)")
                     else:
-                        # Güçlü Ayı Trendi: Sadece TEPE (Short) aranır, Dip (Long) yasak!
+                        # GÜÇLÜ AYI: Sert tepede 88 puan ver; normal düşüşte ise trend yönünde Short açtır!
                         if tepe_kosulu:
                             grid_yonu = "SHORT"
                             sinyal_puani = 88
                             detay_bilgi.append(f"🏔️ Güçlü Ayı Trendinde Tepe Tespiti (ADX: {adx_val:.1f}) -> Puan: 88")
                         else:
-                            detay_bilgi.append(f"⚠️ Güçlü Ayı Trendi (ADX: {adx_val:.1f}) - Dip Long'ları Susturuldu, Trend Yönü Bekleniyor")
+                            grid_yonu = "SHORT"
+                            sinyal_puani = 75
+                            detay_bilgi.append(f"📉 Güçlü Ayı Trendi Devam Ediyor (ADX: {adx_val:.1f}) -> Trend Yönü Short (Puan: 75)")
                 else:
-                    # Yatay / Zayıf Piyasa (ADX < 25): Çift yönlü tepe/dip avcılığı serbest
+                    # YATAY / ZAYIF PİYASA (ADX < 25): Klasik tepe/dip avcılığı
                     if tepe_kosulu:
                         grid_yonu = "SHORT"
                         sinyal_puani = 88
@@ -589,7 +591,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     telegram_mesaj_gonder(
-                        f"⚡ *ADX FİLTRELİ TEPE/DİP İŞLEMİ AÇILDI*\n\n"
+                        f"⚡ *HİBRİT BOT İŞLEMİ AÇILDI*\n\n"
                         f"📌 *Coin:* `{symbol}`\n"
                         f"📊 *Yön:* `{grid_yonu}` | ⭐ *Puan:* `{sinyal_puani}/100`\n"
                         f"⚙️ *Kaldıraç:* `{dinamik_kaldirac}x` | 💰 *Kasa Oranı:* `%{kasa_orani*100:.0f}`\n"
@@ -617,7 +619,7 @@ if __name__ == '__main__':
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
-    app_tg.add_handler(Cod_handler := CommandHandler("baslat", baslat_komutu))
+    app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
