@@ -476,12 +476,14 @@ def otomatik_arkaplan_tarayici():
                     print(f"[{symbol}] ❌ Esnek süzgeç/puan kırpılması sonrası puan yetersiz ({sinyal_puani}), atlanıyor.")
                     continue
 
-                if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON and not is_altin_atis:
-                    continue
+                # Puan 100 (mutlak zirve) ise maksimum pozisyon ve aynı yön sınırlarını es geç/baypas et
+                if sinyal_puani < 100:
+                    if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
+                        continue
 
-                ayni_yon_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == grid_yonu)
-                if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI and not is_altin_atis:
-                    continue 
+                    ayni_yon_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == grid_yonu)
+                    if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
+                        continue 
 
                 if (grid_yonu == "LONG" and rsi_4h > 75) or (grid_yonu == "SHORT" and rsi_4h < 25):
                     dinamik_kaldirac = 5
@@ -489,6 +491,11 @@ def otomatik_arkaplan_tarayici():
                     hedef_roe = 12.0
                     stop_roe = 7.0
                     print(f"[{symbol}] 🛡️ Riskli bölge tespiti: Kaldıraç 5x ve düşük bakiye oranı (%5) ile temkinli giriliyor.")
+                elif is_altin_atis and sinyal_puani == 100:
+                    dinamik_kaldirac = 20
+                    kasa_orani = 0.20
+                    hedef_roe = 25.0
+                    stop_roe = 10.0
                 elif is_altin_atis:
                     dinamik_kaldirac = 20
                     kasa_orani = 0.15
