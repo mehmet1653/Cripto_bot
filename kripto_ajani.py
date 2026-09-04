@@ -111,9 +111,10 @@ def yapay_zekayi_egit_ve_guncelle():
     global ai_model, ai_model_egitildi
     veriler = ANALitik_HAFIZA.get("egitim_verileri", [])
     
-    if len(veriler) < 3:
+    # Kör kalmaması için eşik 20 işleme çıkartıldı
+    if len(veriler) < 20:
         ai_model_egitildi = False
-        print(f"🧠 Yapay Zeka gözlem modunda: {len(veriler)}/3 veri toplandı.", flush=True)
+        print(f"🧠 Yapay Zeka öğrenme aşamasında: {len(veriler)}/20 veri toplandı.", flush=True)
         return
 
     try:
@@ -125,7 +126,7 @@ def yapay_zekayi_egit_ve_guncelle():
             
         ai_model.fit(np.array(X), np.array(y))
         ai_model_egitildi = True
-        print("🧠 Yapay Zeka (Hibrit Trend/Tepe-Dip Modu) optimize edildi!", flush=True)
+        print("🧠 Yapay Zeka dengeli veri setiyle yeniden eğitildi!", flush=True)
     except Exception as e:
         print(f"Yapay zeka eğitim hatası: {e}", flush=True)
         ai_model_egitildi = False
@@ -134,14 +135,26 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id, symb
     if not ai_model_egitildi:
         return True
     try:
-        tahmin = ai_model.predict(np.array([[rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id]]))[0]
-        sonuc = bool(tahmin == 1)
-        if sonuc:
-            print(f"[{symbol}] 🧠 Yapay Zeka Süzgeci: ONAYLANDI ✅", flush=True)
+        # predict_proba kullanarak modelin olasılık skorunu ölçüyoruz (Aşırı katı redleri önlemek için)
+        olasiliklar = ai_model.predict_proba(np.array([[rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id]]))[0]
+        
+        # Sınıf etiketlerini kontrol et (Genelde [0, 1] sırasıyla döner)
+        classes = list(ai_model.classes_)
+        if 1 in classes:
+            index_1 = classes.index(1)
+            basari_ihtimali = olasiliklar[index_1]
         else:
-            print(f"[{symbol}] 🧠 Yapay Zeka Süzgeci: REDDEDİLDİ ❌", flush=True)
-        return sonuc
+            basari_ihtimali = 1.0
+
+        # Eğer modelin başarı tahmini %35'in üzerindeyse ya da nötrse işleme izin ver
+        if basari_ihtimali >= 0.35:
+            print(f"[{symbol}] 🧠 Yapay Zeka Süzgeci: ONAYLANDI ✅ (İhtimal: %{basari_ihtimali*100:.1f})", flush=True)
+            return True
+        else:
+            print(f"[{symbol}] 🧠 Yapay Zeka Süzgeci: REDDEDİLDİ ❌ (İhtimal düşük: %{basari_ihtimali*100:.1f})", flush=True)
+            return False
     except Exception as e:
+        print(f"AI onay hatası: {e}", flush=True)
         return True
 
 def atr_ve_volatilite_hesapla(df, period=14):
@@ -195,7 +208,7 @@ def telegram_mesaj_gonder(mesaj):
 
 @app.route('/')
 def home():
-    return f"Hibrit Trend/Tepe-Dip Bot Aktif | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
+    return f"Hibrit Bot Aktif | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
 
 def set_leverage_safely(symbol, leverage):
     try:
@@ -254,7 +267,6 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if kontrat > 0:
                     borsa_poslari.append(p)
         except Exception as e:
-            print(f"Pozisyon çekme hatası: {e}", flush=True)
             borsa_poslari = []
 
         toplam_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in borsa_poslari)
@@ -286,7 +298,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🎯 *İstatistikler:*\n"
             f"✅ Başarılı (TP): `{basarili_sayisi}` | ❌ Başarısız (SL): `{basarisiz_sayisi}`\n"
             f"📈 Başarı Oranı: `%{basari_orani:.1f}`\n"
-            f"🧠 Eğitim Verisi: `{len(ANALitik_HAFIZA.get('egitim_verileri', []))}/3`\n"
+            f"🧠 Eğitim Verisi: `{len(ANALitik_HAFIZA.get('egitim_verileri', []))}/20`\n"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
     except Exception as e:
@@ -438,47 +450,35 @@ def otomatik_arkaplan_tarayici():
                 tepe_kosulu = (degisim_yuzdesi >= 2.5 and rsi > 62 and derinlik_durumu in ["SATICI_BASKIN", "DENGELI"])
                 dip_kosulu = (degisim_yuzdesi <= -2.5 and rsi < 38 and derinlik_durumu in ["ALICI_BASKIN", "DENGELI"])
 
-                # =========================================================================
-                # 🛠️ GÜNCELLENEN ÖNCELİK MANTIĞI: TEPE / DİP KOŞULLARI TRENDLERİ EZER!
-                # =========================================================================
                 if tepe_kosulu:
                     grid_yonu = "SHORT"
                     sinyal_puani = 88
-                    detay_bilgi.append(f"🏔️ Tepe Tespiti (Trendden bağımsız Short) (ADX: {adx_val:.1f}, Değişim: %{degisim_yuzdesi:.1f}) -> Puan: 88")
+                    detay_bilgi.append(f"🏔️ Tepe Tespiti (Short) (ADX: {adx_val:.1f}, Değişim: %{degisim_yuzdesi:.1f}) -> Puan: 88")
                 elif dip_kosulu:
                     grid_yonu = "LONG"
                     sinyal_puani = 88
-                    detay_bilgi.append(f"🎯 Dip Tespiti (Trendden bağımsız Long) (ADX: {adx_val:.1f}, Değişim: %{degisim_yuzdesi:.1f}) -> Puan: 88")
+                    detay_bilgi.append(f"🎯 Dip Tespiti (Long) (ADX: {adx_val:.1f}, Değişim: %{degisim_yuzdesi:.1f}) -> Puan: 88")
                 elif guclu_trend_var:
                     if trend_yonu_boga:
                         grid_yonu = "LONG"
                         sinyal_puani = 75
-                        detay_bilgi.append(f"📈 Güçlü Boğa Trendi Devam Ediyor (ADX: {adx_val:.1f}) -> Trend Yönü Long (Puan: 75)")
+                        detay_bilgi.append(f"📈 Güçlü Boğa Trendi (ADX: {adx_val:.1f}) -> Long (Puan: 75)")
                     else:
                         grid_yonu = "SHORT"
                         sinyal_puani = 75
-                        detay_bilgi.append(f"📉 Güçlü Ayı Trendi Devam Ediyor (ADX: {adx_val:.1f}) -> Trend Yönü Short (Puan: 75)")
+                        detay_bilgi.append(f"📉 Güçlü Ayı Trendi (ADX: {adx_val:.1f}) -> Short (Puan: 75)")
                 else:
-                    # YATAY / ZAYIF PİYASA (ADX < 25)
                     grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
                     detay_bilgi.append(f"Trend Yönü: {grid_yonu} (EMA7/21) [Yatay/Zayıf ADX: {adx_val:.1f}]")
                     
                     if adx_val >= 18:
                         sinyal_puani += 15
-                        detay_bilgi.append(f"ADX yeterli ({adx_val:.1f}) +15")
-                    else:
-                        detay_bilgi.append(f"ADX düşük ({adx_val:.1f}) +0")
-                        
                     if grid_yonu == "LONG" and rsi < 50:
                         sinyal_puani += 20
-                        detay_bilgi.append(f"Long & uygun RSI ({rsi:.1f}) +20")
                     elif grid_yonu == "SHORT" and rsi > 50:
                         sinyal_puani += 20
-                        detay_bilgi.append(f"Short & uygun RSI ({rsi:.1f}) +20")
-                    else:
-                        detay_bilgi.append(f"RSI nötr ({rsi:.1f}) +0")
 
-                print(f"[{symbol}] 🔍 Karne -> Yön: {grid_yonu} | Toplam Puan: {sinyal_puani} | Değişim: %{degisim_yuzdesi:.1f} | RSI: {rsi:.1f} | ADX: {adx_val:.1f} | Notlar: {' | '.join(detay_bilgi)}", flush=True)
+                print(f"[{symbol}] 🔍 Karne -> Yön: {grid_yonu} | Puan: {sinyal_puani} | Değişim: %{degisim_yuzdesi:.1f} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
 
                 is_altin_atis = sinyal_puani >= 85
                 ema_fark_val = float(ema7 - ema21)
@@ -519,17 +519,13 @@ def otomatik_arkaplan_tarayici():
                 is_altin_atis = sinyal["altin_atis"]
 
                 if sinyal_puani < 65 and not is_altin_atis:
-                    print(f"[{symbol}] ❌ Puan yetersiz ({sinyal_puani} < 65), atlanıyor.", flush=True)
                     continue
 
                 if sinyal_puani < 100:
                     if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
-                        print(f"[{symbol}] ❌ Maksimum toplam pozisyona ulaşıldı ({len(aktif_borsa_map)}/{MAKSIMUM_TOPLAM_POZISYON}), atlanıyor.", flush=True)
                         continue
-
                     ayni_yon_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == grid_yonu)
                     if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
-                        print(f"[{symbol}] ❌ Aynı yönde ({grid_yonu}) maksimum pozisyona ulaşıldı, atlanıyor.", flush=True)
                         continue 
 
                 if is_altin_atis:
@@ -546,7 +542,7 @@ def otomatik_arkaplan_tarayici():
                 try:
                     balance = exchange.fetch_balance()
                     toplam_bakiye = float(balance['total'].get('USDT', 0))
-                except Exception as e:
+                except Exception:
                     continue
 
                 if not set_leverage_safely(symbol, dinamik_kaldirac):
@@ -564,9 +560,6 @@ def otomatik_arkaplan_tarayici():
                     gercek_ham_miktar = max(ham_miktar / contract_size, min_amount)
                     miktar = float(exchange.amount_to_precision(symbol, gercek_ham_miktar))
                     
-                    if miktar < min_amount:
-                        miktar = min_amount
-
                     emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
                     exchange.create_order(symbol, 'market', emir_yonu, miktar)
 
@@ -588,7 +581,7 @@ def otomatik_arkaplan_tarayici():
                         f"📈 *15m RSI:* `{rsi:.1f}` | *ADX:* `{adx_val:.1f}`\n"
                         f"🎯 *Hedef TP ROE:* `+{hedef_roe:.1f}%`"
                     )
-                    print(f"🎯 İŞLEM BAŞARIYLA AÇILDI: {symbol} - {grid_yonu}", flush=True)
+                    print(f"🎯 İŞLEM AÇILDI: {symbol} - {grid_yonu}", flush=True)
                     aktif_borsa_map[symbol] = {'symbol': symbol, 'side': grid_yonu, 'contracts': miktar}
                 except Exception as e:
                     print(f"❌ Emir açma hatası ({symbol}): {e}", flush=True)
