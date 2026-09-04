@@ -111,7 +111,6 @@ def yapay_zekayi_egit_ve_guncelle():
     global ai_model, ai_model_egitildi
     veriler = ANALitik_HAFIZA.get("egitim_verileri", [])
     
-    # Kör kalmaması için eşik 20 işleme çıkartıldı
     if len(veriler) < 20:
         ai_model_egitildi = False
         print(f"🧠 Yapay Zeka öğrenme aşamasında: {len(veriler)}/20 veri toplandı.", flush=True)
@@ -135,10 +134,7 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id, symb
     if not ai_model_egitildi:
         return True
     try:
-        # predict_proba kullanarak modelin olasılık skorunu ölçüyoruz (Aşırı katı redleri önlemek için)
         olasiliklar = ai_model.predict_proba(np.array([[rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id]]))[0]
-        
-        # Sınıf etiketlerini kontrol et (Genelde [0, 1] sırasıyla döner)
         classes = list(ai_model.classes_)
         if 1 in classes:
             index_1 = classes.index(1)
@@ -146,7 +142,6 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id, symb
         else:
             basari_ihtimali = 1.0
 
-        # Eğer modelin başarı tahmini %35'in üzerindeyse ya da nötrse işleme izin ver
         if basari_ihtimali >= 0.35:
             print(f"[{symbol}] 🧠 Yapay Zeka Süzgeci: ONAYLANDI ✅ (İhtimal: %{basari_ihtimali*100:.1f})", flush=True)
             return True
@@ -266,7 +261,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 kontrat = float(p.get('contracts', 0) or p.get('size', 0) or 0)
                 if kontrat > 0:
                     borsa_poslari.append(p)
-        except Exception as e:
+        except Exception:
             borsa_poslari = []
 
         toplam_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in borsa_poslari)
@@ -360,7 +355,7 @@ def otomatik_arkaplan_tarayici():
                     del AKTIF_GRID_SISTEMLERI[sym]
                     hafizayi_kaydet()
 
-            # --- TP / SL KONTROLÜ ---
+            # --- TP / SL KONTROLÜ (Genişletilmiş Hedefler: TP %25, SL %10) ---
             for symbol, pos in aktif_borsa_map.items():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
@@ -377,7 +372,7 @@ def otomatik_arkaplan_tarayici():
                 kontrat_miktari = float(pos.get('contracts', 0) or pos.get('size', 0) or 1.0)
 
                 kayitli = AKTIF_GRID_SISTEMLERI.get(symbol, {})
-                hedef_roe = kayitli.get("hedef_roe", 15.0)
+                hedef_roe = kayitli.get("hedef_roe", 25.0)  # Güncellendi
                 stop_roe = kayitli.get("stop_roe", 10.0)
                 rsi_val = kayitli.get("giris_rsi", 50)
                 adx_val = kayitli.get("giris_adx", 25)
@@ -531,12 +526,12 @@ def otomatik_arkaplan_tarayici():
                 if is_altin_atis:
                     dinamik_kaldirac = 20
                     kasa_orani = 0.15
-                    hedef_roe = 20.0
+                    hedef_roe = 35.0  # Altın atış için genişletilmiş hedef
                     stop_roe = 10.0
                 else:
                     dinamik_kaldirac = 10
                     kasa_orani = 0.10
-                    hedef_roe = 15.0
+                    hedef_roe = 25.0  # Normal işlemler için %25 TP
                     stop_roe = 10.0
 
                 try:
