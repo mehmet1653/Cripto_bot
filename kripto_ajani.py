@@ -438,55 +438,45 @@ def otomatik_arkaplan_tarayici():
                 tepe_kosulu = (degisim_yuzdesi >= 2.5 and rsi > 62 and derinlik_durumu in ["SATICI_BASKIN", "DENGELI"])
                 dip_kosulu = (degisim_yuzdesi <= -2.5 and rsi < 38 and derinlik_durumu in ["ALICI_BASKIN", "DENGELI"])
 
-                if guclu_trend_var:
+                # =========================================================================
+                # 🛠️ GÜNCELLENEN ÖNCELİK MANTIĞI: TEPE / DİP KOŞULLARI TRENDLERİ EZER!
+                # =========================================================================
+                if tepe_kosulu:
+                    grid_yonu = "SHORT"
+                    sinyal_puani = 88
+                    detay_bilgi.append(f"🏔️ Tepe Tespiti (Trendden bağımsız Short) (ADX: {adx_val:.1f}, Değişim: %{degisim_yuzdesi:.1f}) -> Puan: 88")
+                elif dip_kosulu:
+                    grid_yonu = "LONG"
+                    sinyal_puani = 88
+                    detay_bilgi.append(f"🎯 Dip Tespiti (Trendden bağımsız Long) (ADX: {adx_val:.1f}, Değişim: %{degisim_yuzdesi:.1f}) -> Puan: 88")
+                elif guclu_trend_var:
                     if trend_yonu_boga:
-                        # GÜÇLÜ BOĞA: Sert dipte 88 puan ver; normal trendde ise yavaş yükselişi kaçırmamak için EMA yönünde Long açtır!
-                        if dip_kosulu:
-                            grid_yonu = "LONG"
-                            sinyal_puani = 88
-                            detay_bilgi.append(f"🎯 Güçlü Boğa Trendinde Dip Tespiti (ADX: {adx_val:.1f}) -> Puan: 88")
-                        else:
-                            grid_yonu = "LONG"
-                            sinyal_puani = 75
-                            detay_bilgi.append(f"📈 Güçlü Boğa Trendi Devam Ediyor (ADX: {adx_val:.1f}) -> Trend Yönü Long (Puan: 75)")
-                    else:
-                        # GÜÇLÜ AYI: Sert tepede 88 puan ver; normal düşüşte ise trend yönünde Short açtır!
-                        if tepe_kosulu:
-                            grid_yonu = "SHORT"
-                            sinyal_puani = 88
-                            detay_bilgi.append(f"🏔️ Güçlü Ayı Trendinde Tepe Tespiti (ADX: {adx_val:.1f}) -> Puan: 88")
-                        else:
-                            grid_yonu = "SHORT"
-                            sinyal_puani = 75
-                            detay_bilgi.append(f"📉 Güçlü Ayı Trendi Devam Ediyor (ADX: {adx_val:.1f}) -> Trend Yönü Short (Puan: 75)")
-                else:
-                    # YATAY / ZAYIF PİYASA (ADX < 25): Klasik tepe/dip avcılığı
-                    if tepe_kosulu:
-                        grid_yonu = "SHORT"
-                        sinyal_puani = 88
-                        detay_bilgi.append(f"🏔️ Yatay Piyasada Tepe Tespiti (ADX: {adx_val:.1f}) -> Puan: 88")
-                    elif dip_kosulu:
                         grid_yonu = "LONG"
-                        sinyal_puani = 88
-                        detay_bilgi.append(f"🎯 Yatay Piyasada Dip Tespiti (ADX: {adx_val:.1f}) -> Puan: 88")
+                        sinyal_puani = 75
+                        detay_bilgi.append(f"📈 Güçlü Boğa Trendi Devam Ediyor (ADX: {adx_val:.1f}) -> Trend Yönü Long (Puan: 75)")
                     else:
-                        grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
-                        detay_bilgi.append(f"Trend Yönü: {grid_yonu} (EMA7/21) [Yatay/Zayıf ADX: {adx_val:.1f}]")
+                        grid_yonu = "SHORT"
+                        sinyal_puani = 75
+                        detay_bilgi.append(f"📉 Güçlü Ayı Trendi Devam Ediyor (ADX: {adx_val:.1f}) -> Trend Yönü Short (Puan: 75)")
+                else:
+                    # YATAY / ZAYIF PİYASA (ADX < 25)
+                    grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
+                    detay_bilgi.append(f"Trend Yönü: {grid_yonu} (EMA7/21) [Yatay/Zayıf ADX: {adx_val:.1f}]")
+                    
+                    if adx_val >= 18:
+                        sinyal_puani += 15
+                        detay_bilgi.append(f"ADX yeterli ({adx_val:.1f}) +15")
+                    else:
+                        detay_bilgi.append(f"ADX düşük ({adx_val:.1f}) +0")
                         
-                        if adx_val >= 18:
-                            sinyal_puani += 15
-                            detay_bilgi.append(f"ADX yeterli ({adx_val:.1f}) +15")
-                        else:
-                            detay_bilgi.append(f"ADX düşük ({adx_val:.1f}) +0")
-                            
-                        if grid_yonu == "LONG" and rsi < 50:
-                            sinyal_puani += 20
-                            detay_bilgi.append(f"Long & uygun RSI ({rsi:.1f}) +20")
-                        elif grid_yonu == "SHORT" and rsi > 50:
-                            sinyal_puani += 20
-                            detay_bilgi.append(f"Short & uygun RSI ({rsi:.1f}) +20")
-                        else:
-                            detay_bilgi.append(f"RSI nötr ({rsi:.1f}) +0")
+                    if grid_yonu == "LONG" and rsi < 50:
+                        sinyal_puani += 20
+                        detay_bilgi.append(f"Long & uygun RSI ({rsi:.1f}) +20")
+                    elif grid_yonu == "SHORT" and rsi > 50:
+                        sinyal_puani += 20
+                        detay_bilgi.append(f"Short & uygun RSI ({rsi:.1f}) +20")
+                    else:
+                        detay_bilgi.append(f"RSI nötr ({rsi:.1f}) +0")
 
                 print(f"[{symbol}] 🔍 Karne -> Yön: {grid_yonu} | Toplam Puan: {sinyal_puani} | Değişim: %{degisim_yuzdesi:.1f} | RSI: {rsi:.1f} | ADX: {adx_val:.1f} | Notlar: {' | '.join(detay_bilgi)}", flush=True)
 
