@@ -249,7 +249,7 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=50, adx=25,
     if sebep_mesaji:
         telegram_mesaj_gonder(sebep_mesaji)
 
-# ==================== TELEGRAM KOMUTLARI (DETAYLI RAPOR) ====================
+# ==================== TELEGRAM KOMUTLARI ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("📲 Kullanıcı /durum komutunu çalıştırdı.", flush=True)
     try:
@@ -330,7 +330,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         hafizayi_kaydet()
         await update.message.reply_text(f"✅ Hafıza temizlendi. (Not: {e})", parse_mode='Markdown')
 
-# ==================== ARKA PLAN TARAYICI (TERMİNAL LOGLARI İLE) ====================
+# ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
     print("🚀 Gelişmiş Hibrit Tarayıcı ve Log Sistemi Devrede.", flush=True)
@@ -406,13 +406,13 @@ def otomatik_arkaplan_tarayici():
                         f"🎯 *KÂR ALINDI (TP)*\n\n📌 *Coin:* `{symbol}`\n📊 *Yön:* `{yon}`\n💰 *Kâr:* `+{pnl:.2f} USDT` (`%{roe:.2f}`)", 
                         rsi=rsi_val, adx=adx_val, ema_fark=ema_fark_val, atr_yuzde=atr_val, basarili=True
                     )
-                elif roe <= -current_stop and current_stop > 0:
+                elif roe <= -current_stop:  # KESİN STOP KONTROLÜ (Zarar eşiği aşılır aşılmaz veya %30'a varsa dahi acilen kapatır)
                     ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
                     hafizayi_kaydet()
                     print(f"🛑 ZARAR KESİLDİ (SL): {symbol} | Yön: {yon} | Sonuç: {pnl:.2f} USDT (%{roe:.2f})", flush=True)
                     pozisyonu_garantili_kapat(
                         symbol, yon, kontrat_miktari, 
-                        f"🛑 *ZARAR KESİLDİ / BREAKEVEN (SL)*\n\n📌 *Coin:* `{symbol}`\n📊 *Yön:* `{yon}`\n📉 *Sonuç:* `{pnl:.2f} USDT` (`%{roe:.2f}`)", 
+                        f"🛑 *ZARAR KESİLDİ / ACİL KAPANMA (SL)*\n\n📌 *Coin:* `{symbol}`\n📊 *Yön:* `{yon}`\n📉 *Sonuç:* `{pnl:.2f} USDT` (`%{roe:.2f}`)", 
                         rsi=rsi_val, adx=adx_val, ema_fark=ema_fark_val, atr_yuzde=atr_val, basarili=False
                     )
 
@@ -428,7 +428,6 @@ def otomatik_arkaplan_tarayici():
                     print(f"[{symbol}] Zaten açık pozisyon var, taranmıyor.", flush=True)
                     continue
 
-                # Cooldown (Soğuma) kontrolü
                 bitis_zamani = COIN_COOLDOWNLAR.get(symbol, 0)
                 if su_anki_zaman < bitis_zamani:
                     kalan_dakika = int((bitis_zamani - su_anki_zaman) / 60)
@@ -512,7 +511,6 @@ def otomatik_arkaplan_tarayici():
                     "altin_atis": is_altin_atis
                 })
 
-            # Puanı en yüksek olan en iyi sinyali en üste al
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
             # --- EN İYİ SİNYAL İLE İŞLEM AÇMA ---
@@ -543,12 +541,12 @@ def otomatik_arkaplan_tarayici():
                     print(f"⚠️ Aynı yönde ({grid_yonu}) maksimum pozisyon sınırına ulaşıldı.", flush=True)
                     continue 
 
-                # Kurallar: Normal işlem (%20 kâr, %10 zarar, 10x, %20 kasa payı) / Altın atış (%25 kâr, %12.5 zarar, 20x, %25 kasa payı)
+                # Güncel Kural: Normal ve Altın Atış kâr hedefleri %20, stop %10. Altın atışta kasa oranı %25.
                 if is_altin_atis:
                     dinamik_kaldirac = 20
                     kasa_orani = 0.25
-                    hedef_roe = 25.0
-                    stop_roe = 12.5
+                    hedef_roe = 20.0
+                    stop_roe = 10.0
                 else:
                     dinamik_kaldirac = 10
                     kasa_orani = 0.20
@@ -605,7 +603,7 @@ def otomatik_arkaplan_tarayici():
         except Exception as e:
             print(f"⚠️ Tarayıcı döngü genel hatası: {e}", flush=True)
             
-        time.sleep(10)
+        time.sleep(5)
 
 def flask_web_server():
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
