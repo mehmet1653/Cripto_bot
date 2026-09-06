@@ -44,7 +44,7 @@ TAKIP_EDILENLER_YEDEK = [
 ]
 
 BOT_CALISIYOR_MU = True
-ADAY_SINYALLER = {} # Sahte kırılımları elemek için teyit mekanizması hafızası
+ADAY_SINYALLER = {} 
 
 # ==================== SUPABASE HAFIZA FONKSİYONLARI ====================
 def hafizayi_yukle():
@@ -115,7 +115,6 @@ def yapay_zekayi_egit_ve_guncelle():
     global ai_model, ai_model_egitildi
     veriler = ANALitik_HAFIZA.get("egitim_verileri", [])
     
-    # En az 50 örnek birikmeden yapay zeka kararlara müdahale etmez (Güvenli Soğuk Başlangıç)
     if len(veriler) < 50:
         ai_model_egitildi = False
         return
@@ -487,7 +486,6 @@ def otomatik_arkaplan_tarayici():
                     elif grid_yonu == "SHORT" and rsi > 52:
                         sinyal_puani += 15
 
-                # 100 Puanlık Kusursuz Altın Atış Şartı
                 if sinyal_puani >= 95 and adx_val >= 35 and derinlik_durumu in ["ALICI_BASKIN", "SATICI_BASKIN"]:
                     sinyal_puani = 100
 
@@ -495,7 +493,6 @@ def otomatik_arkaplan_tarayici():
                 ema_fark_val = float(ema7 - ema21)
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 
-                # Yapay Zeka Süzgeci ve Detaylı Log
                 ai_onay = yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod, atr_yuzdesi)
                 ai_durum = "✅ ONAYLANDI" if ai_onay else "❌ ELENDİ"
                 
@@ -504,10 +501,8 @@ def otomatik_arkaplan_tarayici():
                 if not ai_onay or sinyal_puani < 75:
                     continue
 
-                # Çoklu Teyit Mekanizması Kontrolü (Sahte kırılımları önlemek için 2 ardışık döngü teyidi)
                 eski_aday = ADAY_SINYALLER.get(symbol)
                 if eski_aday and eski_aday["yon"] == grid_yonu:
-                    # İkinci kez teyit edildi, artık işleme girebilir
                     taranan_sinyaller.append({
                         "symbol": symbol,
                         "puan": sinyal_puani,
@@ -520,13 +515,11 @@ def otomatik_arkaplan_tarayici():
                         "altin_atis": is_altin_atis
                     })
                 else:
-                    # İlk kez sinyal verdi, aday listesine ekle sonraki döngüde teyit et
                     yeni_aday_sinyalleri[symbol] = {"yon": grid_yonu, "puan": sinyal_puani}
 
             ADAY_SINYALLER = yeni_aday_sinyalleri
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
-            # --- POZİSYON AÇMA KURALLARI VE LİMİTLERİ ---
             normal_poz_sayisi = sum(1 for p in aktif_borsa_map.values() if not AKTIF_GRID_SISTEMLERI.get(p['symbol'], {}).get('altin_atis', False))
             altin_atis_poz_sayisi = sum(1 for p in aktif_borsa_map.values() if AKTIF_GRID_SISTEMLERI.get(p['symbol'], {}).get('altin_atis', False))
 
@@ -544,7 +537,6 @@ def otomatik_arkaplan_tarayici():
                 atr_yuzdesi = sinyal["atr"]
                 is_altin_atis = sinyal["altin_atis"]
 
-                # Limit Kontrolleri
                 if is_altin_atis:
                     if altin_atis_poz_sayisi >= MAKSIMUM_ALTIN_ATIS_POZISYON:
                         continue
@@ -563,12 +555,11 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
-                # İzole Marjin ve Kaldıraç Ayarı
+                # Sadece Kaldıraç Ayarı (set_margin_mode tamamen kaldırıldı)
                 try:
-                    exchange.set_margin_mode('isolated', symbol)
                     exchange.set_leverage(dinamik_kaldirac, symbol)
                 except Exception as e:
-                    print(f"⚠️ Marjin/Kaldıraç hatası ({symbol}): {e}", flush=True)
+                    print(f"⚠️ Kaldıraç hatası ({symbol}): {e}", flush=True)
                     continue
                 
                 hedef_marjin = toplam_bakiye * kasa_orani
@@ -585,10 +576,8 @@ def otomatik_arkaplan_tarayici():
                     
                     emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
                     
-                    # 1. Adım: Ana Pozisyon Açılışı (Market)
                     exchange.create_order(symbol, 'market', emir_yonu, miktar)
 
-                    # 2. Adım: Borsa Onayını Bekleyerek Giriş Fiyatını Sabitleme
                     giris_fiyati = guncel_fiyat
                     for _ in range(5):
                         try:
@@ -618,7 +607,6 @@ def otomatik_arkaplan_tarayici():
                     stop_fiyat = float(exchange.price_to_precision(symbol, stop_fiyat))
                     hedef_fiyat = float(exchange.price_to_precision(symbol, hedef_fiyat))
                     
-                    # Stop-Loss Emri
                     stop_params = {
                         'stopPrice': stop_fiyat,
                         'triggerPrice': stop_fiyat,
@@ -627,13 +615,12 @@ def otomatik_arkaplan_tarayici():
                     }
                     exchange.create_order(symbol, 'stop_market', kapatma_yonu, miktar, stop_fiyat, stop_params)
 
-                    # Take-Profit Emri (Limit Reduce-Only)
                     hedef_params = {
                         'reduceOnly': True
                     }
-                    exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, hedef_fiyat, hebrews := hedef_params)
+                    exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, hedef_fiyat, hedef_params)
                     
-                    print(f"🛡️ [{symbol}] İzole Marjin + TP/SL Emirleri İşlendi -> Giriş: {giris_fiyati} | SL: {stop_fiyat} | TP: {hedef_fiyat}", flush=True)
+                    print(f"🛡️ [{symbol}] Kaldıraç + TP/SL Emirleri İşlendi -> Giriş: {giris_fiyati} | SL: {stop_fiyat} | TP: {hedef_fiyat}", flush=True)
 
                     AKTIF_GRID_SISTEMLERI[symbol] = {
                         "yon": grid_yonu,
@@ -652,7 +639,7 @@ def otomatik_arkaplan_tarayici():
                     telegram_mesaj_gonder(
                         f"{tur_mesaji} VE BORSA EMRİ GİRİLDİ\n\n"
                         f"📌 *Coin:* `{symbol}` | 📊 *Yön:* `{grid_yonu}`\n"
-                        f"🎯 *Hedef TP:* `%+{hedef_roe}` | *Stop SL:* `-%{stop_roe}` (İzole Marjin 🛡️)"
+                        f"🎯 *Hedef TP:* `%+{hedef_roe}` | *Stop SL:* `-%{stop_roe}` (Kaldıraçlı 🛡️)"
                     )
                     
                     if is_altin_atis:
