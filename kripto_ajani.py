@@ -523,7 +523,6 @@ def otomatik_arkaplan_tarayici():
             normal_poz_sayisi = sum(1 for p in aktif_borsa_map.values() if not AKTIF_GRID_SISTEMLERI.get(p['symbol'], {}).get('altin_atis', False))
             altin_atis_poz_sayisi = sum(1 for p in aktif_borsa_map.values() if AKTIF_GRID_SISTEMLERI.get(p['symbol'], {}).get('altin_atis', False))
 
-            # Yön bazlı açık pozisyon sayılarını hesapla (Aynı yöne maksimum 2 işlem kuralı)
             aktif_long_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == 'LONG')
             aktif_short_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == 'SHORT')
 
@@ -541,7 +540,6 @@ def otomatik_arkaplan_tarayici():
                 atr_yuzdesi = sinyal["atr"]
                 is_altin_atis = sinyal["altin_atis"]
 
-                # --- YÖN BAZLI MAKSIMUM 2 İŞLEM SINIRI ---
                 if grid_yonu == 'LONG' and aktif_long_sayisi >= 2:
                     continue
                 if grid_yonu == 'SHORT' and aktif_short_sayisi >= 2:
@@ -556,8 +554,8 @@ def otomatik_arkaplan_tarayici():
 
                 dinamik_kaldirac = 20 if is_altin_atis else 10
                 kasa_orani = 0.25 if is_altin_atis else 0.20
-                hedef_roe = 25.0 if is_altin_atis else 18.0
-                stop_roe = 10.0
+                hedef_roe = 20.0  # Güncellendi: Artık her iki türde de %20 TP
+                stop_roe = 10.0   # Güncellendi: Artık her iki türde de %10 SL
 
                 try:
                     balance = exchange.fetch_balance()
