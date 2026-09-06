@@ -375,7 +375,9 @@ def otomatik_arkaplan_tarayici():
 
                 if not breakeven_yapildi and roe >= 10.0:
                     kayitli["breakeven_yapildi"] = True
+                    AKTIF_GRID_SISTEMLERI[symbol] = kayitli
                     hafizayi_kaydet()
+                    
                     try:
                         open_orders = exchange.fetch_open_orders(symbol)
                         for ord_item in open_orders:
