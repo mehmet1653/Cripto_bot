@@ -367,9 +367,31 @@ def otomatik_arkaplan_tarayici():
                 if not breakeven_yapildi and roe >= 10.0:
                     kayitli["breakeven_yapildi"] = True
                     kayitli["stop_roe"] = 0.0  
+                    
+                    # Borsa tarafındaki eski stop emrini iptal edip, stopu giriş fiyatına (merkez) çekiyoruz
+                    try:
+                        open_orders = exchange.fetch_open_orders(symbol)
+                        for ord_item in open_orders:
+                            if ord_item.get('info', {}).get('is_stop') or ord_item.get('type') == 'stop_market':
+                                # Yalnızca stop emirlerini iptal ediyoruz (hedefe dokunulmuyor)
+                                trigger_p = float(ord_item.get('triggerPrice') or ord_item.get('stopPrice') or 0)
+                                if (yon == 'LONG' and trigger_p < merkez) or (yon == 'SHORT' and trigger_p > merkez):
+                                    exchange.cancel_order(ord_item['id'], symbol)
+                        
+                        kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
+                        stop_params = {
+                            'stopPrice': merkez,
+                            'triggerPrice': merkez,
+                            'reduceOnly': True,
+                            'is_stop': True
+                        }
+                        exchange.create_order(symbol, 'stop_market', kapatma_yonu, kontrat_miktari, merkez, stop_params)
+                        print(f"🛡️ [{symbol}] Eski stop iptal edildi, stop seviyesi giriş fiyatına ({merkez}) sabitlendi!", flush=True)
+                    except Exception as ex:
+                        print(f"⚠️ Breakeven borsa güncelleme hatası: {ex}", flush=True)
+
                     hafizayi_kaydet()
-                    print(f"🛡️ [{symbol}] Kâr %10'a ulaştı. Stop giriş fiyatına sabitlendi!", flush=True)
-                    telegram_mesaj_gonder(f"🛡️ *Breakeven Devrede (0 Risk)*\n📌 `{symbol}` stopu giriş fiyatına çekildi!")
+                    telegram_mesaj_gonder(f"🛡️ *Breakeven Devrede (0 Risk)*\n📌 `{symbol}` stopu giriş fiyatına (`{merkez}`) çekildi!")
 
                 current_stop = kayitli.get("stop_roe", stop_roe)
 
@@ -381,7 +403,7 @@ def otomatik_arkaplan_tarayici():
                         f"🎯 *KÂR ALINDI (TP)*\n\n📌 *Coin:* `{symbol}`\n📊 *Yön:* `{yon}`\n💰 *Kâr:* `+{pnl:.2f} USDT` (`%{roe:.2f}`)", 
                         rsi=rsi_val, adx=adx_val, ema_fark=ema_fark_val, atr_yuzde=atr_val, basarili=True
                     )
-                elif roe <= -current_stop:  
+                elif current_stop > 0 and roe <= -current_stop:  
                     ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
                     hafizayi_kaydet()
                     pozisyonu_garantili_kapat(
@@ -532,7 +554,7 @@ def otomatik_arkaplan_tarayici():
                     # 1. Adım: Ana pozisyonu aç
                     exchange.create_order(symbol, 'market', emir_yonu, miktar)
 
-                    # 2. Adım: Gate.io uyumlu native SL ve TP emirleri (initial.price ve stopPrice düzeltildi)
+                    # 2. Adım: Gate.io uyumlu native SL ve TP emirleri
                     try:
                         time.sleep(0.6)
                         pozlar = exchange.fetch_positions()
@@ -557,7 +579,6 @@ def otomatik_arkaplan_tarayici():
                         stop_fiyat = float(exchange.price_to_precision(symbol, stop_fiyat))
                         hedef_fiyat = float(exchange.price_to_precision(symbol, hedef_fiyat))
                         
-                        # Gate.io API için fiyat parametreleri (price alanına güncel fiyat/0 vererek 'initial.price' hatası engellenir)
                         stop_params = {
                             'stopPrice': stop_fiyat,
                             'triggerPrice': stop_fiyat,
@@ -572,7 +593,6 @@ def otomatik_arkaplan_tarayici():
                             'is_stop': True
                         }
 
-                        # ccxt create_order içinde type='stop_market' için price argümanına stop_fiyat verilir
                         exchange.create_order(symbol, 'stop_market', kapatma_yonu, miktar, stop_fiyat, stop_params)
                         exchange.create_order(symbol, 'stop_market', kapatma_yonu, miktar, hedef_fiyat, hedef_params)
                         
