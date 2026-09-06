@@ -406,7 +406,7 @@ def otomatik_arkaplan_tarayici():
                         f"🎯 *KÂR ALINDI (TP)*\n\n📌 *Coin:* `{symbol}`\n📊 *Yön:* `{yon}`\n💰 *Kâr:* `+{pnl:.2f} USDT` (`%{roe:.2f}`)", 
                         rsi=rsi_val, adx=adx_val, ema_fark=ema_fark_val, atr_yuzde=atr_val, basarili=True
                     )
-                elif roe <= -current_stop:  # KESİN STOP KONTROLÜ (Zarar eşiği aşılır aşılmaz veya %30'a varsa dahi acilen kapatır)
+                elif roe <= -current_stop:  
                     ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
                     hafizayi_kaydet()
                     print(f"🛑 ZARAR KESİLDİ (SL): {symbol} | Yön: {yon} | Sonuç: {pnl:.2f} USDT (%{roe:.2f})", flush=True)
@@ -541,7 +541,6 @@ def otomatik_arkaplan_tarayici():
                     print(f"⚠️ Aynı yönde ({grid_yonu}) maksimum pozisyon sınırına ulaşıldı.", flush=True)
                     continue 
 
-                # Güncel Kural: Normal ve Altın Atış kâr hedefleri %20, stop %10. Altın atışta kasa oranı %25.
                 if is_altin_atis:
                     dinamik_kaldirac = 20
                     kasa_orani = 0.25
@@ -575,7 +574,47 @@ def otomatik_arkaplan_tarayici():
                     miktar = float(exchange.amount_to_precision(symbol, gercek_ham_miktar))
                     
                     emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
+                    # Piyasa emri ile pozisyon açılıyor
                     exchange.create_order(symbol, 'market', emir_yonu, miktar)
+
+                    # --- YENİ EKLENEN KISIM: BORSAYA NATIVE STOP-LOSS (STOP-MARKET) GÖNDERME ---
+                    try:
+                        time.sleep(0.5) # Pozisyonun borsa sistemine düşmesi için kısa bekleme
+                        pozlar = exchange.fetch_positions()
+                        giris_fiyati = guncel_fiyat
+                        for p in pozlar:
+                            if p['symbol'] == symbol and float(p.get('contracts', 0) or p.get('size', 0)) > 0:
+                                giris_fiyati = float(p.get('entryPrice', guncel_fiyat))
+                                break
+                        
+                        # %10 ROE stop fiyatı hesaplama (Kaldıraca göre oranlanır)
+                        stop_fiyat_orani = stop_roe / 100.0 / dinamik_kaldirac
+                        if grid_yonu == 'LONG':
+                            stop_fiyat = giris_fiyati * (1.0 - stop_fiyat_orani)
+                            stop_yonu = 'sell'
+                        else:
+                            stop_fiyat = giris_fiyati * (1.0 + stop_fiyat_orani)
+                            stop_yonu = 'buy'
+                            
+                        stop_fiyat = float(exchange.price_to_precision(symbol, stop_fiyat))
+                        
+                        # Gate.io veya borsanın desteklediği tetiklemeli stop emri
+                        exchange.create_order(
+                            symbol=symbol,
+                            type='stop_market',
+                            side=stop_yonu,
+                            amount=miktar,
+                            price=None,
+                            params={
+                                'stopPrice': stop_fiyat,
+                                'triggerPrice': stop_fiyat,
+                                'reduceOnly': True
+                            }
+                        )
+                        print(f"🛡️ [{symbol}] Borsa tabanlı Native Stop-Loss emri işlendi! Fiyat: {stop_fiyat}", flush=True)
+                    except Exception as sl_err:
+                        print(f"⚠️ Native Stop-Loss borsa emri gönderilemedi (Python takibi koruyacak): {sl_err}", flush=True)
+                    # --------------------------------------------------------------------------
 
                     AKTIF_GRID_SISTEMLERI[symbol] = {
                         "giris_rsi": rsi,
@@ -594,7 +633,7 @@ def otomatik_arkaplan_tarayici():
                         f"📌 *Coin:* `{symbol}`\n"
                         f"📊 *Yön:* `{grid_yonu}` | ⭐ *Puan:* `{sinyal_puani}/100`\n"
                         f"⚙️ *Kaldıraç:* `{dinamik_kaldirac}x` | 💰 *Kasa Oranı:* `%{kasa_orani*100:.0f}`\n"
-                        f"🎯 *Hedef TP:* `+{hedef_roe}%` | *Stop SL:* `-{stop_roe}%`"
+                        f"🎯 *Hedef TP:* `+{hedef_roe}%` | *Stop SL:* `-{stop_roe}%` (Borsa Korumalı 🛡️)"
                     )
                     break 
                 except Exception as e:
