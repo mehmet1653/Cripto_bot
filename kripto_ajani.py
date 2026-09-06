@@ -12,7 +12,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
 
-# Python loglarının tamponda beklemden anında ekrana (Railway loglarına) düşmesi için:
+# Python loglarının tamponda beklemeden anında ekrana (Railway loglarına) düşmesi için:
 import sys
 sys.stdout.reconfigure(line_buffering=True)
 
@@ -266,7 +266,8 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 yon = str(p.get('side', '')).upper()
                 pnl_val = float(p.get('unrealizedPnl', 0))
                 roe_val = float(p.get('percentage', 0))
-                pozisyon_detaylari += f"• `{sym}` | {yon} | PnL: `{pnl_val:+.2f} USDT` (`%{roe_val:.2f}`)\n"
+                kaldirac_degeri = int(p.get('leverage', 10))
+                pozisyon_detaylari += f"• `{sym}` | {yon} ({kaldirac_degeri}x Kaldıraç) | PnL: `{pnl_val:+.2f} USDT` (`%{roe_val:.2f}`)\n"
         else:
             pozisyon_detaylari = "\n🔍 *Açık Pozisyon:* `Yok`\n"
 
@@ -347,13 +348,21 @@ def otomatik_arkaplan_tarayici():
 
                     tp_gerceklesti = False
                     try:
-                        # Borsa geçmişinden son gerçekleşen emri çekerek TP mi SL mi olduğunu kesin tespit ediyoruz
+                        # Borsa geçmişinden kapanan işlemin PnL (Kâr/Zarar) değerini kesin olarak okuyoruz
                         islem_gecmisi = exchange.fetch_closed_orders(sym, limit=5)
                         if islem_gecmisi:
                             for emr in reversed(islem_gecmisi):
                                 if emr.get('status') == 'closed':
+                                    info = emr.get('info', {})
+                                    pnl_degeri = float(info.get('pnl', info.get('closed_pnl', 0.0) or 0.0))
+                                    if pnl_degeri != 0.0:
+                                        tp_gerceklesti = pnl_degeri > 0
+                                        break
+                            
+                            # Eğer PnL doğrudan okunamazsa emir tiplerine başvur
+                            if not tp_gerceklesti:
+                                for emr in reversed(islem_gecmisi):
                                     emur_tipi = emr.get('type')
-                                    # Limit emir kâr al (TP) demektir, stop_market ise zarar kes (SL) demektir
                                     if emur_tipi == 'limit':
                                         tp_gerceklesti = True
                                         break
@@ -362,11 +371,7 @@ def otomatik_arkaplan_tarayici():
                                         break
                     except Exception as ex:
                         print(f"⚠️ Geçmiş emir kontrol hatası ({sym}): {ex}", flush=True)
-                        try:
-                            kalan_emirler = exchange.fetch_open_orders(sym)
-                            tp_gerceklesti = len(kalan_emirler) == 0
-                        except Exception:
-                            tp_gerceklesti = False
+                        tp_gerceklesti = False
 
                     if tp_gerceklesti:
                         ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
@@ -453,12 +458,23 @@ def otomatik_arkaplan_tarayici():
 
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
+                    
+                    # 15m ve 1h Verilerini Çekme (Çoklu Zaman Dilimi & Trend İçin)
                     ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    
+                    ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=25)
+                    df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     
                     if not hacim_ve_likidite_kontrolu(df_15m):
                         continue
 
+                    # 1 Saatlik Trend Filtresi
+                    ema7_1h = ta.trend.ema_indicator(df_1h['close'], window=7).iloc[-1]
+                    ema21_1h = ta.trend.ema_indicator(df_1h['close'], window=21).iloc[-1]
+                    boga_trend_1h = ema7_1h > ema21_1h
+
+                    # 15m İndikatörler
                     ema7 = ta.trend.ema_indicator(df_15m['close'], window=7).iloc[-1]
                     ema21 = ta.trend.ema_indicator(df_15m['close'], window=21).iloc[-1]
                     rsi = ta.momentum.rsi(df_15m['close'], window=14).iloc[-1]
@@ -469,6 +485,11 @@ def otomatik_arkaplan_tarayici():
                     minus_di = adx_indicator.adx_neg().iloc[-1]
                     
                     atr_yuzdesi = atr_ve_volatilite_hesapla(df_15m)
+                    
+                    ortalama_hacim = df_15m['volume'].rolling(window=20).mean().iloc[-1]
+                    son_hacim = df_15m['volume'].iloc[-1]
+                    hacim_carpani = son_hacim / ortalama_hacim if ortalama_hacim > 0 else 1.0
+
                     fiyat_10_mum_once = df_15m['close'].iloc[-10]
                     degisim_yuzdesi = ((guncel_fiyat - fiyat_10_mum_once) / fiyat_10_mum_once) * 100
                     derinlik_durumu = emir_defteri_derinlik_analizi(symbol)
@@ -478,11 +499,12 @@ def otomatik_arkaplan_tarayici():
                 sinyal_puani = 50
                 grid_yonu = "LONG"
 
-                guclu_trend_var = adx_val >= 25
+                # Başarılı speklerimize uygun sıkılaştırılmış mantık çerçevesi:
+                guclu_trend_var = adx_val >= 30  
                 trend_yonu_boga = plus_di > minus_di
 
-                tepe_kosulu = (degisim_yuzdesi >= 2.5 and rsi > 65 and derinlik_durumu == "SATICI_BASKIN")
-                dip_kosulu = (degisim_yuzdesi <= -2.5 and rsi < 35 and derinlik_durumu == "ALICI_BASKIN")
+                tepe_kosulu = (degisim_yuzdesi >= 2.0 and rsi > 60 and derinlik_durumu == "SATICI_BASKIN" and not boga_trend_1h)
+                dip_kosulu = (degisim_yuzdesi <= -2.0 and rsi < 40 and derinlik_durumu == "ALICI_BASKIN" and boga_trend_1h)
 
                 if tepe_kosulu:
                     grid_yonu = "SHORT"
@@ -490,31 +512,36 @@ def otomatik_arkaplan_tarayici():
                 elif dip_kosulu:
                     grid_yonu = "LONG"
                     sinyal_puani = 90
-                elif guclu_trend_var and adx_val >= 30:
-                    grid_yonu = "LONG" if trend_yonu_boga else "SHORT"
-                    sinyal_puani = 80
+                elif guclu_trend_var and adx_val >= 32:
+                    grid_yonu = "LONG" if (trend_yonu_boga and boga_trend_1h) else "SHORT"
+                    if grid_yonu == "LONG" and boga_trend_1h:
+                        sinyal_puani = 85
+                    elif grid_yonu == "SHORT" and not boga_trend_1h:
+                        sinyal_puani = 85
+                    else:
+                        sinyal_puani = 60 
                 else:
                     grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
-                    if adx_val >= 20:
-                        sinyal_puani += 15
-                    if grid_yonu == "LONG" and rsi < 48:
-                        sinyal_puani += 15
-                    elif grid_yonu == "SHORT" and rsi > 52:
-                        sinyal_puani += 15
+                    if grid_yonu == "LONG" and boga_trend_1h and rsi < 45:
+                        sinyal_puani += 20
+                    elif grid_yonu == "SHORT" and not boga_trend_1h and rsi > 55:
+                        sinyal_puani += 20
+
+                if hacim_carpani >= 1.5 and adx_val >= 28:
+                    sinyal_puani += 10
 
                 if sinyal_puani >= 95 and adx_val >= 35 and derinlik_durumu in ["ALICI_BASKIN", "SATICI_BASKIN"]:
                     sinyal_puani = 100
 
-                is_altin_atis = (sinyal_puani == 100)
+                is_altin_atis = (sinyal_puani >= 95)
                 ema_fark_val = float(ema7 - ema21)
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 
                 ai_onay = yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod, atr_yuzdesi)
-                ai_durum = "✅ ONAYLANDI" if ai_onay else "❌ ELENDİ"
                 
-                print(f"🔍 [{symbol}] Sinyal Puanı: {sinyal_puani} | Yön: {grid_yonu} | RSI: {rsi:.1f} | ADX: {adx_val:.1f} | AI Süzgeci: {ai_durum}", flush=True)
+                print(f"🔍 [{symbol}] Sinyal Puanı: {sinyal_puani} | Yön: {grid_yonu} | 1h Trend Uyum: {boga_trend_1h} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
 
-                if not ai_onay or sinyal_puani < 75:
+                if not ai_onay or sinyal_puani < 80:
                     continue
 
                 eski_aday = ADAY_SINYALLER.get(symbol)
@@ -663,7 +690,7 @@ def otomatik_arkaplan_tarayici():
                     telegram_mesaj_gonder(
                         f"{tur_mesaji} VE BORSA EMRİ GİRİLDİ\n\n"
                         f"📌 *Coin:* `{symbol}` | 📊 *Yön:* `{grid_yonu}`\n"
-                        f"⚙️ *Kaldıraç:* `{dinamik_kaldirac}x`\n"
+                        f"⚙️ *Kaldıraç:* `{dinamik_kaldirac}x Kaldıraçlı`\n"
                         f"🎯 *Hedef TP:* `%+{hedef_roe}` | *Stop SL:* `-%{stop_roe}`"
                     )
                     
