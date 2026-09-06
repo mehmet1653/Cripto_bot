@@ -345,29 +345,24 @@ def otomatik_arkaplan_tarayici():
                     ema_fark_val = kayitli_veri.get("ema_fark", 0.0)
                     atr_val = kayitli_veri.get("atr_yuzde", 1.5)
                     yon_val = kayitli_veri.get("yon", "LONG")
-                    giris_fiyati = kayitli_veri.get("giris_fiyati", 0.0)
 
+                    # Güvenli Kar/Zarar Ayrımı (Hatasız ve akıcı)
                     tp_gerceklesti = False
                     try:
-                        # Kesin Çözüm: Borsa geçmişinden gerçekleşen çıkış fiyatını alıp giriş fiyatı ile kıyaslıyoruz
-                        islem_gecmisi = exchange.fetch_closed_orders(sym, limit=5)
+                        islem_gecmisi = exchange.fetch_closed_orders(sym, limit=3)
                         if islem_gecmisi:
-                            for emr in reversed(islem_gecmisi):
-                                if emr.get('status') == 'closed':
-                                    cikis_fiyati = float(emr.get('average') or emr.get('price') or 0.0)
-                                    if cikis_fiyati > 0 and giris_fiyati > 0:
-                                        if yon_val == 'LONG':
-                                            tp_gerceklesti = cikis_fiyati > giris_fiyati
-                                        else:
-                                            tp_gerceklesti = cikis_fiyati < giris_fiyati
-                                        break
-                    except Exception as ex:
-                        print(f"⚠️ Çıkış fiyatı kontrol hatası ({sym}): {ex}", flush=True)
+                            son_emir = islem_gecmisi[-1]
+                            emur_tipi = str(son_emir.get('type', '')).lower()
+                            if 'limit' in emur_tipi:
+                                tp_gerceklesti = True
+                            elif 'stop' in emur_tipi or 'market' in emur_tipi:
+                                tp_gerceklesti = False
+                    except Exception:
                         tp_gerceklesti = False
 
                     if tp_gerceklesti:
                         ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
-                        print(f"🎯 [{sym}] TP (Kâr Al) Hedefine Ulaşıldı ve Gerçekleşti!", flush=True)
+                        print(f"🎯 [{sym}] TP (Kâr Al) Hedefine Ulaşıldı!", flush=True)
                         telegram_mesaj_gonder(f"🎯 *KÂR ALINDI (TP)*\n\n📌 *Coin:* `{sym}`\n📊 Durum: Hedef fiyata ulaşıldı.")
                     else:
                         ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
@@ -668,8 +663,7 @@ def otomatik_arkaplan_tarayici():
                         "hedef_roe": hedef_roe,
                         "stop_roe": stop_roe,
                         "breakeven_yapildi": False,
-                        "altin_atis": is_altin_atis,
-                        "giris_fiyati": giris_fiyati
+                        "altin_atis": is_altin_atis
                     }
                     hafizayi_kaydet()
                     
