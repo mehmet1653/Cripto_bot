@@ -78,12 +78,13 @@ def hafizayi_yukle():
                 "cooldownlar": veri.get("cooldownlar", {})
             }
     except Exception as e:
-        print(f"⚠️ Hafıza yükleme/tablo oluşturma tetikleniyor: {e}", flush=True)
+        print(f"⚠️ Hafıza yükleme uyarısı (Tablo yapısı güncelleniyor olabilir): {e}", flush=True)
         
     try:
         supabase.table("bot_hafiza").upsert({"id": 1, **varsayilan}).execute()
+        print("💾 Varsayılan hafıza Supabase'e kaydedildi.", flush=True)
     except Exception as ex:
-        print(f"⚠️ Varsayılan kayıt oluşturulamadı (Tablo sütunları eksik olabilir): {ex}", flush=True)
+        print(f"⚠️ Varsayılan kayıt oluşturulamadı: {ex}", flush=True)
         
     return varsayilan
 
@@ -320,7 +321,6 @@ def otomatik_arkaplan_tarayici():
                     kayitli_veri = AKTIF_GRID_SISTEMLERI.pop(sym)
                     
                     basarili_islem = True
-                    islem_turu = "Kâr Al (TP)"
                     try:
                         closed_orders = exchange.fetch_closed_orders(sym, limit=5)
                         for co in closed_orders:
@@ -328,7 +328,6 @@ def otomatik_arkaplan_tarayici():
                                 c_type = str(co.get('type', '')).lower()
                                 if 'stop' in c_type:
                                     basarili_islem = False
-                                    islem_turu = "Zarar Kes (SL)"
                                     break
                     except Exception:
                         pass
@@ -466,7 +465,12 @@ def otomatik_arkaplan_tarayici():
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 coin_id = COIN_ID_MAP.get(symbol, 0)
                 
+                # Konsola anlık tarama ve indikatör bilgilerini yazdıralım
+                ai_durum_str = "Eğitildi" if ai_model_egitildi else f"Veri Bekliyor ({len(ANALitik_HAFIZA.get('egitim_verileri', []))}/20)"
+                print(f"🔍 [TARAMA] {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f} | AI: {ai_durum_str}", flush=True)
+
                 if not yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod, atr_yuzdesi, coin_id, symbol):
+                    print(f"🛑 [AI ONAYLAMADI] {symbol} yapay zeka filtresine takıldı.", flush=True)
                     continue
 
                 taranan_sinyaller.append({
