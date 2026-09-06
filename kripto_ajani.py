@@ -12,7 +12,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
 
-# Python loglarının tamponda beklemeden anında ekrana (Railway loglarına) düşmesi için:
+# Python loglarının tamponda beklemeden anında ekrana düşmesi için:
 import sys
 sys.stdout.reconfigure(line_buffering=True)
 
@@ -345,32 +345,24 @@ def otomatik_arkaplan_tarayici():
                     ema_fark_val = kayitli_veri.get("ema_fark", 0.0)
                     atr_val = kayitli_veri.get("atr_yuzde", 1.5)
                     yon_val = kayitli_veri.get("yon", "LONG")
+                    giris_fiyati = kayitli_veri.get("giris_fiyati", 0.0)
 
                     tp_gerceklesti = False
                     try:
-                        # Borsa geçmişinden kapanan işlemin PnL (Kâr/Zarar) değerini kesin olarak okuyoruz
+                        # Kesin Çözüm: Borsa geçmişinden gerçekleşen çıkış fiyatını alıp giriş fiyatı ile kıyaslıyoruz
                         islem_gecmisi = exchange.fetch_closed_orders(sym, limit=5)
                         if islem_gecmisi:
                             for emr in reversed(islem_gecmisi):
                                 if emr.get('status') == 'closed':
-                                    info = emr.get('info', {})
-                                    pnl_degeri = float(info.get('pnl', info.get('closed_pnl', 0.0) or 0.0))
-                                    if pnl_degeri != 0.0:
-                                        tp_gerceklesti = pnl_degeri > 0
-                                        break
-                            
-                            # Eğer PnL doğrudan okunamazsa emir tiplerine başvur
-                            if not tp_gerceklesti:
-                                for emr in reversed(islem_gecmisi):
-                                    emur_tipi = emr.get('type')
-                                    if emur_tipi == 'limit':
-                                        tp_gerceklesti = True
-                                        break
-                                    elif 'stop' in str(emur_tipi):
-                                        tp_gerceklesti = False
+                                    cikis_fiyati = float(emr.get('average') or emr.get('price') or 0.0)
+                                    if cikis_fiyati > 0 and giris_fiyati > 0:
+                                        if yon_val == 'LONG':
+                                            tp_gerceklesti = cikis_fiyati > giris_fiyati
+                                        else:
+                                            tp_gerceklesti = cikis_fiyati < giris_fiyati
                                         break
                     except Exception as ex:
-                        print(f"⚠️ Geçmiş emir kontrol hatası ({sym}): {ex}", flush=True)
+                        print(f"⚠️ Çıkış fiyatı kontrol hatası ({sym}): {ex}", flush=True)
                         tp_gerceklesti = False
 
                     if tp_gerceklesti:
@@ -459,7 +451,6 @@ def otomatik_arkaplan_tarayici():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
                     
-                    # 15m ve 1h Verilerini Çekme (Çoklu Zaman Dilimi & Trend İçin)
                     ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     
@@ -469,12 +460,10 @@ def otomatik_arkaplan_tarayici():
                     if not hacim_ve_likidite_kontrolu(df_15m):
                         continue
 
-                    # 1 Saatlik Trend Filtresi
                     ema7_1h = ta.trend.ema_indicator(df_1h['close'], window=7).iloc[-1]
                     ema21_1h = ta.trend.ema_indicator(df_1h['close'], window=21).iloc[-1]
                     boga_trend_1h = ema7_1h > ema21_1h
 
-                    # 15m İndikatörler
                     ema7 = ta.trend.ema_indicator(df_15m['close'], window=7).iloc[-1]
                     ema21 = ta.trend.ema_indicator(df_15m['close'], window=21).iloc[-1]
                     rsi = ta.momentum.rsi(df_15m['close'], window=14).iloc[-1]
@@ -499,7 +488,6 @@ def otomatik_arkaplan_tarayici():
                 sinyal_puani = 50
                 grid_yonu = "LONG"
 
-                # Başarılı speklerimize uygun sıkılaştırılmış mantık çerçevesi:
                 guclu_trend_var = adx_val >= 30  
                 trend_yonu_boga = plus_di > minus_di
 
@@ -538,8 +526,6 @@ def otomatik_arkaplan_tarayici():
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 
                 ai_onay = yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod, atr_yuzdesi)
-                
-                print(f"🔍 [{symbol}] Sinyal Puanı: {sinyal_puani} | Yön: {grid_yonu} | 1h Trend Uyum: {boga_trend_1h} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
 
                 if not ai_onay or sinyal_puani < 80:
                     continue
@@ -682,7 +668,8 @@ def otomatik_arkaplan_tarayici():
                         "hedef_roe": hedef_roe,
                         "stop_roe": stop_roe,
                         "breakeven_yapildi": False,
-                        "altin_atis": is_altin_atis
+                        "altin_atis": is_altin_atis,
+                        "giris_fiyati": giris_fiyati
                     }
                     hafizayi_kaydet()
                     
