@@ -247,7 +247,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📌 Açık Pozisyon Sayısı: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n"
             f"{pozisyon_detaylari}\n"
             f"🎯 *İstatistikler:*\n"
-            f"✅ Başarılı (TP): `{basarili_sayisi}` | ❌ Başarısız (SL): `{basarisiz_sayisi}`\n"
+            f"✅ Kâr (`TP`): `{basarili_sayisi}` | ❌ Zarar (`Stop`): `{basarisiz_sayisi}`\n"
             f"📈 Başarı Oranı: `%{basari_orani:.1f}`\n"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
@@ -322,22 +322,25 @@ def otomatik_arkaplan_tarayici():
                     
                     basarili_islem = True
                     try:
-                        closed_orders = exchange.fetch_closed_orders(sym, limit=5)
+                        closed_orders = exchange.fetch_closed_orders(sym, limit=10)
                         for co in closed_orders:
                             if co.get('status') == 'closed':
                                 c_type = str(co.get('type', '')).lower()
-                                if 'stop' in c_type:
+                                if 'limit' in c_type:
+                                    basarili_islem = True
+                                    break
+                                elif 'stop' in c_type:
                                     basarili_islem = False
                                     break
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"⚠️ Geçmiş emirler okunurken hata ({sym}): {e}", flush=True)
 
                     if basarili_islem:
                         ANALitik_HAFIZA["basarili_islem_sayisi"] = ANALitik_HAFIZA.get("basarili_islem_sayisi", 0) + 1
-                        telegram_mesaj_gonder(f"🎉 *HEDEF BAŞARIYLA GERÇEKLEŞTİ (TP)*\n📌 Coindaki pozisyon kârla kapandı: `{sym}` 🟢")
+                        telegram_mesaj_gonder(f"🎉 *Kâr Alındı (Kar)*\n📌 Coindaki pozisyon kârla kapandı: `{sym}` 🟢")
                     else:
                         ANALitik_HAFIZA["basarisiz_islem_sayisi"] = ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0) + 1
-                        telegram_mesaj_gonder(f"❌ *STOP OLDU (SL)*\n📌 Coindaki pozisyon zararla kapandı: `{sym}` 🔴")
+                        telegram_mesaj_gonder(f"❌ *Stop Oldu (Stop)*\n📌 Coindaki pozisyon zararla kapandı: `{sym}` 🔴")
 
                     COIN_COOLDOWNLAR[sym] = time.time() + COOLDOWN_SURESI_SANIYE
                     
@@ -506,7 +509,6 @@ def otomatik_arkaplan_tarayici():
                 if sinyal_puani < 65 and not is_altin_atis:
                     continue
 
-                # Altın vuruş ise maksimum sınır 1 adet esner
                 izin_verilen_maks_poz = MAKSIMUM_TOPLAM_POZISYON + 1 if is_altin_atis else MAKSIMUM_TOPLAM_POZISYON
 
                 if len(aktif_borsa_map) >= izin_verilen_maks_poz:
