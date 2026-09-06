@@ -78,7 +78,7 @@ def hafizayi_yukle():
                 "cooldownlar": veri.get("cooldownlar", {})
             }
     except Exception as e:
-        print(f"⚠️ Hafıza yükleme uyarısı (Tablo yapısı güncelleniyor olabilir): {e}", flush=True)
+        print(f"⚠️ Hafıza yükleme uyarısı: {e}", flush=True)
         
     try:
         supabase.table("bot_hafiza").upsert({"id": 1, **varsayilan}).execute()
@@ -292,7 +292,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 Gelişmiş Hibrit Tarayıcı ve Borsa Geçmişi Takipli SL/TP Koruması Devrede.", flush=True)
+    print("🚀 Gelişmiş Hibrit Tarayıcı ve Kesin PnL Takipli SL/TP Koruması Devrede.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -315,52 +315,40 @@ def otomatik_arkaplan_tarayici():
             except Exception:
                 aktif_borsa_map = {}
 
-            # --- KAPATILAN POZİSYONLARI BORSA GEÇMİŞİNDEN GÜVENLİ YAKALAMA ---
+            # --- KAPATILAN POZİSYONLARI GERÇEK PNL KONTROLÜ İLE YAKALAMA ---
             for sym in list(AKTIF_GRID_SISTEMLERI.keys()):
                 if sym not in aktif_borsa_map:
                     kayitli_veri = AKTIF_GRID_SISTEMLERI.pop(sym)
                     
-                    basarili_islem = True
+                    basarili_islem = False
                     try:
-                        # Önce açıkta kalmış diğer bekleyen emirleri (örn: stop veya limit) iptal edelim
+                        # Önce açıkta kalmış diğer bekleyen emirleri iptal edelim
                         try:
                             for ord_item in exchange.fetch_open_orders(sym):
                                 exchange.cancel_order(ord_item['id'], sym)
                         except Exception:
                             pass
 
-                        # Gerçekleşen işlemlere (trades) veya kapalı emirlere bakarak kâr/zarar tespiti
-                        closed_orders = exchange.fetch_closed_orders(sym, limit=5)
-                        gerceklesen_emir_bulundu = False
-                        
-                        for co in closed_orders:
-                            if co.get('status') == 'closed':
-                                c_type = str(co.get('type', '')).lower()
-                                # Eğer tetiklenen emir stop_market ise kesin zarardır
-                                if 'stop' in c_type:
-                                    basarili_islem = False
-                                    gerceklesen_emir_bulundu = True
-                                    break
-                                elif 'limit' in c_type:
-                                    basarili_islem = True
-                                    gerceklesen_emir_bulundu = True
-                                    break
-                        
-                        # Eğer emir geçmişinden net çözülemediyse son trade kâr/zarar fiyat kıyaslaması yapalım
-                        if not gerceklesen_emir_bulundu:
-                            my_trades = exchange.fetch_my_trades(sym, limit=2)
-                            if my_trades:
-                                son_trade = my_trades[-1]
+                        # Gerçekleşen son trade'in realized PnL değerine veya fiyatına bakalım
+                        my_trades = exchange.fetch_my_trades(sym, limit=3)
+                        if my_trades:
+                            son_trade = my_trades[-1]
+                            info = son_trade.get('info', {})
+                            realized_pnl = float(info.get('pnl', 0) or info.get('profit', 0) or 0)
+                            
+                            if realized_pnl != 0:
+                                basarili_islem = realized_pnl > 0
+                            else:
                                 trade_fiyat = float(son_trade.get('price', 0))
                                 giris_fiyat = float(kayitli_veri.get('giris_fiyati', trade_fiyat))
                                 yon = kayitli_veri.get("yon", "LONG")
                                 
                                 if yon == "LONG":
-                                    basarili_islem = trade_fiyat >= giris_fiyat
+                                    basarili_islem = trade_fiyat > giris_fiyat
                                 else:
-                                    basarili_islem = trade_fiyat <= giris_fiyat
+                                    basarili_islem = trade_fiyat < giris_fiyat
                     except Exception as e:
-                        print(f"⚠️ Geçmiş işlemler okunurken hata ({sym}): {e}", flush=True)
+                        print(f"⚠️ Geçmiş PnL okunurken hata ({sym}): {e}", flush=True)
 
                     if basarili_islem:
                         ANALitik_HAFIZA["basarili_islem_sayisi"] = ANALitik_HAFIZA.get("basarili_islem_sayisi", 0) + 1
@@ -497,11 +485,7 @@ def otomatik_arkaplan_tarayici():
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 coin_id = COIN_ID_MAP.get(symbol, 0)
                 
-                ai_durum_str = "Eğitildi" if ai_model_egitildi else f"Veri Bekliyor ({len(ANALitik_HAFIZA.get('egitim_verileri', []))}/20)"
-                print(f"🔍 [TARAMA] {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f} | AI: {ai_durum_str}", flush=True)
-
                 if not yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod, atr_yuzdesi, coin_id, symbol):
-                    print(f"🛑 [AI ONAYLAMADI] {symbol} yapay zeka filtresine takıldı.", flush=True)
                     continue
 
                 taranan_sinyaller.append({
