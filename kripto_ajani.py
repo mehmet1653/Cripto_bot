@@ -206,41 +206,6 @@ def set_leverage_safely(symbol, leverage):
         print(f"⚠️ Kaldıraç ayarlama hatası ({symbol} - {leverage}x): {e}", flush=True)
         return False
 
-def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=50, adx=25, ema_fark=0.0, atr_yuzde=1.5, basarili=True):
-    kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
-    try:
-        for ord_item in exchange.fetch_open_orders(symbol):
-            exchange.cancel_order(ord_item['id'], symbol)
-    except Exception:
-        pass
-
-    try:
-        market_info = exchange.market(symbol)
-        min_amount = float(market_info['limits']['amount']['min'] or 1.0)
-        if miktar < min_amount:
-            miktar = min_amount
-        miktar = float(exchange.amount_to_precision(symbol, miktar))
-        exchange.create_order(symbol, 'market', kapatma_yonu, miktar, None, {'reduce_only': True})
-    except Exception as e:
-        print(f"⚠️ Kapatma API hatası: {e}", flush=True)
-
-    COIN_COOLDOWNLAR[symbol] = time.time() + COOLDOWN_SURESI_SANIYE
-    yon_kod = 1 if yon == 'LONG' else -1
-    sonuc_kod = 1 if basarili else 0
-    coin_id = COIN_ID_MAP.get(symbol, 0)
-    
-    ANALitik_HAFIZA["egitim_verileri"].append([rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id, sonuc_kod])
-    if len(ANALitik_HAFIZA["egitim_verileri"]) > 150:
-        ANALitik_HAFIZA["egitim_verileri"].pop(0)
-    yapay_zekayi_egit_ve_guncelle()
-
-    if symbol in AKTIF_GRID_SISTEMLERI:
-        del AKTIF_GRID_SISTEMLERI[symbol]
-        hafizayi_kaydet()
-
-    if sebep_mesaji:
-        telegram_mesaj_gonder(sebep_mesaji)
-
 # ==================== TELEGRAM KOMUTLARI ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -303,7 +268,17 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for pos in exchange.fetch_positions():
             kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
             if kontrat > 0:
-                pozisyonu_garantili_kapat(pos['symbol'], str(pos.get('side', '')).upper(), kontrat, f"🛑 *MANUEL KAPATMA* - `{pos['symbol']}`", basarili=False)
+                symbol = pos['symbol']
+                yon = str(pos.get('side', '')).upper()
+                kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
+                try:
+                    for ord_item in exchange.fetch_open_orders(symbol):
+                        exchange.cancel_order(ord_item['id'], symbol)
+                except Exception:
+                    pass
+                exchange.create_order(symbol, 'market', kapatma_yonu, kontrat, None, {'reduce_only': True})
+                telegram_mesaj_gonder(f"🛑 *MANUEL KAPATMA* - `{symbol}` pozisyonu kapatıldı.")
+        
         AKTIF_GRID_SISTEMLERI.clear()
         hafizayi_kaydet()
         await update.message.reply_text("✅ Tüm pozisyonlar ve hafıza temizlendi.", parse_mode='Markdown')
@@ -315,7 +290,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 Gelişmiş Hibrit Tarayıcı ve Borsa Bazlı SL/TP Koruması Devrede.", flush=True)
+    print("🚀 Gelişmiş Hibrit Tarayıcı ve Borsa Geçmişi Takipli SL/TP Koruması Devrede.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -338,9 +313,49 @@ def otomatik_arkaplan_tarayici():
             except Exception:
                 aktif_borsa_map = {}
 
+            # --- KAPATILAN POZİSYONLARI BORSA GEÇMİŞİNDEN GÜVENLİ YAKALAMA ---
             for sym in list(AKTIF_GRID_SISTEMLERI.keys()):
                 if sym not in aktif_borsa_map:
-                    del AKTIF_GRID_SISTEMLERI[sym]
+                    # Pozisyon artık borsa açık pozisyonlarında yok, geçmiş emirlerden sonucunu teyit edelim
+                    kayitli_veri = AKTIF_GRID_SISTEMLERI.pop(sym)
+                    
+                    basarili_islem = True
+                    islem_turu = "Kâr Al (TP)"
+                    try:
+                        closed_orders = exchange.fetch_closed_orders(sym, limit=5)
+                        for co in closed_orders:
+                            if co.get('status') == 'closed':
+                                c_type = str(co.get('type', '')).lower()
+                                if 'stop' in c_type:
+                                    basarili_islem = False
+                                    islem_turu = "Zarar Kes (SL)"
+                                    break
+                    except Exception:
+                        pass
+
+                    if basarili_islem:
+                        ANALitik_HAFIZA["basarili_islem_sayisi"] = ANALitik_HAFIZA.get("basarili_islem_sayisi", 0) + 1
+                        telegram_mesaj_gonder(f"🎉 *HEDEF BAŞARIYLA GERÇEKLEŞTİ (TP)*\n📌 Coindaki pozisyon kârla kapandı: `{sym}` 🟢")
+                    else:
+                        ANALitik_HAFIZA["basarisiz_islem_sayisi"] = ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0) + 1
+                        telegram_mesaj_gonder(f"❌ *STOP OLDU (SL)*\n📌 Coindaki pozisyon zararla kapandı: `{sym}` 🔴")
+
+                    COIN_COOLDOWNLAR[sym] = time.time() + COOLDOWN_SURESI_SANIYE
+                    
+                    # AI Eğitim verisine ekle
+                    rsi_v = kayitli_veri.get("giris_rsi", 50)
+                    adx_v = kayitli_veri.get("giris_adx", 25)
+                    ema_f = kayitli_veri.get("ema_fark", 0.0)
+                    atr_y = kayitli_veri.get("atr_yuzde", 1.5)
+                    yon_k = 1 if kayitli_veri.get("yon", "LONG") == "LONG" else -1
+                    c_id = COIN_ID_MAP.get(sym, 0)
+                    sonuc_k = 1 if basarili_islem else 0
+
+                    ANALitik_HAFIZA["egitim_verileri"].append([rsi_v, adx_v, ema_f, yon_k, atr_y, c_id, sonuc_k])
+                    if len(ANALitik_HAFIZA["egitim_verileri"]) > 150:
+                        ANALitik_HAFIZA["egitim_verileri"].pop(0)
+                    
+                    yapay_zekayi_egit_ve_guncelle()
                     hafizayi_kaydet()
 
             # --- AÇIK POZİSYONLARIN BORSADAKİ TP/SL VEYA BREAKEVEN DURUMLARI ---
@@ -569,6 +584,7 @@ def otomatik_arkaplan_tarayici():
                     exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, hedef_fiyat, hedef_params)
 
                     AKTIF_GRID_SISTEMLERI[symbol] = {
+                        "yon": grid_yonu,
                         "giris_rsi": rsi,
                         "giris_adx": adx_val,
                         "ema_fark": ema_fark_val,
