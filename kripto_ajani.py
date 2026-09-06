@@ -15,7 +15,7 @@ from supabase import create_client, Client
 import sys
 import io
 
-# Logların tamponda beklemeden anında ekrana ve konsola akması için zorunlu flushing
+# Logların tamponda beklemeden anında ekrana akması için zorunlu flushing
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, line_buffering=True)
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, line_buffering=True)
 
@@ -200,6 +200,9 @@ def telegram_mesaj_gonder(mesaj):
 @app.route('/')
 def home():
     return f"Efsanevi Hibrit Bot Aktif | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
+
+def flask_web_server():
+    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
 
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -399,7 +402,7 @@ def otomatik_arkaplan_tarayici():
                     contract_size = float(market_info.get('contractSize', 1.0))
                     min_amount = float(market_info['limits']['amount']['min'] or 1.0)
                     
-                    # Bakiye ve kaldıraç oranına göre hassas miktar hesaplama (1 SOL sabitlemesi kaldırıldı)
+                    # Bakiye ve kaldıraç oranına göre hassas miktar hesaplama
                     hedef_marjin = toplam_bakiye * kasa_orani
                     hedef_pozisyon_usdt = hedef_marjin * dinamik_kaldirac
                     ham_miktar = (hedef_pozisyon_usdt / guncel_fiyat) / contract_size
