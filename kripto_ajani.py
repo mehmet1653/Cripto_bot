@@ -12,6 +12,10 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
 
+# Python loglarının tamponda beklemden anında ekrana (Railway loglarına) düşmesi için:
+import sys
+sys.stdout.reconfigure(line_buffering=True)
+
 app = Flask(__name__)
 
 # ==================== AYARLAR VE ANAHTARLAR ====================
@@ -368,12 +372,10 @@ def otomatik_arkaplan_tarayici():
                     kayitli["breakeven_yapildi"] = True
                     kayitli["stop_roe"] = 0.0  
                     
-                    # Borsa tarafındaki eski stop emrini iptal edip, stopu giriş fiyatına (merkez) çekiyoruz
                     try:
                         open_orders = exchange.fetch_open_orders(symbol)
                         for ord_item in open_orders:
                             if ord_item.get('info', {}).get('is_stop') or ord_item.get('type') == 'stop_market':
-                                # Yalnızca stop emirlerini iptal ediyoruz (hedefe dokunulmuyor)
                                 trigger_p = float(ord_item.get('triggerPrice') or ord_item.get('stopPrice') or 0)
                                 if (yon == 'LONG' and trigger_p < merkez) or (yon == 'SHORT' and trigger_p > merkez):
                                     exchange.cancel_order(ord_item['id'], symbol)
@@ -626,12 +628,17 @@ def otomatik_arkaplan_tarayici():
         time.sleep(5)
 
 def flask_web_server():
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+    # Flask loglarının terminali kitlememesi ve buffer yapmaması için
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)), debug=False, use_reloader=False)
 
 if __name__ == '__main__':
+    # Arka plan tarayıcısını başlat
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
+    
+    # Flask sunucusunu ayrı thread üzerinde çalıştır (Böylece loglar ve Telegram botu kesintisiz akar)
     threading.Thread(target=flask_web_server, daemon=True).start()
     
+    # Telegram botunu ana akışta çalıştır
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
