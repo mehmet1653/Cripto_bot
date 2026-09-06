@@ -465,7 +465,6 @@ def otomatik_arkaplan_tarayici():
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 coin_id = COIN_ID_MAP.get(symbol, 0)
                 
-                # Konsola anlık tarama ve indikatör bilgilerini yazdıralım
                 ai_durum_str = "Eğitildi" if ai_model_egitildi else f"Veri Bekliyor ({len(ANALitik_HAFIZA.get('egitim_verileri', []))}/20)"
                 print(f"🔍 [TARAMA] {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f} | AI: {ai_durum_str}", flush=True)
 
@@ -505,7 +504,10 @@ def otomatik_arkaplan_tarayici():
                 if sinyal_puani < 65 and not is_altin_atis:
                     continue
 
-                if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
+                # Altın vuruş ise maksimum sınır 1 adet esner
+                izin_verilen_maks_poz = MAKSIMUM_TOPLAM_POZISYON + 1 if is_altin_atis else MAKSIMUM_TOPLAM_POZISYON
+
+                if len(aktif_borsa_map) >= izin_verilen_maks_poz:
                     break
 
                 ayni_yon_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == grid_yonu)
