@@ -56,25 +56,6 @@ BOT_CALISIYOR_MU = True
 
 # ==================== SUPABASE HAFIZA FONKSİYONLARI ====================
 def hafizayi_yukle():
-    try:
-        response = supabase.table("bot_hafiza").select("*").eq("id", 1).execute()
-        if response.data and len(response.data) > 0:
-            veri = response.data[0]
-            print("💾 Hafıza Supabase'den başarıyla yüklendi.", flush=True)
-            return {
-                "aktif_sistemler": veri.get("aktif_sistemler", {}),
-                "analitik": veri.get("analitik", {
-                    "basarisiz_analizler": [],
-                    "basarili_islem_sayisi": 0,
-                    "basarisiz_islem_sayisi": 0,
-                    "gunluk_net_kar_usd": 0.0,
-                    "egitim_verileri": []
-                }),
-                "cooldownlar": veri.get("cooldownlar", {})
-            }
-    except Exception as e:
-        print(f"⚠️ Hafıza yükleme hatası: {e}", flush=True)
-        
     varsayilan = {
         "aktif_sistemler": {},
         "analitik": {
@@ -86,7 +67,24 @@ def hafizayi_yukle():
         },
         "cooldownlar": {}
     }
-    supabase.table("bot_hafiza").upsert({"id": 1, **varsayilan}).execute()
+    try:
+        response = supabase.table("bot_hafiza").select("*").eq("id", 1).execute()
+        if response.data and len(response.data) > 0:
+            veri = response.data[0]
+            print("💾 Hafıza Supabase'den başarıyla yüklendi.", flush=True)
+            return {
+                "aktif_sistemler": veri.get("aktif_sistemler", {}),
+                "analitik": veri.get("analitik", varsayilan["analitik"]),
+                "cooldownlar": veri.get("cooldownlar", {})
+            }
+    except Exception as e:
+        print(f"⚠️ Hafıza yükleme/tablo oluşturma tetikleniyor: {e}", flush=True)
+        
+    try:
+        supabase.table("bot_hafiza").upsert({"id": 1, **varsayilan}).execute()
+    except Exception as ex:
+        print(f"⚠️ Varsayılan kayıt oluşturulamadı (Tablo sütunları eksik olabilir): {ex}", flush=True)
+        
     return varsayilan
 
 def hafizayi_kaydet():
@@ -226,6 +224,8 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         toplam_islem = basarili_sayisi + basarisiz_sayisi
         basari_orani = (basarili_sayisi / toplam_islem * 100) if toplam_islem > 0 else 0.0
 
+        ai_durum = "Aktif (Eğitildi)" if ai_model_egitildi else f"Veri Bekliyor ({len(ANALitik_HAFIZA.get('egitim_verileri', []))}/20)"
+
         pozisyon_detaylari = ""
         if borsa_poslari:
             pozisyon_detaylari = "\n🔍 *Açık Pozisyonlar:*\n"
@@ -242,6 +242,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📊 *HİBRİT BOT DURUMU*\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"{pnl_ikon} Anlık Kâr/Zarar: `{toplam_pnl:+.2f} USDT`\n"
+            f"🤖 Yapay Zeka: `{ai_durum}`\n"
             f"📌 Açık Pozisyon Sayısı: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n"
             f"{pozisyon_detaylari}\n"
             f"🎯 *İstatistikler:*\n"
@@ -316,7 +317,6 @@ def otomatik_arkaplan_tarayici():
             # --- KAPATILAN POZİSYONLARI BORSA GEÇMİŞİNDEN GÜVENLİ YAKALAMA ---
             for sym in list(AKTIF_GRID_SISTEMLERI.keys()):
                 if sym not in aktif_borsa_map:
-                    # Pozisyon artık borsa açık pozisyonlarında yok, geçmiş emirlerden sonucunu teyit edelim
                     kayitli_veri = AKTIF_GRID_SISTEMLERI.pop(sym)
                     
                     basarili_islem = True
@@ -342,7 +342,6 @@ def otomatik_arkaplan_tarayici():
 
                     COIN_COOLDOWNLAR[sym] = time.time() + COOLDOWN_SURESI_SANIYE
                     
-                    # AI Eğitim verisine ekle
                     rsi_v = kayitli_veri.get("giris_rsi", 50)
                     adx_v = kayitli_veri.get("giris_adx", 25)
                     ema_f = kayitli_veri.get("ema_fark", 0.0)
@@ -535,7 +534,6 @@ def otomatik_arkaplan_tarayici():
                     gercek_ham_miktar = max(ham_miktar / contract_size, min_amount)
                     miktar = float(exchange.amount_to_precision(symbol, gercek_ham_miktar))
                     
-                    # 1. Pozisyonu Aç
                     emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
                     exchange.create_order(symbol, 'market', emir_yonu, miktar)
 
@@ -553,7 +551,6 @@ def otomatik_arkaplan_tarayici():
                         except Exception:
                             pass
 
-                    # 2. TP ve SL Hesapla
                     stop_oran_fiyat = stop_roe / 100.0 / dinamik_kaldirac
                     hedef_oran_fiyat = hedef_roe / 100.0 / dinamik_kaldirac
                     
@@ -569,7 +566,6 @@ def otomatik_arkaplan_tarayici():
                     stop_fiyat = float(exchange.price_to_precision(symbol, stop_fiyat))
                     hedef_fiyat = float(exchange.price_to_precision(symbol, hedef_fiyat))
 
-                    # 3. Borsaya Doğrudan SL ve TP Emirleri Gönder
                     stop_params = {
                         'stopPrice': stop_fiyat,
                         'triggerPrice': stop_fiyat,
