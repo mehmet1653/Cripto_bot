@@ -63,8 +63,7 @@ def hafizayi_yukle():
                     "basarisiz_islem_sayisi": 0,
                     "gunluk_net_kar_usd": 0.0,
                     "egitim_verileri": []
-                }),
-                "cooldownlar": veri.get("cooldownlar", {})
+                })
             }
     except Exception as e:
         print(f"⚠️ Hafıza yükleme hatası: {e}", flush=True)
@@ -77,10 +76,12 @@ def hafizayi_yukle():
             "basarisiz_islem_sayisi": 0,
             "gunluk_net_kar_usd": 0.0,
             "egitim_verileri": []
-        },
-        "cooldownlar": {}
+        }
     }
-    supabase.table("bot_hafiza").upsert({"id": 1, **varsayilan}).execute()
+    try:
+        supabase.table("bot_hafiza").upsert({"id": 1, **varsayilan}).execute()
+    except Exception:
+        pass
     return varsayilan
 
 def hafizayi_kaydet():
@@ -88,8 +89,7 @@ def hafizayi_kaydet():
         supabase.table("bot_hafiza").upsert({
             "id": 1,
             "aktif_sistemler": AKTIF_GRID_SISTEMLERI,
-            "analitik": ANALitik_HAFIZA,
-            "cooldownlar": COIN_COOLDOWNLAR
+            "analitik": ANALitik_HAFIZA
         }).execute()
     except Exception as e:
         print(f"⚠️ Hafıza kaydetme hatası: {e}", flush=True)
@@ -103,7 +103,7 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {
     "gunluk_net_kar_usd": 0.0,
     "egitim_verileri": []
 })
-COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
+COIN_COOLDOWNLAR = {}
 
 MAKSIMUM_AYNI_YON_SAYISI = 2
 MAKSIMUM_TOPLAM_POZISYON = 3
@@ -119,7 +119,6 @@ def yapay_zekayi_egit_ve_guncelle():
     
     if len(veriler) < 20:
         ai_model_egitildi = False
-        print(f"🧠 Yapay Zeka öğrenme aşamasında: {len(veriler)}/20 veri toplandı.", flush=True)
         return
 
     try:
@@ -131,7 +130,6 @@ def yapay_zekayi_egit_ve_guncelle():
             
         ai_model.fit(np.array(X), np.array(y))
         ai_model_egitildi = True
-        print("🧠 Yapay Zeka dengeli veri setiyle yeniden eğitildi!", flush=True)
     except Exception as e:
         print(f"⚠️ Yapay zeka eğitim hatası: {e}", flush=True)
         ai_model_egitildi = False
@@ -142,19 +140,9 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id, symb
     try:
         olasiliklar = ai_model.predict_proba(np.array([[rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id]]))[0]
         classes = list(ai_model.classes_)
-        if 1 in classes:
-            basari_ihtimali = olasiliklar[classes.index(1)]
-        else:
-            basari_ihtimali = 1.0
-
-        if basari_ihtimali >= 0.35:
-            print(f"[{symbol}] 🧠 Yapay Zeka Süzgeci: ONAYLANDI ✅ (İhtimal: %{basari_ihtimali*100:.1f})", flush=True)
-            return True
-        else:
-            print(f"[{symbol}] 🧠 Yapay Zeka Süzgeci: REDDEDİLDİ ❌ (İhtimal düşük: %{basari_ihtimali*100:.1f})", flush=True)
-            return False
-    except Exception as e:
-        print(f"⚠️ AI onay hatası: {e}", flush=True)
+        basari_ihtimali = olasiliklar[classes.index(1)] if 1 in classes else 1.0
+        return basari_ihtimali >= 0.35
+    except Exception:
         return True
 
 def atr_ve_volatilite_hesapla(df, period=14):
@@ -231,7 +219,6 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=50, adx=25,
         print(f"⚠️ Kapatma API hatası: {e}", flush=True)
 
     COIN_COOLDOWNLAR[symbol] = time.time() + COOLDOWN_SURESI_SANIYE
-    print(f"⏳ [{symbol}] için 15 dakikalık cooldown başlatıldı.", flush=True)
 
     yon_kod = 1 if yon == 'LONG' else -1
     sonuc_kod = 1 if basarili else 0
@@ -257,11 +244,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             raw_positions = exchange.fetch_positions()
-            borsa_poslari = []
-            for p in raw_positions:
-                kontrat = float(p.get('contracts', 0) or p.get('size', 0) or 0)
-                if kontrat > 0:
-                    borsa_poslari.append(p)
+            borsa_poslari = [p for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
         except Exception:
             borsa_poslari = []
 
@@ -518,16 +501,10 @@ def otomatik_arkaplan_tarayici():
                 if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
                     continue 
 
-                if is_altin_atis:
-                    dinamik_kaldirac = 20
-                    kasa_orani = 0.25
-                    hedef_roe = 20.0
-                    stop_roe = 10.0
-                else:
-                    dinamik_kaldirac = 10
-                    kasa_orani = 0.20
-                    hedef_roe = 20.0
-                    stop_roe = 10.0
+                dinamik_kaldirac = 20 if is_altin_atis else 10
+                kasa_orani = 0.25 if is_altin_atis else 0.20
+                hedef_roe = 20.0
+                stop_roe = 10.0
 
                 try:
                     balance = exchange.fetch_balance()
@@ -555,7 +532,7 @@ def otomatik_arkaplan_tarayici():
                     # 1. Adım: Ana pozisyonu aç
                     exchange.create_order(symbol, 'market', emir_yonu, miktar)
 
-                    # 2. Adım: Gate.io uyumlu native SL ve TP emirlerini tetikleyiciye ekle
+                    # 2. Adım: Gate.io uyumlu native SL ve TP emirleri (initial.price ve stopPrice düzeltildi)
                     try:
                         time.sleep(0.6)
                         pozlar = exchange.fetch_positions()
@@ -580,7 +557,7 @@ def otomatik_arkaplan_tarayici():
                         stop_fiyat = float(exchange.price_to_precision(symbol, stop_fiyat))
                         hedef_fiyat = float(exchange.price_to_precision(symbol, hedef_fiyat))
                         
-                        # Gate.io Özel Koşullu Emir Parametreleri (Conditional Sekmesine Düşer)
+                        # Gate.io API için fiyat parametreleri (price alanına güncel fiyat/0 vererek 'initial.price' hatası engellenir)
                         stop_params = {
                             'stopPrice': stop_fiyat,
                             'triggerPrice': stop_fiyat,
@@ -595,8 +572,9 @@ def otomatik_arkaplan_tarayici():
                             'is_stop': True
                         }
 
-                        exchange.create_order(symbol, 'stop_market', kapatma_yonu, miktar, None, stop_params)
-                        exchange.create_order(symbol, 'stop_market', kapatma_yonu, miktar, None, hedef_params)
+                        # ccxt create_order içinde type='stop_market' için price argümanına stop_fiyat verilir
+                        exchange.create_order(symbol, 'stop_market', kapatma_yonu, miktar, stop_fiyat, stop_params)
+                        exchange.create_order(symbol, 'stop_market', kapatma_yonu, miktar, hedef_fiyat, hedef_params)
                         
                         print(f"🛡️ [{symbol}] Gate.io Conditional Emirleri İşlendi -> Giriş: {giris_fiyati} | SL: {stop_fiyat} | TP: {hedef_fiyat}", flush=True)
                     except Exception as borsa_emir_err:
