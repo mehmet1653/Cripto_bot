@@ -523,6 +523,10 @@ def otomatik_arkaplan_tarayici():
             normal_poz_sayisi = sum(1 for p in aktif_borsa_map.values() if not AKTIF_GRID_SISTEMLERI.get(p['symbol'], {}).get('altin_atis', False))
             altin_atis_poz_sayisi = sum(1 for p in aktif_borsa_map.values() if AKTIF_GRID_SISTEMLERI.get(p['symbol'], {}).get('altin_atis', False))
 
+            # Yön bazlı açık pozisyon sayılarını hesapla (Aynı yöne maksimum 2 işlem kuralı)
+            aktif_long_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == 'LONG')
+            aktif_short_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == 'SHORT')
+
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU:
                     break
@@ -536,6 +540,12 @@ def otomatik_arkaplan_tarayici():
                 guncel_fiyat = sinyal["fiyat"]
                 atr_yuzdesi = sinyal["atr"]
                 is_altin_atis = sinyal["altin_atis"]
+
+                # --- YÖN BAZLI MAKSIMUM 2 İŞLEM SINIRI ---
+                if grid_yonu == 'LONG' and aktif_long_sayisi >= 2:
+                    continue
+                if grid_yonu == 'SHORT' and aktif_short_sayisi >= 2:
+                    continue
 
                 if is_altin_atis:
                     if altin_atis_poz_sayisi >= MAKSIMUM_ALTIN_ATIS_POZISYON:
@@ -555,7 +565,6 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
-                # Sadece Kaldıraç Ayarı (set_margin_mode tamamen kaldırıldı)
                 try:
                     exchange.set_leverage(dinamik_kaldirac, symbol)
                 except Exception as e:
@@ -646,6 +655,11 @@ def otomatik_arkaplan_tarayici():
                         altin_atis_poz_sayisi += 1
                     else:
                         normal_poz_sayisi += 1
+
+                    if grid_yonu == 'LONG':
+                        aktif_long_sayisi += 1
+                    else:
+                        aktif_short_sayisi += 1
                         
                     break 
                 except Exception as e:
