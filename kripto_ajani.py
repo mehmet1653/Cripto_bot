@@ -1,5 +1,6 @@
 import time
 import threading
+import sys
 import requests
 import ccxt
 import pandas as pd
@@ -11,6 +12,9 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
+
+# Terminal loglarının anında ekrana düşmesi için
+sys.stdout.reconfigure(line_buffering=True)
 
 app = Flask(__name__)
 
@@ -292,7 +296,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 Gelişmiş Hibrit Tarayıcı ve Kesin PnL Takipli SL/TP Koruması Devrede.", flush=True)
+    print("🚀 Gelişmiş Hibrit Tarayıcı ve Canlı Log Modu Aktif.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -322,14 +326,12 @@ def otomatik_arkaplan_tarayici():
                     
                     basarili_islem = False
                     try:
-                        # Önce açıkta kalmış diğer bekleyen emirleri iptal edelim
                         try:
                             for ord_item in exchange.fetch_open_orders(sym):
                                 exchange.cancel_order(ord_item['id'], sym)
                         except Exception:
                             pass
 
-                        # Gerçekleşen son trade'in realized PnL değerine veya fiyatına bakalım
                         my_trades = exchange.fetch_my_trades(sym, limit=3)
                         if my_trades:
                             son_trade = my_trades[-1]
@@ -373,6 +375,7 @@ def otomatik_arkaplan_tarayici():
                     
                     yapay_zekayi_egit_ve_guncelle()
                     hafizayi_kaydet()
+                    print(f"📊 Pozisyon Kapandı Raporlandı: {sym} | Başarılı: {basarili_islem}", flush=True)
 
             # --- AÇIK POZİSYONLARIN BORSADAKİ TP/SL VEYA BREAKEVEN DURUMLARI ---
             for symbol, pos in aktif_borsa_map.items():
@@ -502,7 +505,7 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
-            # --- EN İYİ SİNYAL İLE İŞLEM AÇMA VE BORSAYA OTOMATİK TP/SL GÖNDERME ---
+            # --- EN İYİ SİNYAL İLE İŞLEM AÇMA VE ESKİ EMİRLERİ TEMİZLEME ---
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU:
                     break
@@ -556,6 +559,14 @@ def otomatik_arkaplan_tarayici():
                     gercek_ham_miktar = max(round(hesaplanan_kontrat), min_amount)
                     miktar = float(exchange.amount_to_precision(symbol, gercek_ham_miktar))
                     
+                    # İşlem açmadan önce o coin'e ait kalmış olabilecek TÜM eski emirleri temizleyelim (Mükerrer önlemi)
+                    try:
+                        eski_emirler = exchange.fetch_open_orders(symbol)
+                        for em in eski_emirler:
+                            exchange.cancel_order(em['id'], symbol)
+                    except Exception:
+                        pass
+
                     emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
                     exchange.create_order(symbol, 'market', emir_yonu, miktar)
 
