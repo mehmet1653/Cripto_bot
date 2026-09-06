@@ -377,7 +377,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     print(f"📊 Pozisyon Kapandı Raporlandı: {sym} | Başarılı: {basarili_islem}", flush=True)
 
-            # --- AÇIK POZİSYONLARIN BORSADAKİ TP/SL VEYA BREAKEVEN DURUMLARI ---
+            # --- AÇIK POZİSYONLARIN BORSADAKİ TP/SL, BREAKEVEN VE EKSİK EMİR KONTROLÜ ---
             for symbol, pos in aktif_borsa_map.items():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
@@ -386,6 +386,7 @@ def otomatik_arkaplan_tarayici():
 
                 yon = str(pos.get('side', '')).upper()
                 merkez = float(pos.get('entryPrice', 0))
+                kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
                 kaldirac_kullanilan = int(pos.get('leverage', 10))
                 
                 fark = (guncel_fiyat - merkez) / merkez if yon == "LONG" else (merkez - guncel_fiyat) / merkez
@@ -394,6 +395,42 @@ def otomatik_arkaplan_tarayici():
                 kayitli = AKTIF_GRID_SISTEMLERI.get(symbol, {})
                 breakeven_yapildi = kayitli.get("breakeven_yapildi", False)
 
+                # --- KENDİNİ ONARAN SİSTEM: ELLE SİLİNEN TP (LİMİT) VEYA SL EMİRLERİNİ YENİDEN OLUŞTURMA ---
+                try:
+                    acik_emirler = exchange.fetch_open_orders(symbol)
+                    stop_var = any('stop' in str(o.get('type', '')).lower() for o in acik_emirler)
+                    limit_var = any(o.get('type') == 'limit' for o in acik_emirler)
+                    kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
+
+                    # Eğer kâr al (limit) emri elle silindiyse tekrar koy
+                    if not limit_var and kontrat > 0:
+                        hedef_roe = kayitli.get("hedef_roe", 20.0)
+                        hedef_oran_fiyat = hedef_roe / 100.0 / kaldirac_kullanilan
+                        hedef_fiyat = merkez * (1.0 + hedef_oran_fiyat) if yon == "LONG" else merkez * (1.0 - hedef_oran_fiyat)
+                        hedef_fiyat = float(exchange.price_to_precision(symbol, hedef_fiyat))
+                        
+                        exchange.create_order(symbol, 'limit', kapatma_yonu, kontrat, hedef_fiyat, {'reduceOnly': True})
+                        print(f"🔄 [{symbol}] Elle silinen TP (Kâr Al) emri tekrar eklendi: {hedef_fiyat}", flush=True)
+
+                    # Eğer stop (zarar kes) emri elle silindiyse tekrar koy
+                    if not stop_var and kontrat > 0:
+                        stop_roe = 0.0 if breakeven_yapildi else kayitli.get("stop_roe", 10.0)
+                        stop_oran_fiyat = stop_roe / 100.0 / kaldirac_kullanilan
+                        stop_fiyat = merkez * (1.0 - stop_oran_fiyat) if yon == "LONG" else merkez * (1.0 + stop_oran_fiyat)
+                        stop_fiyat = float(exchange.price_to_precision(symbol, stop_fiyat))
+                        
+                        stop_params = {
+                            'stopPrice': stop_fiyat,
+                            'triggerPrice': stop_fiyat,
+                            'reduceOnly': True,
+                            'is_stop': True
+                        }
+                        exchange.create_order(symbol, 'stop_market', kapatma_yonu, kontrat, stop_fiyat, stop_params)
+                        print(f"🔄 [{symbol}] Elle silinen SL (Stop) emri tekrar eklendi: {stop_fiyat}", flush=True)
+                except Exception as ex:
+                    pass
+
+                # --- 10% ROE İLE BREAKEVEN (0 RİSK) KONTROLÜ ---
                 if not breakeven_yapildi and roe >= 10.0:
                     kayitli["breakeven_yapildi"] = True
                     AKTIF_GRID_SISTEMLERI[symbol] = kayitli
@@ -412,7 +449,7 @@ def otomatik_arkaplan_tarayici():
                             'reduceOnly': True,
                             'is_stop': True
                         }
-                        exchange.create_order(symbol, 'stop_market', kapatma_yonu, float(pos.get('contracts', 0) or pos.get('size', 0)), merkez, stop_params)
+                        exchange.create_order(symbol, 'stop_market', kapatma_yonu, kontrat, merkez, stop_params)
                         print(f"🛡️ [{symbol}] Breakeven devrede, stop giriş fiyatına ({merkez}) sabitlendi!", flush=True)
                         telegram_mesaj_gonder(f"🛡️ *Breakeven Devrede (0 Risk)*\n📌 `{symbol}` stopu giriş fiyatına sabitlendi!")
                     except Exception as ex:
@@ -505,7 +542,7 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
-            # --- EN İYİ SİNYAL İLE İŞLEM AÇMA VE ESKİ EMİRLERİ TEMİZLEME ---
+            # --- EN İYİ SİNYAL İLE İŞLEM AÇMA VE MÜKERRER TEMİZLİĞİ ---
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU:
                     break
@@ -559,7 +596,7 @@ def otomatik_arkaplan_tarayici():
                     gercek_ham_miktar = max(round(hesaplanan_kontrat), min_amount)
                     miktar = float(exchange.amount_to_precision(symbol, gercek_ham_miktar))
                     
-                    # İşlem açmadan önce o coin'e ait kalmış olabilecek TÜM eski emirleri temizleyelim (Mükerrer önlemi)
+                    # İşlem açmadan önce o coin'e ait kalmış olabilecek TÜM eski emirleri temizleyelim
                     try:
                         eski_emirler = exchange.fetch_open_orders(symbol)
                         for em in eski_emirler:
