@@ -205,7 +205,6 @@ def set_leverage_safely(symbol, leverage):
         return False
 
 def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=50, adx=25, ema_fark=0.0, atr_yuzde=1.5, basarili=True):
-    kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
     try:
         for ord_item in exchange.fetch_open_orders(symbol):
             exchange.cancel_order(ord_item['id'], symbol)
@@ -218,6 +217,7 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=50, adx=25,
         if miktar < min_amount:
             miktar = min_amount
         miktar = float(exchange.amount_to_precision(symbol, miktar))
+        kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
         exchange.create_order(symbol, 'market', kapatma_yonu, miktar, None, {'reduce_only': True})
     except Exception as e:
         print(f"⚠️ Kapatma API hatası: {e}", flush=True)
@@ -327,8 +327,6 @@ def otomatik_arkaplan_tarayici():
                 time.sleep(3)
                 continue
 
-            print("🔄 Yeni tarama döngüsü başladı...", flush=True)
-
             try:
                 raw_positions = exchange.fetch_positions()
                 aktif_borsa_map = {}
@@ -339,12 +337,53 @@ def otomatik_arkaplan_tarayici():
             except Exception:
                 aktif_borsa_map = {}
 
+            # --- AÇIK POZİSYONLARIN VE TP / SL TAKİBİ ---
             for sym in list(AKTIF_GRID_SISTEMLERI.keys()):
                 if sym not in aktif_borsa_map:
+                    # Pozisyon borsada artık yok! TP veya SL tetiklenmiş demektir.
+                    kayitli_veri = AKTIF_GRID_SISTEMLERI[sym]
+                    rsi_val = kayitli_veri.get("giris_rsi", 50)
+                    adx_val = kayitli_veri.get("giris_adx", 25)
+                    ema_fark_val = kayitli_veri.get("ema_fark", 0.0)
+                    atr_val = kayitli_veri.get("atr_yuzde", 1.5)
+                    yon_val = kayitli_veri.get("yon", "LONG")
+
+                    # Borsa açık emirlerini kontrol et: Kalan emir var mı yoksa hepsi gerçekleşti mi?
+                    try:
+                        kalan_emirler = exchange.fetch_open_orders(sym)
+                    except Exception:
+                        kalan_emirler = []
+
+                    # Eğer hedef emirlerin hiçbiri kalmadıysa TP olmuştur, aksi takdirde SL tetiklenmiştir.
+                    tp_gerceklesti = len(kalan_emirler) == 0
+
+                    if tp_gerceklesti:
+                        ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
+                        print(f"🎯 [{sym}] TP (Kâr Al) Hedefine Ulaşıldı ve Gerçekleşti!", flush=True)
+                        telegram_mesaj_gonder(f"🎯 *KÂR ALINDI (TP)*\n\n📌 *Coin:* `{sym}`\n📊 Durum: Hedef fiyata ulaşıldı ve pozisyon kapatıldı.")
+                    else:
+                        ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
+                        print(f"🛑 [{sym}] SL (Zarar Kes) Tetiklendi!", flush=True)
+                        telegram_mesaj_gonder(f"🛑 *ZARAR KESİLDİ (SL)*\n\n📌 *Coin:* `{sym}`\n📊 Durum: Stop seviyesine ulaşıldı.")
+                        for ord_item in kalan_emirler:
+                            try:
+                                exchange.cancel_order(ord_item['id'], sym)
+                            except Exception:
+                                pass
+
+                    COIN_COOLDOWNLAR[sym] = time.time() + COOLDOWN_SURESI_SANIYE
+                    yon_kod = 1 if yon_val == 'LONG' else -1
+                    sonuc_kod = 1 if tp_gerceklesti else 0
+                    coin_id = COIN_ID_MAP.get(sym, 0)
+
+                    ANALitik_HAFIZA["egitim_verileri"].append([rsi_val, adx_val, ema_fark_val, yon_kod, atr_val, coin_id, sonuc_kod])
+                    if len(ANALitik_HAFIZA["egitim_verileri"]) > 150:
+                        ANALitik_HAFIZA["egitim_verileri"].pop(0)
+                    yapay_zekayi_egit_ve_guncelle()
+
                     del AKTIF_GRID_SISTEMLERI[sym]
                     hafizayi_kaydet()
 
-            # --- AÇIK POZİSYONLARIN KONTROLÜ VE BREAKEVEN ---
             for symbol, pos in aktif_borsa_map.items():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
@@ -360,22 +399,11 @@ def otomatik_arkaplan_tarayici():
                 pnl = float(pos.get('unrealizedPnl', 0))
                 kontrat_miktari = float(pos.get('contracts', 0) or pos.get('size', 0) or 1.0)
 
-                print(f"📌 [Açık Pozisyon] {symbol} | Yön: {yon} | ROE: %{roe:.2f} | PnL: {pnl:.2f} USDT", flush=True)
-
                 kayitli = AKTIF_GRID_SISTEMLERI.get(symbol, {})
-                hedef_roe = kayitli.get("hedef_roe", 20.0)
-                stop_roe = kayitli.get("stop_roe", 10.0)
                 breakeven_yapildi = kayitli.get("breakeven_yapildi", False)
-                
-                rsi_val = kayitli.get("giris_rsi", 50)
-                adx_val = kayitli.get("giris_adx", 25)
-                ema_fark_val = kayitli.get("ema_fark", 0.0)
-                atr_val = kayitli.get("atr_yuzde", 1.5)
 
                 if not breakeven_yapildi and roe >= 10.0:
                     kayitli["breakeven_yapildi"] = True
-                    kayitli["stop_roe"] = 0.0  
-                    
                     try:
                         open_orders = exchange.fetch_open_orders(symbol)
                         for ord_item in open_orders:
@@ -392,31 +420,12 @@ def otomatik_arkaplan_tarayici():
                             'is_stop': True
                         }
                         exchange.create_order(symbol, 'stop_market', kapatma_yonu, kontrat_miktari, merkez, stop_params)
-                        print(f"🛡️ [{symbol}] Eski stop iptal edildi, stop seviyesi giriş fiyatına ({merkez}) sabitlendi!", flush=True)
+                        print(f"🛡️ [{symbol}] Breakeven devrede, stop giriş fiyatına ({merkez}) sabitlendi!", flush=True)
                     except Exception as ex:
-                        print(f"⚠️ Breakeven borsa güncelleme hatası: {ex}", flush=True)
+                        print(f"⚠️ Breakeven güncelleme hatası: {ex}", flush=True)
 
                     hafizayi_kaydet()
                     telegram_mesaj_gonder(f"🛡️ *Breakeven Devrede (0 Risk)*\n📌 `{symbol}` stopu giriş fiyatına (`{merkez}`) çekildi!")
-
-                current_stop = kayitli.get("stop_roe", stop_roe)
-
-                if roe >= hedef_roe or float(pos.get('percentage', 0)) >= hedef_roe:
-                    ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
-                    hafizayi_kaydet()
-                    pozisyonu_garantili_kapat(
-                        symbol, yon, kontrat_miktari, 
-                        f"🎯 *KÂR ALINDI (TP)*\n\n📌 *Coin:* `{symbol}`\n📊 *Yön:* `{yon}`\n💰 *Kâr:* `+{pnl:.2f} USDT` (`%{roe:.2f}`)", 
-                        rsi=rsi_val, adx=adx_val, ema_fark=ema_fark_val, atr_yuzde=atr_val, basarili=True
-                    )
-                elif current_stop > 0 and roe <= -current_stop:  
-                    ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
-                    hafizayi_kaydet()
-                    pozisyonu_garantili_kapat(
-                        symbol, yon, kontrat_miktari, 
-                        f"🛑 *ZARAR KESİLDİ (SL)*\n\n📌 *Coin:* `{symbol}`\n📊 *Yön:* `{yon}`\n📉 *Sonuç:* `{pnl:.2f} USDT` (`%{roe:.2f}`)", 
-                        rsi=rsi_val, adx=adx_val, ema_fark=ema_fark_val, atr_yuzde=atr_val, basarili=False
-                    )
 
             # --- PİYASA TARAMASI VE YENİ İŞLEM ---
             taranan_sinyaller = []
@@ -438,6 +447,7 @@ def otomatik_arkaplan_tarayici():
                     df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     
                     if not hacim_ve_likidite_kontrolu(df_15m):
+                        print(f"📊 [{symbol}] Hacim/Likidite yetersiz, atlanıyor.", flush=True)
                         continue
 
                     ema7 = ta.trend.ema_indicator(df_15m['close'], window=7).iloc[-1]
@@ -453,7 +463,8 @@ def otomatik_arkaplan_tarayici():
                     fiyat_10_mum_once = df_15m['close'].iloc[-10]
                     degisim_yuzdesi = ((guncel_fiyat - fiyat_10_mum_once) / fiyat_10_mum_once) * 100
                     derinlik_durumu = emir_defteri_derinlik_analizi(symbol)
-                except Exception:
+                except Exception as ex:
+                    print(f"⚠️ [{symbol}] Veri çekme hatası: {ex}", flush=True)
                     continue
 
                 sinyal_puani = 50
@@ -488,10 +499,13 @@ def otomatik_arkaplan_tarayici():
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 coin_id = COIN_ID_MAP.get(symbol, 0)
                 
-                print(f"🔍 [{symbol}] Analiz -> Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
+                # Yapay Zeka Süzgeci Kontrolü ve Loglama
+                ai_onay = yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod, atr_yuzdesi, coin_id, symbol)
+                ai_durum = "✅ ONAYLANDI" if ai_onay else "❌ ELENDİ"
+                
+                print(f"🔍 [{symbol}] Sinyal Puanı: {sinyal_puani} | Yön: {grid_yonu} | RSI: {rsi:.1f} | ADX: {adx_val:.1f} | AI Süzgeci: {ai_durum}", flush=True)
 
-                if not yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod, atr_yuzdesi, coin_id, symbol):
-                    print(f"🤖 [{symbol}] AI onayı alamadı.", flush=True)
+                if not ai_onay:
                     continue
 
                 taranan_sinyaller.append({
@@ -560,8 +574,10 @@ def otomatik_arkaplan_tarayici():
                     
                     emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
                     
+                    # 1. Adım: Ana Pozisyon Açılışı
                     exchange.create_order(symbol, 'market', emir_yonu, miktar)
 
+                    # 2. Adım: Gate.io Uyumlu SL (Stop-Market) ve TP (Limit Reduce-Only) Emirleri
                     try:
                         time.sleep(0.6)
                         pozlar = exchange.fetch_positions()
@@ -586,28 +602,27 @@ def otomatik_arkaplan_tarayici():
                         stop_fiyat = float(exchange.price_to_precision(symbol, stop_fiyat))
                         hedef_fiyat = float(exchange.price_to_precision(symbol, hedef_fiyat))
                         
+                        # Stop-Loss Emri
                         stop_params = {
                             'stopPrice': stop_fiyat,
                             'triggerPrice': stop_fiyat,
                             'reduceOnly': True,
                             'is_stop': True
                         }
-                        
-                        hedef_params = {
-                            'stopPrice': hedef_fiyat,
-                            'triggerPrice': hedef_fiyat,
-                            'reduceOnly': True,
-                            'is_stop': True
-                        }
-
                         exchange.create_order(symbol, 'stop_market', kapatma_yonu, miktar, stop_fiyat, stop_params)
-                        exchange.create_order(symbol, 'stop_market', kapatma_yonu, miktar, hedef_fiyat, hedef_params)
+
+                        # Take-Profit (Hedef) Emri (Limit Reduce-Only)
+                        hedef_params = {
+                            'reduceOnly': True
+                        }
+                        exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, hedef_fiyat, hedef_params)
                         
-                        print(f"🛡️ [{symbol}] Gate.io Conditional Emirleri İşlendi -> Giriş: {giris_fiyati} | SL: {stop_fiyat} | TP: {hedef_fiyat}", flush=True)
+                        print(f"🛡️ [{symbol}] TP ve SL Emirleri İşlendi -> Giriş: {giris_fiyati} | SL: {stop_fiyat} | TP: {hedef_fiyat}", flush=True)
                     except Exception as borsa_emir_err:
                         print(f"⚠️ Borsa otomatik emir hatası: {borsa_emir_err}", flush=True)
 
                     AKTIF_GRID_SISTEMLERI[symbol] = {
+                        "yon": grid_yonu,
                         "giris_rsi": rsi,
                         "giris_adx": adx_val,
                         "ema_fark": ema_fark_val,
@@ -621,7 +636,7 @@ def otomatik_arkaplan_tarayici():
                     telegram_mesaj_gonder(
                         f"⚡ *İŞLEM VE BORSA EMİRLERİ GİRİLDİ*\n\n"
                         f"📌 *Coin:* `{symbol}` | 📊 *Yön:* `{grid_yonu}`\n"
-                        f"🎯 *Hedef TP:* `%+{hedef_roe}` | *Stop SL:* `-%{stop_roe}` (Borsa Korumalı 🛡️)"
+                        f"🎯 *Hedef TP (Limit):* `%+{hedef_roe}` | *Stop SL:* `-%{stop_roe}` (Borsa Korumalı 🛡️)"
                     )
                     break 
                 except Exception as e:
