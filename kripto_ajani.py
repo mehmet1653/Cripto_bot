@@ -625,10 +625,16 @@ def otomatik_arkaplan_tarayici():
                     }
                     hafizayi_kaydet()
                     
+                    islem_tipi_str = "🌟 Altın Vuruş (Yüksek Skor)" if is_altin_atis else "📊 Standart İşlem"
+
                     print(f"🚀 İŞLEM AÇILDI & BORSA SL/TP SABİTLENDİ: {symbol} | Giriş: {giris_fiyati} | SL: {stop_fiyat} | TP: {hedef_fiyat}", flush=True)
                     telegram_mesaj_gonder(
                         f"⚡ *İŞLEM AÇILDI VE BORSA KORUMASI AKTİF*\n\n"
                         f"📌 *Coin:* `{symbol}` | 📊 *Yön:* `{grid_yonu}`\n"
+                        f"🎯 *İşlem Türü:* `{islem_tipi_str}`\n"
+                        f"📈 *Sinyal Puanı:* `{sinyal_puani} / 100`\n"
+                        f"⚙️ *Kaldıraç:* `{dinamik_kaldirac}x`\n"
+                        f"💰 *Kasa Oranı:* `%{int(kasa_orani * 100)}`\n"
                         f"🎯 *Hedef TP:* `+{hedef_roe}%` (`{hedef_fiyat}`)\n"
                         f"🛑 *Stop SL:* `-{stop_roe}%` (`{stop_fiyat}`)"
                     )
