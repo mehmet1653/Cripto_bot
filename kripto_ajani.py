@@ -13,6 +13,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
 
+# Terminal loglarının anında ekrana düşmesi için
 sys.stdout.reconfigure(line_buffering=True)
 
 app = Flask(__name__)
@@ -376,7 +377,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     print(f"📊 Pozisyon Kapandı Raporlandı: {sym} | Başarılı: {basarili_islem}", flush=True)
 
-            # --- AÇIK POZİSYONLARIN KORUMA VE KONTROLÜ (ELLE SİLİNENLERDE SPAMİ ENGELLEME) ---
+            # --- AÇIK POZİSYONLARIN BORSADAKİ TP/SL VEYA BREAKEVEN DURUMLARI ---
             for symbol, pos in aktif_borsa_map.items():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
@@ -385,7 +386,6 @@ def otomatik_arkaplan_tarayici():
 
                 yon = str(pos.get('side', '')).upper()
                 merkez = float(pos.get('entryPrice', 0))
-                kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
                 kaldirac_kullanilan = int(pos.get('leverage', 10))
                 
                 fark = (guncel_fiyat - merkez) / merkez if yon == "LONG" else (merkez - guncel_fiyat) / merkez
@@ -394,7 +394,6 @@ def otomatik_arkaplan_tarayici():
                 kayitli = AKTIF_GRID_SISTEMLERI.get(symbol, {})
                 breakeven_yapildi = kayitli.get("breakeven_yapildi", False)
 
-                # --- 10% ROE İLE BREAKEVEN KONTROLÜ ---
                 if not breakeven_yapildi and roe >= 10.0:
                     kayitli["breakeven_yapildi"] = True
                     AKTIF_GRID_SISTEMLERI[symbol] = kayitli
@@ -403,33 +402,21 @@ def otomatik_arkaplan_tarayici():
                     try:
                         open_orders = exchange.fetch_open_orders(symbol)
                         for ord_item in open_orders:
-                            if 'stop' in str(ord_item.get('type', '')).lower() or ord_item.get('info', {}).get('stop_price'):
+                            if 'stop' in str(ord_item.get('type', '')).lower():
                                 exchange.cancel_order(ord_item['id'], symbol)
                         
                         kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
                         stop_params = {
+                            'stopPrice': merkez,
                             'triggerPrice': merkez,
-                            'price': merkez,
                             'reduceOnly': True,
-                            'stop_policy': 0 
+                            'is_stop': True
                         }
-                        exchange.create_order(symbol, 'stop_market', kapatma_yonu, kontrat, merkez, stop_params)
+                        exchange.create_order(symbol, 'stop_market', kapatma_yonu, float(pos.get('contracts', 0) or pos.get('size', 0)), merkez, stop_params)
                         print(f"🛡️ [{symbol}] Breakeven devrede, stop giriş fiyatına ({merkez}) sabitlendi!", flush=True)
                         telegram_mesaj_gonder(f"🛡️ *Breakeven Devrede (0 Risk)*\n📌 `{symbol}` stopu giriş fiyatına sabitlendi!")
                     except Exception as ex:
                         print(f"⚠️ Breakeven güncelleme hatası: {ex}", flush=True)
-
-                # --- ELLE SİLİNEN EMİRLER İÇİN SPAM/DÖNGÜ KORUMASI ---
-                try:
-                    aktif_emirler = exchange.fetch_open_orders(symbol)
-                    if len(aktif_emirler) == 0:
-                        if not kayitli.get("manuel_silindi_ayarlandi", False):
-                            kayitli["manuel_silindi_ayarlandi"] = True
-                            AKTIF_GRID_SISTEMLERI[symbol] = kayitli
-                            hafizayi_kaydet()
-                            print(f"⚠️ [{symbol}] Emirlerin elle silindiği algılandı. Sonsuz döngüye girmemek için bot yeni emir atmayı durdurdu.", flush=True)
-                except Exception:
-                    pass
 
             # --- TÜM COİNLERİ TARAYIP EN İYİ SİNYALİ SEÇME ---
             taranan_sinyaller = []
@@ -518,7 +505,7 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
-            # --- EN İYİ SİNYAL İLE İŞLEM AÇMA ---
+            # --- EN İYİ SİNYAL İLE İŞLEM AÇMA VE ESKİ EMİRLERİ TEMİZLEME ---
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU:
                     break
@@ -572,6 +559,7 @@ def otomatik_arkaplan_tarayici():
                     gercek_ham_miktar = max(round(hesaplanan_kontrat), min_amount)
                     miktar = float(exchange.amount_to_precision(symbol, gercek_ham_miktar))
                     
+                    # İşlem açmadan önce o coin'e ait kalmış olabilecek TÜM eski emirleri temizleyelim (Mükerrer önlemi)
                     try:
                         eski_emirler = exchange.fetch_open_orders(symbol)
                         for em in eski_emirler:
@@ -612,10 +600,10 @@ def otomatik_arkaplan_tarayici():
                     hedef_fiyat = float(exchange.price_to_precision(symbol, hedef_fiyat))
 
                     stop_params = {
+                        'stopPrice': stop_fiyat,
                         'triggerPrice': stop_fiyat,
-                        'price': stop_fiyat,
                         'reduceOnly': True,
-                        'stop_policy': 0
+                        'is_stop': True
                     }
                     exchange.create_order(symbol, 'stop_market', kapatma_yonu, miktar, stop_fiyat, stop_params)
 
@@ -633,7 +621,6 @@ def otomatik_arkaplan_tarayici():
                         "hedef_roe": hedef_roe,
                         "stop_roe": stop_roe,
                         "breakeven_yapildi": False,
-                        "manuel_silindi_ayarlandi": False,
                         "giris_fiyati": giris_fiyati
                     }
                     hafizayi_kaydet()
