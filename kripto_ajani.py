@@ -574,12 +574,13 @@ def otomatik_arkaplan_tarayici():
                     miktar = float(exchange.amount_to_precision(symbol, gercek_ham_miktar))
                     
                     emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
-                    # Piyasa emri ile pozisyon açılıyor
+                    
+                    # 1. Adım: Ana pozisyonu borsada aç
                     exchange.create_order(symbol, 'market', emir_yonu, miktar)
 
-                    # --- YENİ EKLENEN KISIM: BORSAYA NATIVE STOP-LOSS (STOP-MARKET) GÖNDERME ---
+                    # 2. Adım: Borsa tarafına otomatik SL ve TP emirlerini anında iliştir
                     try:
-                        time.sleep(0.5) # Pozisyonun borsa sistemine düşmesi için kısa bekleme
+                        time.sleep(0.6) # Pozisyonun borsa defterine işlenmesi için kısa bekleme
                         pozlar = exchange.fetch_positions()
                         giris_fiyati = guncel_fiyat
                         for p in pozlar:
@@ -587,34 +588,36 @@ def otomatik_arkaplan_tarayici():
                                 giris_fiyati = float(p.get('entryPrice', guncel_fiyat))
                                 break
                         
-                        # %10 ROE stop fiyatı hesaplama (Kaldıraca göre oranlanır)
-                        stop_fiyat_orani = stop_roe / 100.0 / dinamik_kaldirac
+                        # Kaldıraca göre gerçek fiyat bazlı SL ve TP seviyelerini hesapla
+                        stop_oran_fiyat = stop_roe / 100.0 / dinamik_kaldirac
+                        hedef_oran_fiyat = hedef_roe / 100.0 / dinamik_kaldirac
+                        
                         if grid_yonu == 'LONG':
-                            stop_fiyat = giris_fiyati * (1.0 - stop_fiyat_orani)
-                            stop_yonu = 'sell'
+                            stop_fiyat = giris_fiyati * (1.0 - stop_oran_fiyat)
+                            hedef_fiyat = giris_fiyati * (1.0 + hedef_oran_fiyat)
+                            kapatma_yonu = 'sell'
                         else:
-                            stop_fiyat = giris_fiyati * (1.0 + stop_fiyat_orani)
-                            stop_yonu = 'buy'
+                            stop_fiyat = giris_fiyati * (1.0 + stop_oran_fiyat)
+                            hedef_fiyat = giris_fiyati * (1.0 - hedef_oran_fiyat)
+                            kapatma_yonu = 'buy'
                             
                         stop_fiyat = float(exchange.price_to_precision(symbol, stop_fiyat))
+                        hedef_fiyat = float(exchange.price_to_precision(symbol, hedef_fiyat))
                         
-                        # Gate.io veya borsanın desteklediği tetiklemeli stop emri
+                        # Borsa Tabanlı Native Stop-Loss (Zarar Kes) Emri
                         exchange.create_order(
-                            symbol=symbol,
-                            type='stop_market',
-                            side=stop_yonu,
-                            amount=miktar,
-                            price=None,
-                            params={
-                                'stopPrice': stop_fiyat,
-                                'triggerPrice': stop_fiyat,
-                                'reduceOnly': True
-                            }
+                            symbol=symbol, type='stop_market', side=kapatma_yonu, amount=miktar, price=None,
+                            params={'stopPrice': stop_fiyat, 'triggerPrice': stop_fiyat, 'reduceOnly': True}
                         )
-                        print(f"🛡️ [{symbol}] Borsa tabanlı Native Stop-Loss emri işlendi! Fiyat: {stop_fiyat}", flush=True)
-                    except Exception as sl_err:
-                        print(f"⚠️ Native Stop-Loss borsa emri gönderilemedi (Python takibi koruyacak): {sl_err}", flush=True)
-                    # --------------------------------------------------------------------------
+                        
+                        # Borsa Tabanlı Native Take-Profit (Kâr Al) Emri
+                        exchange.create_order(
+                            symbol=symbol, type='take_profit_market', side=kapatma_yonu, amount=miktar, price=None,
+                            params={'stopPrice': hedef_fiyat, 'triggerPrice': hedef_fiyat, 'reduceOnly': True}
+                        )
+                        print(f"🛡️ [{symbol}] Borsa sistemine emirler işlendi -> Giriş: {giris_fiyati} | SL: {stop_fiyat} | TP: {hedef_fiyat}", flush=True)
+                    except Exception as borsa_emir_err:
+                        print(f"⚠️ Borsa otomatik emir hatası (Python döngüsü koruyacak): {borsa_emir_err}", flush=True)
 
                     AKTIF_GRID_SISTEMLERI[symbol] = {
                         "giris_rsi": rsi,
@@ -627,13 +630,11 @@ def otomatik_arkaplan_tarayici():
                     }
                     hafizayi_kaydet()
                     
-                    print(f"🚀 İŞLEM AÇILDI: {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} | Kaldıraç: {dinamik_kaldirac}x | Kasa Oranı: %{kasa_orani*100}", flush=True)
+                    print(f"🚀 İŞLEM AÇILDI: {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} | Kaldıraç: {dinamik_kaldirac}x", flush=True)
                     telegram_mesaj_gonder(
-                        f"⚡ *EN İYİ SİNYAL İŞLEMİ AÇILDI*\n\n"
-                        f"📌 *Coin:* `{symbol}`\n"
-                        f"📊 *Yön:* `{grid_yonu}` | ⭐ *Puan:* `{sinyal_puani}/100`\n"
-                        f"⚙️ *Kaldıraç:* `{dinamik_kaldirac}x` | 💰 *Kasa Oranı:* `%{kasa_orani*100:.0f}`\n"
-                        f"🎯 *Hedef TP:* `+{hedef_roe}%` | *Stop SL:* `-{stop_roe}%` (Borsa Korumalı 🛡️)"
+                        f"⚡ *İŞLEM VE BORSA EMİRLERİ GİRİLDİ*\n\n"
+                        f"📌 *Coin:* `{symbol}` | 📊 *Yön:* `{grid_yonu}`\n"
+                        f"🎯 *Hedef TP:* `%+{hedef_roe}` | *Stop SL:* `-%{stop_roe}` (Borsa Korumalı 🛡️)"
                     )
                     break 
                 except Exception as e:
