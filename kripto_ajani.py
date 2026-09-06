@@ -541,7 +541,8 @@ def otomatik_arkaplan_tarayici():
                     contract_size = float(market_info.get('contractSize', 1.0))
                     min_amount = float(market_info['limits']['amount']['min'] or 1.0)
                     
-                    gercek_ham_miktar = max(ham_miktar / contract_size, min_amount)
+                    hesaplanan_kontrat = ham_miktar / contract_size
+                    gercek_ham_miktar = max(round(hesaplanan_kontrat), min_amount)
                     miktar = float(exchange.amount_to_precision(symbol, gercek_ham_miktar))
                     
                     emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
