@@ -327,6 +327,8 @@ def otomatik_arkaplan_tarayici():
                 time.sleep(3)
                 continue
 
+            print("🔄 Yeni tarama döngüsü başladı...", flush=True)
+
             try:
                 raw_positions = exchange.fetch_positions()
                 aktif_borsa_map = {}
@@ -357,6 +359,8 @@ def otomatik_arkaplan_tarayici():
                 roe = fark * 100 * kaldirac_kullanilan
                 pnl = float(pos.get('unrealizedPnl', 0))
                 kontrat_miktari = float(pos.get('contracts', 0) or pos.get('size', 0) or 1.0)
+
+                print(f"📌 [Açık Pozisyon] {symbol} | Yön: {yon} | ROE: %{roe:.2f} | PnL: {pnl:.2f} USDT", flush=True)
 
                 kayitli = AKTIF_GRID_SISTEMLERI.get(symbol, {})
                 hedef_roe = kayitli.get("hedef_roe", 20.0)
@@ -484,7 +488,10 @@ def otomatik_arkaplan_tarayici():
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 coin_id = COIN_ID_MAP.get(symbol, 0)
                 
+                print(f"🔍 [{symbol}] Analiz -> Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
+
                 if not yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod, atr_yuzdesi, coin_id, symbol):
+                    print(f"🤖 [{symbol}] AI onayı alamadı.", flush=True)
                     continue
 
                 taranan_sinyaller.append({
@@ -553,10 +560,8 @@ def otomatik_arkaplan_tarayici():
                     
                     emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
                     
-                    # 1. Adım: Ana pozisyonu aç
                     exchange.create_order(symbol, 'market', emir_yonu, miktar)
 
-                    # 2. Adım: Gate.io uyumlu native SL ve TP emirleri
                     try:
                         time.sleep(0.6)
                         pozlar = exchange.fetch_positions()
@@ -628,17 +633,12 @@ def otomatik_arkaplan_tarayici():
         time.sleep(5)
 
 def flask_web_server():
-    # Flask loglarının terminali kitlememesi ve buffer yapmaması için
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)), debug=False, use_reloader=False)
 
 if __name__ == '__main__':
-    # Arka plan tarayıcısını başlat
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    
-    # Flask sunucusunu ayrı thread üzerinde çalıştır (Böylece loglar ve Telegram botu kesintisiz akar)
     threading.Thread(target=flask_web_server, daemon=True).start()
     
-    # Telegram botunu ana akışta çalıştır
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
