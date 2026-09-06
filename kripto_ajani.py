@@ -322,18 +322,45 @@ def otomatik_arkaplan_tarayici():
                     
                     basarili_islem = True
                     try:
-                        closed_orders = exchange.fetch_closed_orders(sym, limit=10)
+                        # Önce açıkta kalmış diğer bekleyen emirleri (örn: stop veya limit) iptal edelim
+                        try:
+                            for ord_item in exchange.fetch_open_orders(sym):
+                                exchange.cancel_order(ord_item['id'], sym)
+                        except Exception:
+                            pass
+
+                        # Gerçekleşen işlemlere (trades) veya kapalı emirlere bakarak kâr/zarar tespiti
+                        closed_orders = exchange.fetch_closed_orders(sym, limit=5)
+                        gerceklesen_emir_bulundu = False
+                        
                         for co in closed_orders:
                             if co.get('status') == 'closed':
                                 c_type = str(co.get('type', '')).lower()
-                                if 'limit' in c_type:
-                                    basarili_islem = True
-                                    break
-                                elif 'stop' in c_type:
+                                # Eğer tetiklenen emir stop_market ise kesin zarardır
+                                if 'stop' in c_type:
                                     basarili_islem = False
+                                    gerceklesen_emir_bulundu = True
                                     break
+                                elif 'limit' in c_type:
+                                    basarili_islem = True
+                                    gerceklesen_emir_bulundu = True
+                                    break
+                        
+                        # Eğer emir geçmişinden net çözülemediyse son trade kâr/zarar fiyat kıyaslaması yapalım
+                        if not gerceklesen_emir_bulundu:
+                            my_trades = exchange.fetch_my_trades(sym, limit=2)
+                            if my_trades:
+                                son_trade = my_trades[-1]
+                                trade_fiyat = float(son_trade.get('price', 0))
+                                giris_fiyat = float(kayitli_veri.get('giris_fiyati', trade_fiyat))
+                                yon = kayitli_veri.get("yon", "LONG")
+                                
+                                if yon == "LONG":
+                                    basarili_islem = trade_fiyat >= giris_fiyat
+                                else:
+                                    basarili_islem = trade_fiyat <= giris_fiyat
                     except Exception as e:
-                        print(f"⚠️ Geçmiş emirler okunurken hata ({sym}): {e}", flush=True)
+                        print(f"⚠️ Geçmiş işlemler okunurken hata ({sym}): {e}", flush=True)
 
                     if basarili_islem:
                         ANALitik_HAFIZA["basarili_islem_sayisi"] = ANALitik_HAFIZA.get("basarili_islem_sayisi", 0) + 1
@@ -598,7 +625,8 @@ def otomatik_arkaplan_tarayici():
                         "atr_yuzde": atr_yuzdesi,
                         "hedef_roe": hedef_roe,
                         "stop_roe": stop_roe,
-                        "breakeven_yapildi": False
+                        "breakeven_yapildi": False,
+                        "giris_fiyati": giris_fiyati
                     }
                     hafizayi_kaydet()
                     
