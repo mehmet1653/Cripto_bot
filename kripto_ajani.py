@@ -345,12 +345,28 @@ def otomatik_arkaplan_tarayici():
                     atr_val = kayitli_veri.get("atr_yuzde", 1.5)
                     yon_val = kayitli_veri.get("yon", "LONG")
 
+                    tp_gerceklesti = False
                     try:
-                        kalan_emirler = exchange.fetch_open_orders(sym)
-                    except Exception:
-                        kalan_emirler = []
-
-                    tp_gerceklesti = len(kalan_emirler) == 0
+                        # Borsa geçmişinden son gerçekleşen emri çekerek TP mi SL mi olduğunu kesin tespit ediyoruz
+                        islem_gecmisi = exchange.fetch_closed_orders(sym, limit=5)
+                        if islem_gecmisi:
+                            for emr in reversed(islem_gecmisi):
+                                if emr.get('status') == 'closed':
+                                    emur_tipi = emr.get('type')
+                                    # Limit emir kâr al (TP) demektir, stop_market ise zarar kes (SL) demektir
+                                    if emur_tipi == 'limit':
+                                        tp_gerceklesti = True
+                                        break
+                                    elif 'stop' in str(emur_tipi):
+                                        tp_gerceklesti = False
+                                        break
+                    except Exception as ex:
+                        print(f"⚠️ Geçmiş emir kontrol hatası ({sym}): {ex}", flush=True)
+                        try:
+                            kalan_emirler = exchange.fetch_open_orders(sym)
+                            tp_gerceklesti = len(kalan_emirler) == 0
+                        except Exception:
+                            tp_gerceklesti = False
 
                     if tp_gerceklesti:
                         ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
@@ -360,11 +376,11 @@ def otomatik_arkaplan_tarayici():
                         ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
                         print(f"🛑 [{sym}] SL (Zarar Kes) Tetiklendi!", flush=True)
                         telegram_mesaj_gonder(f"🛑 *ZARAR KESİLDİ (SL)*\n\n📌 *Coin:* `{sym}`\n📊 Durum: Stop seviyesine ulaşıldı.")
-                        for ord_item in kalan_emirler:
-                            try:
+                        try:
+                            for ord_item in exchange.fetch_open_orders(sym):
                                 exchange.cancel_order(ord_item['id'], sym)
-                            except Exception:
-                                pass
+                        except Exception:
+                            pass
 
                     COIN_COOLDOWNLAR[sym] = time.time() + COOLDOWN_SURESI_SANIYE
                     yon_kod = 1 if yon_val == 'LONG' else -1
@@ -554,8 +570,9 @@ def otomatik_arkaplan_tarayici():
 
                 dinamik_kaldirac = 20 if is_altin_atis else 10
                 kasa_orani = 0.25 if is_altin_atis else 0.20
-                hedef_roe = 20.0  # Güncellendi: Artık her iki türde de %20 TP
-                stop_roe = 10.0   # Güncellendi: Artık her iki türde de %10 SL
+                
+                hedef_roe = 20.0  
+                stop_roe = 10.0   
 
                 try:
                     balance = exchange.fetch_balance()
@@ -646,7 +663,8 @@ def otomatik_arkaplan_tarayici():
                     telegram_mesaj_gonder(
                         f"{tur_mesaji} VE BORSA EMRİ GİRİLDİ\n\n"
                         f"📌 *Coin:* `{symbol}` | 📊 *Yön:* `{grid_yonu}`\n"
-                        f"🎯 *Hedef TP:* `%+{hedef_roe}` | *Stop SL:* `-%{stop_roe}` (Kaldıraçlı 🛡️)"
+                        f"⚙️ *Kaldıraç:* `{dinamik_kaldirac}x`\n"
+                        f"🎯 *Hedef TP:* `%+{hedef_roe}` | *Stop SL:* `-%{stop_roe}`"
                     )
                     
                     if is_altin_atis:
