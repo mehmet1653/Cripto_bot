@@ -557,7 +557,7 @@ def otomatik_arkaplan_tarayici():
                     print(f"   ⚠️ {grid_yonu} yönünde maksimum pozisyon sınırına ulaşıldı ({ayni_yon_sayisi}).", flush=True)
                     continue 
 
-                dinamik_kaldirac = 10
+                dinamik_kaldirac = 15 if is_altin_atis else 10
                 kasa_orani = 0.20
 
                 try:
