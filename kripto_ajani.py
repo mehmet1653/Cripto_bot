@@ -150,7 +150,6 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id, symb
         classes = list(ai_model.classes_)
         basari_ihtimali = olasiliklar[classes.index(1)] if 1 in classes else 1.0
         
-        # Filtre esnetildi (%20 başarı ihtimali yeterli)
         return basari_ihtimali >= 0.20
     except Exception:
         return True
@@ -190,6 +189,7 @@ def hacim_ve_likidite_kontrolu(df):
         return True
 
 def tum_emirleri_iptal_et(symbol):
+    # Normal açık emirleri iptal et
     try:
         acik_emirler = exchange.fetch_open_orders(symbol)
         for emir in acik_emirler:
@@ -197,14 +197,13 @@ def tum_emirleri_iptal_et(symbol):
     except Exception:
         pass
 
+    # Gate.io üzerindeki Stop / Koşullu (Trigger) bekleyen emirleri iptal et
     try:
-        if hasattr(exchange, 'fetch_open_stop_orders'):
-            stop_emirler = exchange.fetch_open_stop_orders(symbol)
-            for semir in stop_emirler:
-                exchange.cancel_order(semir['id'], symbol)
+        exchange.cancel_all_orders(symbol, params={'trigger': True})
     except Exception:
         pass
 
+    # Genel tüm emir iptal fonksiyonunu tetikle
     try:
         exchange.cancel_all_orders(symbol)
     except Exception:
