@@ -39,9 +39,10 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
+# Gate.io vadeli tarafta sorunsuz çalışan aktif semboller güncellendi
 TAKIP_EDILENLER = [
     'SOL/USDT:USDT', 'AVAX/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'SUI/USDT:USDT',
-    'NEAR/USDT:USDT', 'LINK/USDT:USDT', 'FET/USDT:USDT'
+    'LINK/USDT:USDT', 'ADA/USDT:USDT', 'ATOM/USDT:USDT'
 ]
 
 COIN_ID_MAP = {
@@ -50,9 +51,9 @@ COIN_ID_MAP = {
     'XRP/USDT:USDT': 3,
     'DOGE/USDT:USDT': 4,
     'SUI/USDT:USDT': 5,
-    'NEAR/USDT:USDT': 6,
-    'LINK/USDT:USDT': 7,
-    'FET/USDT:USDT': 8
+    'LINK/USDT:USDT': 6,
+    'ADA/USDT:USDT': 7,
+    'ATOM/USDT:USDT': 8
 }
 
 BOT_CALISIYOR_MU = True
@@ -303,7 +304,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         AKTIF_GRID_SISTEMLERI.clear()
         hafizayi_kaydet()
-        await update.message.reply_text("✅ Tüm pozisyonlar and hafıza temizlendi.", parse_mode='Markdown')
+        await update.message.reply_text("✅ Tüm pozisyonlar ve hafıza temizlendi.", parse_mode='Markdown')
     except Exception as e:
         AKTIF_GRID_SISTEMLERI.clear()
         hafizayi_kaydet()
