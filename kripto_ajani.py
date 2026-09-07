@@ -124,12 +124,11 @@ def yapay_zekayi_egit_ve_guncelle():
     global ai_model, ai_model_egitildi
     veriler = ANALitik_HAFIZA.get("egitim_verileri", [])
     
-    if len(veriler) < 20:
+    if len(veriler) < 30:
         ai_model_egitildi = False
         return
 
     try:
-        # Son eleman (hedef sonuç) hariç ilk 9 öznitelik X, son eleman y
         X = [item[:9] for item in veriler]
         y = [item[9] for item in veriler]
         if len(set(y)) < 2:
@@ -138,6 +137,7 @@ def yapay_zekayi_egit_ve_guncelle():
             
         ai_model.fit(np.array(X), np.array(y))
         ai_model_egitildi = True
+        print(f"🤖 Yapay zeka modeli güncellendi ve aktif! (Toplam Eğitim Verisi: {len(veriler)})", flush=True)
     except Exception as e:
         print(f"⚠️ Yapay zeka eğitim hatası: {e}", flush=True)
         ai_model_egitildi = False
@@ -151,9 +151,7 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id, deri
         classes = list(ai_model.classes_)
         basari_ihtimali = olasiliklar[classes.index(1)] if 1 in classes else 1.0
         
-        # Piyasaya ve sinyal puanına göre dinamik eşik
-        dinamik_esik = 0.35 if sinyal_puani >= 80 else 0.45
-        
+        dinamik_esik = 0.40 if sinyal_puani >= 90 else 0.50
         return basari_ihtimali >= dinamik_esik
     except Exception:
         return True
@@ -204,19 +202,6 @@ def tum_emirleri_iptal_et(symbol):
         pass
 
     try:
-        kosullu_emirler = exchange.private_futures_get_orders_pending(params={'settle': 'usdt', 'contract': symbol})
-        if isinstance(kosullu_emirler, list):
-            for ko_emir in kosullu_emirler:
-                emir_id = ko_emir.get('id')
-                if emir_id:
-                    try:
-                        exchange.private_futures_delete_orders_pending_order_id({'settle': 'usdt', 'order_id': emir_id})
-                    except Exception:
-                        pass
-    except Exception:
-        pass
-
-    try:
         exchange.cancel_all_orders(symbol)
     except Exception:
         pass
@@ -262,7 +247,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         toplam_islem = basarili_sayisi + basarisiz_sayisi
         basari_orani = (basarili_sayisi / toplam_islem * 100) if toplam_islem > 0 else 0.0
 
-        ai_durum = "Aktif (Eğitildi)" if ai_model_egitildi else f"Veri Bekliyor ({len(ANALitik_HAFIZA.get('egitim_verileri', []))}/20)"
+        ai_durum = f"Aktif (Eğitildi - {len(ANALitik_HAFIZA.get('egitim_verileri', []))} veri)" if ai_model_egitildi else f"Veri Bekliyor ({len(ANALitik_HAFIZA.get('egitim_verileri', []))}/30)"
 
         pozisyon_detaylari = ""
         if borsa_poslari:
@@ -475,10 +460,10 @@ def otomatik_arkaplan_tarayici():
 
                 if tepe_kosulu:
                     grid_yonu = "SHORT"
-                    sinyal_puani = 88
+                    sinyal_puani = 92
                 elif dip_kosulu:
                     grid_yonu = "LONG"
-                    sinyal_puani = 88
+                    sinyal_puani = 92
                 elif guclu_trend_var:
                     grid_yonu = "LONG" if trend_yonu_boga else "SHORT"
                     sinyal_puani = 75
@@ -491,7 +476,8 @@ def otomatik_arkaplan_tarayici():
                     elif grid_yonu == "SHORT" and rsi > 50:
                         sinyal_puani += 20
 
-                is_altin_atis = sinyal_puani >= 85
+                # ALTIN VURUŞ KRİTERİ: 90 ve üzeri puan
+                is_altin_atis = sinyal_puani >= 90
                 ema_fark_val = float(ema7 - ema21)
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
                 coin_id = COIN_ID_MAP.get(symbol, 0)
@@ -602,11 +588,12 @@ def otomatik_arkaplan_tarayici():
                         except Exception:
                             pass
 
+                    # Orijinal oranlar: %1 stop, %2 hedef (Fiyat değişim oranları)
                     stop_oran_fiyat = 0.01  
                     hedef_oran_fiyat = 0.02 
                     
-                    stop_roe = 10.0
-                    hedef_roe = 20.0
+                    stop_roe = stop_oran_fiyat * dinamik_kaldirac * 100
+                    hedef_roe = hedef_oran_fiyat * dinamik_kaldirac * 100
 
                     if grid_yonu == 'LONG':
                         stop_fiyat = giris_fiyati * (1.0 - stop_oran_fiyat)
@@ -652,7 +639,7 @@ def otomatik_arkaplan_tarayici():
                     }
                     hafizayi_kaydet()
                     
-                    islem_tipi_str = "🌟 Altın Vuruş (Yüksek Skor)" if is_altin_atis else "📊 Standart İşlem"
+                    islem_tipi_str = "🌟 Altın Vuruş (+90 Skor)" if is_altin_atis else "📊 Standart İşlem"
 
                     print(f"🚀 İŞLEM AÇILDI & SABİT KORUMA AKTİF: {symbol} | Giriş: {giris_fiyati} | SL: {stop_fiyat} | TP: {hedef_fiyat}", flush=True)
                     telegram_mesaj_gonder(
