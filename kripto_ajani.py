@@ -189,21 +189,33 @@ def hacim_ve_likidite_kontrolu(df):
         return True
 
 def tum_emirleri_iptal_et(symbol):
-    # Normal açık emirleri iptal et
+    # 1. Normal açık emirleri tek tek iptal et (En güvenli yöntem)
     try:
         acik_emirler = exchange.fetch_open_orders(symbol)
         for emir in acik_emirler:
-            exchange.cancel_order(emir['id'], symbol)
+            try:
+                exchange.cancel_order(emir['id'], symbol)
+            except Exception:
+                pass
     except Exception:
         pass
 
-    # Gate.io üzerindeki Stop / Koşullu (Trigger) bekleyen emirleri iptal et
+    # 2. Gate.io Vadeli tarafındaki tetiklenecek (conditional/stop) emirleri kontrol edip iptal et
     try:
-        exchange.cancel_all_orders(symbol, params={'trigger': True})
+        if hasattr(exchange, 'fetch_closed_orders') or True:
+            koşullu_emirler = exchange.private_futures_get_orders_pending(params={'settle': 'usdt', 'contract': symbol})
+            if isinstance(koşullu_emirler, list):
+                for ko emir in koşullu_emirler:
+                    emir_id = ko.get('id')
+                    if emir_id:
+                        try:
+                            exchange.private_futures_delete_orders_pending_order_id({'settle': 'usdt', 'order_id': emir_id})
+                        except Exception:
+                            pass
     except Exception:
         pass
 
-    # Genel tüm emir iptal fonksiyonunu tetikle
+    # 3. Genel toplu iptal denemesi
     try:
         exchange.cancel_all_orders(symbol)
     except Exception:
@@ -554,7 +566,7 @@ def otomatik_arkaplan_tarayici():
                     gercek_ham_miktar = max(round(hesaplanan_kontrat), min_amount)
                     miktar = float(exchange.amount_to_precision(symbol, gercek_ham_miktar))
                     
-                    # --- YENİ EMİR GİRMEDEN ÖNCE ESKİ ARTIKLARI TAMAMEN TEMİZLE ---
+                    # --- YENİ EMİR GİRMEDEN ÖNCE ESKİ ARTIKLARI TEMİZLE ---
                     tum_emirleri_iptal_et(symbol)
 
                     emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
