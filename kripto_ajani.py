@@ -41,7 +41,7 @@ exchange.set_sandbox_mode(True)
 
 TAKIP_EDILENLER = [
     'SOL/USDT:USDT', 'AVAX/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'SUI/USDT:USDT',
-    'NEAR/USDT:USDT', 'LINK/USDT:USDT', 'RENDER/USDT:USDT', 'FET/USDT:USDT'
+    'NEAR/USDT:USDT', 'LINK/USDT:USDT', 'FET/USDT:USDT'
 ]
 
 COIN_ID_MAP = {
@@ -52,8 +52,7 @@ COIN_ID_MAP = {
     'SUI/USDT:USDT': 5,
     'NEAR/USDT:USDT': 6,
     'LINK/USDT:USDT': 7,
-    'RENDER/USDT:USDT': 8,
-    'FET/USDT:USDT': 9
+    'FET/USDT:USDT': 8
 }
 
 BOT_CALISIYOR_MU = True
@@ -304,7 +303,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         AKTIF_GRID_SISTEMLERI.clear()
         hafizayi_kaydet()
-        await update.message.reply_text("✅ Tüm pozisyonlar ve hafıza temizlendi.", parse_mode='Markdown')
+        await update.message.reply_text("✅ Tüm pozisyonlar and hafıza temizlendi.", parse_mode='Markdown')
     except Exception as e:
         AKTIF_GRID_SISTEMLERI.clear()
         hafizayi_kaydet()
@@ -651,7 +650,7 @@ def flask_web_server():
 
 if __name__ == '__main__':
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    threading.Thread(text=flask_web_server, daemon=True).start() # Not: daemon=True kaldı
+    threading.Thread(target=flask_web_server, daemon=True).start()
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
