@@ -39,23 +39,20 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-# Hata veren ATOM listeden çıkarıldı veya düzgün formata alındı
+# BTC ve ETH test ortamı sorunları nedeniyle listeden çıkarıldı
 TAKIP_EDILENLER = [
-    'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'AVAX/USDT:USDT', 
-    'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'SUI/USDT:USDT', 'LINK/USDT:USDT', 
-    'ADA/USDT:USDT'
+    'SOL/USDT:USDT', 'AVAX/USDT:USDT', 'XRP/USDT:USDT', 
+    'DOGE/USDT:USDT', 'SUI/USDT:USDT', 'LINK/USDT:USDT', 'ADA/USDT:USDT'
 ]
 
 COIN_ID_MAP = {
-    'BTC/USDT:USDT': 1,
-    'ETH/USDT:USDT': 2,
-    'SOL/USDT:USDT': 3,
-    'AVAX/USDT:USDT': 4,
-    'XRP/USDT:USDT': 5,
-    'DOGE/USDT:USDT': 6,
-    'SUI/USDT:USDT': 7,
-    'LINK/USDT:USDT': 8,
-    'ADA/USDT:USDT': 9
+    'SOL/USDT:USDT': 1,
+    'AVAX/USDT:USDT': 2,
+    'XRP/USDT:USDT': 3,
+    'DOGE/USDT:USDT': 4,
+    'SUI/USDT:USDT': 5,
+    'LINK/USDT:USDT': 6,
+    'ADA/USDT:USDT': 7
 }
 
 BOT_CALISIYOR_MU = True
@@ -153,7 +150,7 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id, symb
         classes = list(ai_model.classes_)
         basari_ihtimali = olasiliklar[classes.index(1)] if 1 in classes else 1.0
         
-        # Eşik değeri %35'ten %20'ye düşürüldü (daha esnek olması için)
+        # Filtre esnetildi (%20 başarı ihtimali yeterli)
         return basari_ihtimali >= 0.20
     except Exception:
         return True
