@@ -188,6 +188,28 @@ def hacim_ve_likidite_kontrolu(df):
     except Exception:
         return True
 
+def tum_emirleri_iptal_et(symbol):
+    """Bir coine ait hem normal açık emirleri hem de koşullu (stop/tp) emirleri tamamen temizler."""
+    try:
+        acik_emirler = exchange.fetch_open_orders(symbol)
+        for emir in acik_emirler:
+            exchange.cancel_order(emir['id'], symbol)
+    except Exception:
+        pass
+
+    try:
+        if hasattr(exchange, 'fetch_open_stop_orders'):
+            stop_emirler = exchange.fetch_open_stop_orders(symbol)
+            for semir in stop_emirler:
+                exchange.cancel_order(semir['id'], symbol)
+    except Exception:
+        pass
+
+    try:
+        exchange.cancel_all_orders(symbol)
+    except Exception:
+        pass
+
 def telegram_mesaj_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID:
         return
@@ -277,11 +299,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 symbol = pos['symbol']
                 yon = str(pos.get('side', '')).upper()
                 kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
-                try:
-                    for ord_item in exchange.fetch_open_orders(symbol):
-                        exchange.cancel_order(ord_item['id'], symbol)
-                except Exception:
-                    pass
+                tum_emirleri_iptal_et(symbol)
                 exchange.create_order(symbol, 'market', kapatma_yonu, kontrat, None, {'reduce_only': True})
                 telegram_mesaj_gonder(f"🛑 *MANUEL KAPATMA* - `{symbol}` pozisyonu kapatıldı.")
         
@@ -326,11 +344,7 @@ def otomatik_arkaplan_tarayici():
                     
                     basarili_islem = False
                     try:
-                        try:
-                            for ord_item in exchange.fetch_open_orders(sym):
-                                exchange.cancel_order(ord_item['id'], sym)
-                        except Exception:
-                            pass
+                        tum_emirleri_iptal_et(sym)
 
                         my_trades = exchange.fetch_my_trades(sym, limit=3)
                         if my_trades:
@@ -516,12 +530,8 @@ def otomatik_arkaplan_tarayici():
                     gercek_ham_miktar = max(round(hesaplanan_kontrat), min_amount)
                     miktar = float(exchange.amount_to_precision(symbol, gercek_ham_miktar))
                     
-                    try:
-                        eski_emirler = exchange.fetch_open_orders(symbol)
-                        for em in eski_emirler:
-                            exchange.cancel_order(em['id'], symbol)
-                    except Exception:
-                        pass
+                    # --- YENİ EMİR GİRMEDEN ÖNCE ESKİ ARTIKLARI TAMAMEN TEMİZLE ---
+                    tum_emirleri_iptal_et(symbol)
 
                     emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
                     exchange.create_order(symbol, 'market', emir_yonu, miktar)
@@ -541,11 +551,8 @@ def otomatik_arkaplan_tarayici():
                             pass
 
                     # --- ATR BAZLI SABİT RİSK/ÖDÜL HESAPLAMASI ---
-                    # O anki piyasa oynaklığına göre stop mesafesini belirliyoruz (Minimum %1.2 güvenlik payı)
                     atr_taban_stop_yuzde = max(atr_yuzdesi * 1.5, 1.2)
                     stop_oran_fiyat = atr_taban_stop_yuzde / 100.0
-                    
-                    # 1:2 Risk/Ödül Oranı (Stopun 2 katı Hedef TP)
                     hedef_oran_fiyat = stop_oran_fiyat * 2.0
                     
                     stop_roe = atr_taban_stop_yuzde * dinamik_kaldirac
@@ -563,7 +570,7 @@ def otomatik_arkaplan_tarayici():
                     stop_fiyat = float(exchange.price_to_precision(symbol, stop_fiyat))
                     hedef_fiyat = float(exchange.price_to_precision(symbol, hedef_fiyat))
 
-                    # Borsa Emirleri (Breakeven kaldırıldı, baştan sabit giriliyor)
+                    # Borsa Emirleri
                     stop_params = {
                         'stopPrice': stop_fiyat,
                         'triggerPrice': stop_fiyat,
