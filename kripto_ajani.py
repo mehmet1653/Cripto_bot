@@ -154,6 +154,16 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id, symb
     except Exception:
         return True
 
+def acik_emirleri_iptal_et(symbol):
+    try:
+        open_orders = exchange.fetch_open_orders(symbol)
+        for order in open_orders:
+            order_id = order['id']
+            exchange.cancel_order(order_id, symbol)
+            print(f"🧹 İptal Edildi: {symbol} - Emir ID: {order_id}", flush=True)
+    except Exception as e:
+        print(f"⚠️ Emirler iptal edilirken hata oluştu ({symbol}): {e}", flush=True)
+
 def atr_ve_volatilite_hesapla(df, period=14):
     try:
         atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=period).average_true_range().iloc[-1]
@@ -277,11 +287,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 symbol = pos['symbol']
                 yon = str(pos.get('side', '')).upper()
                 kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
-                try:
-                    for ord_item in exchange.fetch_open_orders(symbol):
-                        exchange.cancel_order(ord_item['id'], symbol)
-                except Exception:
-                    pass
+                acik_emirleri_iptal_et(symbol)
                 exchange.create_order(symbol, 'market', kapatma_yonu, kontrat, None, {'reduce_only': True})
                 telegram_mesaj_gonder(f"🛑 *MANUEL KAPATMA* - `{symbol}` pozisyonu kapatıldı.")
         
@@ -327,11 +333,7 @@ def otomatik_arkaplan_tarayici():
                     basarili_islem = False
                     try:
                         # Pozisyon kapandığında o coine ait kalan TÜM bekleyen/koşullu/limit/stop emirlerini temizle
-                        try:
-                            for ord_item in exchange.fetch_open_orders(sym):
-                                exchange.cancel_order(ord_item['id'], sym)
-                        except Exception:
-                            pass
+                        acik_emirleri_iptal_et(sym)
 
                         my_trades = exchange.fetch_my_trades(sym, limit=3)
                         if my_trades:
@@ -561,12 +563,7 @@ def otomatik_arkaplan_tarayici():
                     miktar = float(exchange.amount_to_precision(symbol, gercek_ham_miktar))
                     
                     # İşlem açmadan önce o coin'e ait kalmış olabilecek TÜM eski emirleri temizleyelim (Mükerrer önlemi)
-                    try:
-                        eski_emirler = exchange.fetch_open_orders(symbol)
-                        for em in eski_emirler:
-                            exchange.cancel_order(em['id'], symbol)
-                    except Exception:
-                        pass
+                    acik_emirleri_iptal_et(symbol)
 
                     emir_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
                     exchange.create_order(symbol, 'market', emir_yonu, miktar)
