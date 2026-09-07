@@ -313,21 +313,25 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 Gelişmiş Hibrit Tarayıcı ve Canlı Log Modu Aktif.", flush=True)
+    print("🚀 [BAŞLANGIÇ] Gelişmiş Hibrit Tarayıcı ve Canlı Log Modu Devrede.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
     except Exception as e:
         print(f"⚠️ Piyasalar yüklenemedi: {e}", flush=True)
     
+    tur_sayaci = 0
     while True:
         try:
+            tur_sayaci += 1
             zaman_str = datetime.now().strftime('%H:%M:%S')
-            print(f"[{zaman_str}] 🔄 Piyasa tarama turu başladı...", flush=True)
+            print(f"\n==================================================", flush=True)
+            print(f"[{zaman_str}] 🔄 TARAMA TURU BAŞLADI (Tur #{tur_sayaci})", flush=True)
+            print(f"==================================================", flush=True)
 
             if not BOT_CALISIYOR_MU:
                 print(f"[{zaman_str}] ⏸️ Bot durdurulmuş durumda (Bekliyor).", flush=True)
-                time.sleep(3)
+                time.sleep(5)
                 continue
 
             try:
@@ -337,6 +341,7 @@ def otomatik_arkaplan_tarayici():
                     kontrat = float(p.get('contracts', 0) or p.get('size', 0) or 0)
                     if kontrat > 0:
                         aktif_borsa_map[p['symbol']] = p
+                print(f"📌 Borsa Üzerindeki Aktif Pozisyon Sayısı: {len(aktif_borsa_map)}", flush=True)
             except Exception as e:
                 print(f"⚠️ Pozisyonlar çekilirken hata: {e}", flush=True)
                 aktif_borsa_map = {}
@@ -344,6 +349,7 @@ def otomatik_arkaplan_tarayici():
             # --- KAPATILAN POZİSYONLARI GERÇEK PNL KONTROLÜ İLE YAKALAMA ---
             for sym in list(AKTIF_GRID_SISTEMLERI.keys()):
                 if sym not in aktif_borsa_map:
+                    print(f"🔍 Pozisyon Kapandı Algılandı: {sym} kontrol ediliyor...", flush=True)
                     kayitli_veri = AKTIF_GRID_SISTEMLERI.pop(sym)
                     
                     basarili_islem = False
@@ -399,27 +405,28 @@ def otomatik_arkaplan_tarayici():
             taranan_sinyaller = []
             su_anki_zaman = time.time()
 
+            print(f"👀 Takip edilen {len(TAKIP_EDILENLER)} coin taranıyor...", flush=True)
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU:
                     break
                 if symbol in aktif_borsa_map:
-                    print(f"   ℹ️ {symbol} için aktif pozisyon zaten var, taranmıyor.", flush=True)
+                    print(f"   ℹ️ [{symbol}] Aktif pozisyon var, pas geçiliyor.", flush=True)
                     continue
 
                 bitis_zamani = COIN_COOLDOWNLAR.get(symbol, 0)
                 if su_anki_zaman < bitis_zamani:
                     kalan_dakika = int((bitis_zamani - su_anki_zaman) / 60)
-                    print(f"   ⏳ {symbol} cooldown süresinde (Kalan: ~{kalan_dakika} dk)", flush=True)
+                    print(f"   ⏳ [{symbol}] Cooldown süresinde (Kalan: ~{kalan_dakika} dk)", flush=True)
                     continue
 
                 try:
-                    print(f"   🔍 Analiz ediliyor: {symbol}...", flush=True)
+                    print(f"   🔍 [{symbol}] Veriler çekiliyor ve analiz ediliyor...", flush=True)
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
                     ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     
                     if not hacim_ve_likidite_kontrolu(df_15m):
-                        print(f"      ⚠️ {symbol} hacim/likidite kriterini karşılamadı.", flush=True)
+                        print(f"      ⚠️ [{symbol}] Hacim/likidite yetersiz.", flush=True)
                         continue
 
                     ema7 = ta.trend.ema_indicator(df_15m['close'], window=7).iloc[-1]
@@ -436,7 +443,7 @@ def otomatik_arkaplan_tarayici():
                     degisim_yuzdesi = ((guncel_fiyat - fiyat_10_mum_once) / fiyat_10_mum_once) * 100
                     derinlik_durumu = emir_defteri_derinlik_analizi(symbol)
                 except Exception as e:
-                    print(f"      ❌ {symbol} verileri çekilirken hata: {e}", flush=True)
+                    print(f"      ❌ [{symbol}] Veri çekme hatası: {e}", flush=True)
                     continue
 
                 sinyal_puani = 50
@@ -472,10 +479,10 @@ def otomatik_arkaplan_tarayici():
                 coin_id = COIN_ID_MAP.get(symbol, 0)
                 
                 if not yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod, atr_yuzdesi, coin_id, symbol):
-                    print(f"      🤖 {symbol} ({grid_yonu}) Yapay Zeka filtresinden geçemedi.", flush=True)
+                    print(f"      🤖 [{symbol}] ({grid_yonu}) Yapay Zeka filtresinden GEÇEMEDİ.", flush=True)
                     continue
 
-                print(f"      ✅ Sinyal Bulundu -> {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
+                print(f"      ✅ [{symbol}] Sinyal Uygun -> Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
                 taranan_sinyaller.append({
                     "symbol": symbol,
                     "puan": sinyal_puani,
@@ -489,6 +496,7 @@ def otomatik_arkaplan_tarayici():
                 })
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
+            print(f"🎯 Toplam geçerli sinyal sayısı: {len(taranan_sinyaller)}", flush=True)
 
             # --- EN İYİ SİNYAL İLE İŞLEM AÇMA VE SABİT ATR STOP/TP EMİRLERİ ---
             for sinyal in taranan_sinyaller:
@@ -506,7 +514,7 @@ def otomatik_arkaplan_tarayici():
                 is_altin_atis = sinyal["altin_atis"]
 
                 if sinyal_puani < 65 and not is_altin_atis:
-                    print(f"   ℹ️ {symbol} puanı ({sinyal_puani}) eşik değerin altında, işlem açılmadı.", flush=True)
+                    print(f"   ℹ️ [{symbol}] Puanı ({sinyal_puani}) eşik altında, işlem açılmadı.", flush=True)
                     continue
 
                 izin_verilen_maks_poz = MAKSIMUM_TOPLAM_POZISYON + 1 if is_altin_atis else MAKSIMUM_TOPLAM_POZISYON
@@ -517,7 +525,7 @@ def otomatik_arkaplan_tarayici():
 
                 ayni_yon_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == grid_yonu)
                 if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
-                    print(f"   ⚠️ {grid_yonu} yönünde maksimum pozisyon sayısına ulaşıldı ({ayni_yon_sayisi}).", flush=True)
+                    print(f"   ⚠️ {grid_yonu} yönünde maksimum pozisyon sınırına ulaşıldı ({ayni_yon_sayisi}).", flush=True)
                     continue 
 
                 dinamik_kaldirac = 10
@@ -585,7 +593,7 @@ def otomatik_arkaplan_tarayici():
                     stop_fiyat = float(exchange.price_to_precision(symbol, stop_fiyat))
                     hedef_fiyat = float(exchange.price_to_precision(symbol, hedef_fiyat))
 
-                    # Borsa Emirleri (Gate.io sapma hatasını önlemek için price_type eklendi)
+                    # Borsa Emirleri
                     stop_params = {
                         'stopPrice': stop_fiyat,
                         'triggerPrice': stop_fiyat,
@@ -599,7 +607,7 @@ def otomatik_arkaplan_tarayici():
                         exchange.create_order(symbol, 'stop_market', kapatma_yonu, miktar, stop_fiyat, stop_params)
 
                     hedef_params = {
-                        'reduceOnly':` True
+                        'reduceOnly': True
                     }
                     exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, hedef_fiyat, hedef_params)
 
@@ -635,7 +643,7 @@ def otomatik_arkaplan_tarayici():
         except Exception as e:
             print(f"⚠️ Tarayıcı döngü genel hatası: {e}", flush=True)
             
-        print(f"💤 Tur tamamlandı, bir sonraki tarama için 10 saniye bekleniyor...", flush=True)
+        print(f"💤 Tur tamamlandı. Bot aktif, 10 saniye sonra yeni tur başlayacak...", flush=True)
         time.sleep(10)
 
 def flask_web_server():
