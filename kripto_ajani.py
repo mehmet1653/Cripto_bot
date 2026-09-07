@@ -189,7 +189,7 @@ def hacim_ve_likidite_kontrolu(df):
         return True
 
 def tum_emirleri_iptal_et(symbol):
-    # 1. Normal açık emirleri tek tek iptal et (En güvenli yöntem)
+    # 1. Normal açık emirleri tek tek iptal et
     try:
         acik_emirler = exchange.fetch_open_orders(symbol)
         for emir in acik_emirler:
@@ -202,16 +202,15 @@ def tum_emirleri_iptal_et(symbol):
 
     # 2. Gate.io Vadeli tarafındaki tetiklenecek (conditional/stop) emirleri kontrol edip iptal et
     try:
-        if hasattr(exchange, 'fetch_closed_orders') or True:
-            koşullu_emirler = exchange.private_futures_get_orders_pending(params={'settle': 'usdt', 'contract': symbol})
-            if isinstance(koşullu_emirler, list):
-                for ko emir in koşullu_emirler:
-                    emir_id = ko.get('id')
-                    if emir_id:
-                        try:
-                            exchange.private_futures_delete_orders_pending_order_id({'settle': 'usdt', 'order_id': emir_id})
-                        except Exception:
-                            pass
+        kosullu_emirler = exchange.private_futures_get_orders_pending(params={'settle': 'usdt', 'contract': symbol})
+        if isinstance(kosullu_emirler, list):
+            for ko_emir in kosullu_emirler:
+                emir_id = ko_emir.get('id')
+                if emir_id:
+                    try:
+                        exchange.private_futures_delete_orders_pending_order_id({'settle': 'usdt', 'order_id': emir_id})
+                    except Exception:
+                        pass
     except Exception:
         pass
 
