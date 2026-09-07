@@ -189,7 +189,6 @@ def hacim_ve_likidite_kontrolu(df):
         return True
 
 def tum_emirleri_iptal_et(symbol):
-    """Bir coine ait hem normal açık emirleri hem de koşullu (stop/tp) emirleri tamamen temizler."""
     try:
         acik_emirler = exchange.fetch_open_orders(symbol)
         for emir in acik_emirler:
@@ -505,7 +504,6 @@ def otomatik_arkaplan_tarayici():
                 if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
                     continue 
 
-                # Altın Vuruş dahil tüm işlemleri standart 10x kaldıraç ve ~%10 stop oranına sabitliyoruz
                 dinamik_kaldirac = 10
                 kasa_orani = 0.20
 
@@ -552,8 +550,8 @@ def otomatik_arkaplan_tarayici():
                             pass
 
                     # --- STANDARTLAŞTIRILMIŞ SABİT RİSK/ÖDÜL HESAPLAMASI (%10 Stop, %20 Hedef ROE) ---
-                    stop_oran_fiyat = 0.01  # Fiyat bazında %1 hareket
-                    hedef_oran_fiyat = 0.02 # Fiyat bazında %2 hareket
+                    stop_oran_fiyat = 0.01  
+                    hedef_oran_fiyat = 0.02 
                     
                     stop_roe = 10.0
                     hedef_roe = 20.0
@@ -570,14 +568,18 @@ def otomatik_arkaplan_tarayici():
                     stop_fiyat = float(exchange.price_to_precision(symbol, stop_fiyat))
                     hedef_fiyat = float(exchange.price_to_precision(symbol, hedef_fiyat))
 
-                    # Borsa Emirleri
+                    # Borsa Emirleri (Gate.io sapma hatasını önlemek için price_type eklendi)
                     stop_params = {
                         'stopPrice': stop_fiyat,
                         'triggerPrice': stop_fiyat,
                         'reduceOnly': True,
-                        'is_stop': True
+                        'price_type': 'mark_price'
                     }
-                    exchange.create_order(symbol, 'stop_market', kapatma_yonu, miktar, stop_fiyat, stop_params)
+                    
+                    try:
+                        exchange.create_order(symbol, 'stop', kapatma_yonu, miktar, stop_fiyat, stop_params)
+                    except Exception:
+                        exchange.create_order(symbol, 'stop_market', kapatma_yonu, miktar, stop_fiyat, stop_params)
 
                     hedef_params = {
                         'reduceOnly': True
