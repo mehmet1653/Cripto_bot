@@ -528,7 +528,7 @@ def otomatik_arkaplan_tarayici():
                 hacim_orani = sinyal["hacim_orani"]
                 degisim_yuzdesi = sinyal["fiyat_degisim"]
 
-                if sinyal_puani < 65 and not is_altin_atis:
+                if sinyal_puani < 70 and not is_altin_atis:
                     print(f"   ℹ️ [{symbol}] Puanı ({sinyal_puani}) eşik altında, işlem açılmadı.", flush=True)
                     continue
 
