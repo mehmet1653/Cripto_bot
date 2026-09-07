@@ -39,21 +39,23 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-# Gate.io vadeli tarafta sorunsuz çalışan aktif semboller güncellendi
+# Hata veren ATOM listeden çıkarıldı veya düzgün formata alındı
 TAKIP_EDILENLER = [
-    'SOL/USDT:USDT', 'AVAX/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'SUI/USDT:USDT',
-    'LINK/USDT:USDT', 'ADA/USDT:USDT', 'ATOM/USDT:USDT'
+    'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'AVAX/USDT:USDT', 
+    'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'SUI/USDT:USDT', 'LINK/USDT:USDT', 
+    'ADA/USDT:USDT'
 ]
 
 COIN_ID_MAP = {
-    'SOL/USDT:USDT': 1,
-    'AVAX/USDT:USDT': 2,
-    'XRP/USDT:USDT': 3,
-    'DOGE/USDT:USDT': 4,
-    'SUI/USDT:USDT': 5,
-    'LINK/USDT:USDT': 6,
-    'ADA/USDT:USDT': 7,
-    'ATOM/USDT:USDT': 8
+    'BTC/USDT:USDT': 1,
+    'ETH/USDT:USDT': 2,
+    'SOL/USDT:USDT': 3,
+    'AVAX/USDT:USDT': 4,
+    'XRP/USDT:USDT': 5,
+    'DOGE/USDT:USDT': 6,
+    'SUI/USDT:USDT': 7,
+    'LINK/USDT:USDT': 8,
+    'ADA/USDT:USDT': 9
 }
 
 BOT_CALISIYOR_MU = True
@@ -150,7 +152,9 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id, symb
         olasiliklar = ai_model.predict_proba(np.array([[rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id]]))[0]
         classes = list(ai_model.classes_)
         basari_ihtimali = olasiliklar[classes.index(1)] if 1 in classes else 1.0
-        return basari_ihtimali >= 0.35
+        
+        # Eşik değeri %35'ten %20'ye düşürüldü (daha esnek olması için)
+        return basari_ihtimali >= 0.20
     except Exception:
         return True
 
