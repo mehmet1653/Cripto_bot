@@ -505,8 +505,9 @@ def otomatik_arkaplan_tarayici():
                 if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
                     continue 
 
-                dinamik_kaldirac = 20 if is_altin_atis else 10
-                kasa_orani = 0.25 if is_altin_atis else 0.20
+                # Altın Vuruş dahil tüm işlemleri standart 10x kaldıraç ve ~%10 stop oranına sabitliyoruz
+                dinamik_kaldirac = 10
+                kasa_orani = 0.20
 
                 try:
                     balance = exchange.fetch_balance()
@@ -550,13 +551,12 @@ def otomatik_arkaplan_tarayici():
                         except Exception:
                             pass
 
-                    # --- ATR BAZLI SABİT RİSK/ÖDÜL HESAPLAMASI ---
-                    atr_taban_stop_yuzde = max(atr_yuzdesi * 1.5, 1.2)
-                    stop_oran_fiyat = atr_taban_stop_yuzde / 100.0
-                    hedef_oran_fiyat = stop_oran_fiyat * 2.0
+                    # --- STANDARTLAŞTIRILMIŞ SABİT RİSK/ÖDÜL HESAPLAMASI (%10 Stop, %20 Hedef ROE) ---
+                    stop_oran_fiyat = 0.01  # Fiyat bazında %1 hareket
+                    hedef_oran_fiyat = 0.02 # Fiyat bazında %2 hareket
                     
-                    stop_roe = atr_taban_stop_yuzde * dinamik_kaldirac
-                    hedef_roe = stop_roe * 2.0
+                    stop_roe = 10.0
+                    hedef_roe = 20.0
 
                     if grid_yonu == 'LONG':
                         stop_fiyat = giris_fiyati * (1.0 - stop_oran_fiyat)
@@ -598,7 +598,7 @@ def otomatik_arkaplan_tarayici():
                     
                     islem_tipi_str = "🌟 Altın Vuruş (Yüksek Skor)" if is_altin_atis else "📊 Standart İşlem"
 
-                    print(f"🚀 İŞLEM AÇILDI & SABİT ATR SL/TP AKTİF: {symbol} | Giriş: {giris_fiyati} | SL: {stop_fiyat} | TP: {hedef_fiyat}", flush=True)
+                    print(f"🚀 İŞLEM AÇILDI & SABİT KORUMA AKTİF: {symbol} | Giriş: {giris_fiyati} | SL: {stop_fiyat} | TP: {hedef_fiyat}", flush=True)
                     telegram_mesaj_gonder(
                         f"⚡ *İŞLEM AÇILDI VE SABİT KORUMA AKTİF*\n\n"
                         f"📌 *Coin:* `{symbol}` | 📊 *Yön:* `{grid_yonu}`\n"
