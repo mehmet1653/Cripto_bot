@@ -326,6 +326,7 @@ def otomatik_arkaplan_tarayici():
                     
                     basarili_islem = False
                     try:
+                        # Pozisyon kapandığında o coine ait kalan TÜM bekleyen/koşullu/limit/stop emirlerini temizle
                         try:
                             for ord_item in exchange.fetch_open_orders(sym):
                                 exchange.cancel_order(ord_item['id'], sym)
