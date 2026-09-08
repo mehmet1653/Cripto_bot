@@ -588,16 +588,15 @@ def otomatik_arkaplan_tarayici():
                         except Exception:
                             pass
 
-                    # Oranlar: Standart veya Altın Vuruş ayrımı
-                    if is_altin_atis:
-                        stop_oran_fiyat = 0.10  # %10 Zarar
-                        hedef_oran_fiyat = 0.20 # %20 Kâr
-                    else:
-                        stop_oran_fiyat = 0.01  # %1 Zarar
-                        hedef_oran_fiyat = 0.02 # %2 Kâr
+                    # ==========================================
+                    # SABİT HEDEF VE STOP ORANLARI (%20 Kâr, %10 Zarar ROE)
+                    # ==========================================
+                    hedef_roe = 20.0  # %20 Kâr
+                    stop_roe = 10.0   # %10 Zarar
                     
-                    stop_roe = stop_oran_fiyat * dinamik_kaldirac * 100
-                    hedef_roe = hedef_oran_fiyat * dinamik_kaldirac * 100
+                    # Kaldıraç oranına bölünerek doğru fiyat değişim yüzdesi elde edilir
+                    hedef_oran_fiyat = (hedef_roe / 100.0) / dinamik_kaldirac
+                    stop_oran_fiyat = (stop_roe / 100.0) / dinamik_kaldirac
 
                     if grid_yonu == 'LONG':
                         stop_fiyat = giris_fiyati * (1.0 - stop_oran_fiyat)
