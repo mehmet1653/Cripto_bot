@@ -143,6 +143,8 @@ def yapay_zeka_islem_onayi(features):
 
 def atr_ve_volatilite_hesapla(df, period=14):
     try:
+        if len(df) < period:
+            return 1.5
         atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=period).average_true_range().iloc[-1]
         fiyat = df['close'].iloc[-1]
         return float((atr / fiyat) * 100)
@@ -151,6 +153,8 @@ def atr_ve_volatilite_hesapla(df, period=14):
 
 def bollinger_bandwidth_hesapla(df, window=20):
     try:
+        if len(df) < window:
+            return 0.05
         indicator = ta.volatility.BollingerBands(df['close'], window=window, window_dev=2)
         upper = indicator.bollinger_hband().iloc[-1]
         lower = indicator.bollinger_lband().iloc[-1]
@@ -379,7 +383,10 @@ def otomatik_arkaplan_tarayici():
                 # --- 2. GRID MODUNDA SAHTE KIRILIM / TREND PATLAMASI KONTROLÜ ---
                 elif veri.get("mod") == "GRID":
                     try:
-                        df_1h = pd.DataFrame(exchange.fetch_ohlcv(sym, timeframe='1h', limit=20), columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                        ohlcv_data = exchange.fetch_ohlcv(sym, timeframe='1h', limit=50)
+                        if len(ohlcv_data) < 20:
+                            continue
+                        df_1h = pd.DataFrame(ohlcv_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                         adx_val = float(ta.trend.ADXIndicator(df_1h['high'], df_1h['low'], df_1h['close'], window=14).adx().iloc[-1])
                         guncel_fiyat = df_1h['close'].iloc[-1]
                         merkez = veri.get("merkez_fiyat", guncel_fiyat)
@@ -411,8 +418,14 @@ def otomatik_arkaplan_tarayici():
 
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
-                    df_15m = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50), columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    df_1h = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50), columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    
+                    ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
+                    ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
+                    if len(ohlcv_15m) < 20 or len(ohlcv_1h) < 50:
+                        continue
+
+                    df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
                     ema50_1h = ta.trend.ema_indicator(df_1h['close'], window=50).iloc[-1]
                     trend_boga = df_1h['close'].iloc[-1] > ema50_1h
@@ -538,7 +551,6 @@ def otomatik_arkaplan_tarayici():
                         tum_emirleri_iptal_et(symbol)
 
                         for i in range(kademe_sayisi):
-                            # Sapma sınırını aşmamak için kademeleri anlık fiyata yakın başlatıyoruz (%0.3 adımlarla)
                             kademe_fiyat = guncel_fiyat * (1.0 - ((i + 1) * 0.003))
                             kademe_fiyat = float(exchange.price_to_precision(symbol, kademe_fiyat))
                             
