@@ -50,6 +50,19 @@ MARJIN_ORANI = 0.20
 MAKSIMUM_TOPLAM_POZISYON = 3
 COOLDOWN_SURESI_SANIYE = 10 * 60
 
+# ==================== TELEGRAM FONKSİYONU (GÜVENLİ) ====================
+def telegram_mesaj_gonder(mesaj):
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        print("⚠️ Telegram Token veya Chat ID eksik!", flush=True)
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    try:
+        response = requests.post(url, json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}, timeout=15)
+        if response.status_code != 200:
+            print(f"⚠️ Telegram mesaj hatası (Kod {response.status_code}): {response.text}", flush=True)
+    except Exception as e:
+        print(f"⚠️ Telegram bağlantı istisnası: {e}", flush=True)
+
 # ==================== SUPABASE HAFIZA FONKSİYONLARI ====================
 def hafizayi_yukle():
     varsayilan = {
@@ -70,8 +83,8 @@ def hafizayi_yukle():
                 "analitik": veri.get("analitik", varsayilan["analitik"]),
                 "cooldownlar": veri.get("cooldownlar", {})
             }
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"⚠️ Hafıza yükleme hatası: {e}", flush=True)
     
     try:
         supabase.table("bot_hafiza").upsert({"id": 1, **varsayilan}).execute()
@@ -88,8 +101,8 @@ def hafizayi_kaydet():
             "analitik": ANALITIK_HAFIZA,
             "cooldownlar": COIN_COOLDOWNLAR
         }).execute()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"⚠️ Hafıza kaydetme hatası: {e}", flush=True)
 
 kalici_veri = hafizayi_yukle()
 AKTIF_SISTEMLER = kalici_veri.get("aktif_sistemler", {})
@@ -99,6 +112,41 @@ ANALITIK_HAFIZA = kalici_veri.get("analitik", {
     "egitim_verileri": []
 })
 COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
+
+# ==================== BORSA SENKRONİZASYON FONKSİYONU ====================
+def hafizayi_borsa_ile_senkronize_et():
+    global AKTIF_SISTEMLER
+    try:
+        exchange.load_markets()
+        raw_positions = exchange.fetch_positions()
+        borsa_poslari = {p['symbol']: p for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0}
+        
+        guncellendi = False
+        for symbol in TAKIP_EDILENLER:
+            acik_emirler = []
+            try:
+                acik_emirler = exchange.fetch_open_orders(symbol)
+            except Exception:
+                pass
+
+            # Eğer borsa üzerinde pozisyon varsa veya grid için açık limit emirler dizilmişse hafızaya işle
+            if symbol in borsa_poslari and symbol not in AKTIF_SISTEMLER:
+                pos = borsa_poslari[symbol]
+                yon = str(pos.get('side', '')).upper()
+                AKTIF_SISTEMLER[symbol] = {"mod": "TREND", "yon": yon}
+                guncellendi = True
+            elif len(acik_emirler) > 0 and symbol not in AKTIF_SISTEMLER:
+                AKTIF_SISTEMLER[symbol] = {"mod": "GRID"}
+                guncellendi = True
+            elif symbol in AKTIF_SISTEMLER and symbol not in borsa_poslari and len(acik_emirler) == 0:
+                AKTIF_SISTEMLER.pop(symbol, None)
+                guncellendi = True
+
+        if guncellendi:
+            hafizayi_kaydet()
+            print("🔄 Hafıza borsa durumu ile senkronize edildi.", flush=True)
+    except Exception as e:
+        print(f"⚠️ Senkronizasyon hatası: {e}", flush=True)
 
 # ==================== YAPAY ZEKA MODELİ ====================
 ai_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
@@ -171,15 +219,6 @@ def tum_emirleri_iptal_et(symbol):
     except Exception:
         pass
 
-def telegram_mesaj_gonder(mesaj):
-    if not TELEGRAM_TOKEN or not CHAT_ID:
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    try:
-        requests.post(url, json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}, timeout=10)
-    except Exception:
-        pass
-
 @app.route('/')
 def home():
     return f"Hibrit Trend & Grid Testnet Bot Aktif | Aktif Sistemler: {len(AKTIF_SISTEMLER)}"
@@ -198,6 +237,7 @@ def set_leverage_and_margin_safely(symbol, leverage):
 # ==================== TELEGRAM KOMUTLARI ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
+        hafizayi_borsa_il_senk = hafizayi_borsa_ile_senkronize_et()
         balance = exchange.fetch_balance()
         total = float(balance['total'].get('USDT', 0))
         try:
@@ -246,7 +286,7 @@ async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏸️ *Bot Durduruldu.*", parse_mode='Markdown')
 
 async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 *Tüm emirler and pozisyonlar temizleniyor...*", parse_mode='Markdown')
+    await update.message.reply_text("🔄 *Tüm emirler ve pozisyonlar temizleniyor...*", parse_mode='Markdown')
     try:
         for pos in exchange.fetch_positions():
             kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
@@ -278,6 +318,7 @@ def otomatik_arkaplan_tarayici():
         pass
     
     yapay_zekayi_egit_ve_guncelle()
+    hafizayi_borsa_ile_senkronize_et()
     
     while True:
         try:
@@ -471,7 +512,6 @@ def otomatik_arkaplan_tarayici():
                         print(f"❌ Trend emir hatası: {e}", flush=True)
 
                 elif mod == "GRID":
-                    # Testnet için 5 Kademeli Gerçek Limit Alım ve Satış Emirleri (reduce_only kaldırıldı)
                     try:
                         kademe_sayisi = 5
                         hedef_marjin = (toplam_bakiye * 0.15) / kademe_sayisi 
