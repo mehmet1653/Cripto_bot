@@ -173,15 +173,12 @@ def tum_emirleri_iptal_et(symbol):
 
 def telegram_mesaj_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("⚠️ Telegram Token veya Chat ID eksik!", flush=True)
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
-        response = requests.post(url, json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}, timeout=15)
-        if response.status_code != 200:
-            print(f"⚠️ Telegram mesaj hatası (Kod {response.status_code}): {response.text}", flush=True)
-    except Exception as e:
-        print(f"⚠️ Telegram bağlantı istisnası: {e}", flush=True)
+        requests.post(url, json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}, timeout=10)
+    except Exception:
+        pass
 
 @app.route('/')
 def home():
@@ -249,7 +246,7 @@ async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏸️ *Bot Durduruldu.*", parse_mode='Markdown')
 
 async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 *Tüm emirler ve pozisyonlar temizleniyor...*", parse_mode='Markdown')
+    await update.message.reply_text("🔄 *Tüm emirler and pozisyonlar temizleniyor...*", parse_mode='Markdown')
     try:
         for pos in exchange.fetch_positions():
             kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
@@ -474,6 +471,7 @@ def otomatik_arkaplan_tarayici():
                         print(f"❌ Trend emir hatası: {e}", flush=True)
 
                 elif mod == "GRID":
+                    # Testnet için 5 Kademeli Gerçek Limit Alım ve Satış Emirleri (reduce_only kaldırıldı)
                     try:
                         kademe_sayisi = 5
                         hedef_marjin = (toplam_bakiye * 0.15) / kademe_sayisi 
@@ -490,7 +488,7 @@ def otomatik_arkaplan_tarayici():
                             # 1. Alım Emri (Limit Buy)
                             exchange.create_order(symbol, 'limit', 'buy', miktar, kademe_fiyat)
                             
-                            # 2. Kar Al Emri (Limit Sell +%1.5 üstüne)
+                            # 2. Kar Al Emri (Limit Sell +%1.5 üstüne - reduce_only yok)
                             satis_fiyat = kademe_fiyat * 1.015
                             satis_fiyat = float(exchange.price_to_precision(symbol, satis_fiyat))
                             exchange.create_order(symbol, 'limit', 'sell', miktar, satis_fiyat)
