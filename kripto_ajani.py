@@ -401,7 +401,7 @@ def otomatik_arkaplan_tarayici():
                     except Exception as e:
                         print(f"⚠️ [GRID] Kontrol hatası ({sym}): {e}", flush=True)
 
-            # --- 3. TARAMA VE YENİ SİSTEM KURULUMU ---
+            # --- 3. TARAMA VE YENİ SİSTEM KURULUMU (ÖNCELİK: GRID / BANT SIKIŞMASI) ---
             taranan_sinyaller = []
             su_anki_zaman = time.time()
 
@@ -422,7 +422,6 @@ def otomatik_arkaplan_tarayici():
                     adx_val = float(ta.trend.ADXIndicator(df_15m['high'], df_15m['low'], df_15m['close'], window=14).adx().iloc[-1])
                     atr_yuzdesi = atr_ve_volatilite_hesapla(df_15m)
                     
-                    # Yeni Gelişmiş Filtreler
                     bb_bandwidth = bollinger_bandwidth_hesapla(df_15m)
                     
                     derinlik = emir_defteri_derinlik_analizi(symbol)
@@ -438,7 +437,16 @@ def otomatik_arkaplan_tarayici():
 
                     print(f"🔎 [ANALİZ] {symbol} | Fiyat: {guncel_fiyat} | RSI: {rsi:.1f} | ADX: {adx_val:.1f} | BB-BW: {bb_bandwidth:.4f}", flush=True)
 
-                    if adx_val > 24:
+                    # 1. ÖNCELİK: Akıllı Grid Koşulu (Bant Sıkışması)
+                    if bb_bandwidth < 0.04 and 40 <= rsi <= 60 and 0.2 < hacim_orani < 3.5:
+                        taranan_sinyaller.append({
+                            "symbol": symbol, "mod": "GRID", "puan": 85, "yon": "SIDWAYS", 
+                            "fiyat": guncel_fiyat, "atr": atr_yuzdesi, "parametreler": features
+                        })
+                        print(f"✨ [SINYAL] Akıllı Grid Sinyali Yakalandı -> {symbol} (Sıkışık Bant & Yatay)", flush=True)
+                    
+                    # 2. ÖNCELİK: Sıkışma yoksa, Trend Koşulu
+                    elif adx_val > 24:
                         puan = 75 if trend_boga else 70
                         grid_yonu = "LONG" if trend_boga else "SHORT"
                         if puan >= 75 and yapay_zeka_islem_onayi(features):
@@ -447,14 +455,6 @@ def otomatik_arkaplan_tarayici():
                                 "fiyat": guncel_fiyat, "atr": atr_yuzdesi, "parametreler": features
                             })
                             print(f"✨ [SINYAL] Trend Sinyali Yakalandı -> {symbol} ({grid_yonu})", flush=True)
-                    else:
-                        # Akıllı Grid Koşulu: RSI dengede, aşırı patlak değil ve hacim tamamen ölü/aşırı spekülatif değil
-                        if 40 <= rsi <= 60 and bb_bandwidth < 0.08 and 0.2 < hacim_orani < 3.5:
-                            taranan_sinyaller.append({
-                                "symbol": symbol, "mod": "GRID", "puan": 80, "yon": "SIDWAYS", 
-                                "fiyat": guncel_fiyat, "atr": atr_yuzdesi, "parametreler": features
-                            })
-                            print(f"✨ [SINYAL] Akıllı Grid Sinyali Yakalandı -> {symbol} (Yatay & Sıkışık)", flush=True)
 
                 except Exception as e:
                     print(f"⚠️ [ANALİZ] Parite analiz hatası ({symbol}): {e}", flush=True)
