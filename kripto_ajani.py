@@ -633,8 +633,6 @@ def otomatik_arkaplan_tarayici():
                     # ==========================================
                     # DİNAMİK HEDEF SEÇİMİ (%1 veya %2)
                     # ==========================================
-                    # Oynaklık düşükse veya fiyat hareketi yatay/orta seviyedeyse %1 hedefleyip seri kâr al,
-                    # Güçlü trend ve yüksek momentum varsa %2 hedefle.
                     if atr_yuzdesi < 1.2 or abs(degisim_yuzdesi) < 1.5:
                         hedef_oran_fiyat = 0.01  # Net %1 Fiyat Hedefi
                         hedef_roe = 10.0         # %10 ROE (10x kaldıraçla)
@@ -723,7 +721,6 @@ if __name__ == '__main__':
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
-    app.add_handler if hasattr(app_tg, 'add_handler') else None
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
