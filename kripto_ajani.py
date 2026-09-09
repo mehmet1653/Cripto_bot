@@ -534,7 +534,9 @@ def otomatik_arkaplan_tarayici():
                         telegram_mesaj_gonder(f"⚡ *TESTNET GRID AKTİF*\n📌 Coin: `{symbol}` | 5 Kademeli Al/Sat Ağ Emirleri Girildi.")
                         break
                     except Exception as e:
-                        print(f"❌ [EMİR] Testnet Grid emir hatası ({symbol}): {e}", flush=True)
+                        hata_mesaji = f"❌ [EMİR] Testnet Grid emir hatası ({symbol}): {e}"
+                        print(hata_mesaji, flush=True)
+                        telegram_mesaj_gonder(hata_mesaji)
 
         except Exception as e:
             print(f"⚠️ [DÖNGÜ] Genel döngü hatası: {e}", flush=True)
