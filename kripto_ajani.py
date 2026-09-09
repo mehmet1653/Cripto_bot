@@ -216,14 +216,18 @@ def telegram_mesaj_gonder(mesaj):
 
 @app.route('/')
 def home():
-    return f"Hibrit Bot Aktif | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
+    return f"Gelişmiş Dinamik Hedefli Hibrit Bot Aktif | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
 
-def set_leverage_safely(symbol, leverage):
+def set_leverage_and_margin_safely(symbol, leverage):
     try:
         exchange.set_leverage(leverage, symbol)
+        try:
+            exchange.set_margin_mode('isolated', symbol)
+        except Exception:
+            pass
         return True
     except Exception as e:
-        print(f"⚠️ Kaldıraç ayarlama hatası ({symbol} - {leverage}x): {e}", flush=True)
+        print(f"⚠️ Kaldıraç/Margin ayarlama hatası ({symbol}): {e}", flush=True)
         return False
 
 # ==================== TELEGRAM KOMUTLARI ====================
@@ -250,18 +254,20 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         pozisyon_detaylari = ""
         if borsa_poslari:
-            pozisyon_detaylari = "\n🔍 *Açık Pozisyonlar:*\n"
+            pozisyon_detaylari = "\n🔍 *Açık Pozisyonlar (Dinamik Hedef & Trailing):*\n"
             for p in borsa_poslari:
                 sym = p.get('symbol', 'Bilinmeyen')
                 yon = str(p.get('side', '')).upper()
                 pnl_val = float(p.get('unrealizedPnl', 0))
                 roe_val = float(p.get('percentage', 0))
-                pozisyon_detaylari += f"• `{sym}` | {yon} | PnL: `{pnl_val:+.2f} USDT` (`%{roe_val:.2f}`)\n"
+                hedef_str = f"%{AKTIF_GRID_SISTEMLERI.get(sym, {}).get('hedef_oran_fiyat', 0.02)*100:.0f}"
+                trailing_durum = "Aktif 🛡️" if sym in AKTIF_GRID_SISTEMLERI and AKTIF_GRID_SISTEMLERI[sym].get("trailing_aktif") else "Bekliyor ⏳"
+                pozisyon_detaylari += f"• `{sym}` | {yon} | Hedef: {hedef_str} | PnL: `{pnl_val:+.2f} USDT` (`%{roe_val:.2f}`) | Trail: {trailing_durum}\n"
         else:
             pozisyon_detaylari = "\n🔍 *Açık Pozisyon:* `Yok`\n"
 
         mesaj = (
-            f"📊 *HİBRİT BOT DURUMU (MARJ KONTROLÜ MODU)*\n\n"
+            f"📊 *DİNAMİK HEDEFLİ & TRAILING BOT*\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"{pnl_ikon} Anlık Kâr/Zarar: `{toplam_pnl:+.2f} USDT`\n"
             f"🤖 Yapay Zeka: `{ai_durum}`\n"
@@ -278,7 +284,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 *Bot Aktif Edildi!*", parse_mode='Markdown')
+    await update.message.reply_text("🟢 *Dinamik Hedefli Bot Aktif Edildi!*", parse_mode='Markdown')
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -309,7 +315,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 [BAŞLANGIÇ] Marj Kontrollü Dönüş ve ATR Stop Modu Devrede.", flush=True)
+    print("🚀 [BAŞLANGIÇ] Dinamik Kâr Hedefi (%1 veya %2) ve Trailing Modu Devrede.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -324,7 +330,7 @@ def otomatik_arkaplan_tarayici():
             tur_sayaci += 1
             zaman_str = datetime.now().strftime('%H:%M:%S')
             print(f"\n==================================================", flush=True)
-            print(f"[{zaman_str}] 🔄 MARJ KONTROLLÜ TARAMA TURU (Tur #{tur_sayaci})", flush=True)
+            print(f"[{zaman_str}] 🔄 DİNAMİK HEDEF & YÖNETİM TURU (Tur #{tur_sayaci})", flush=True)
             print(f"==================================================", flush=True)
 
             if not BOT_CALISIYOR_MU:
@@ -343,6 +349,50 @@ def otomatik_arkaplan_tarayici():
             except Exception as e:
                 print(f"⚠️ Pozisyonlar çekilirken hata: {e}", flush=True)
                 aktif_borsa_map = {}
+
+            # --- AÇIK POZİSYONLAR İÇİN TRAILING STOP VE GÜNCEL KONTROL ---
+            for sym, kayitli_veri in list(AKTIF_GRID_SISTEMLERI.items()):
+                if sym in aktif_borsa_map:
+                    poz = aktif_borsa_map[sym]
+                    try:
+                        guncel_fiyat = exchange.fetch_ticker(sym)['last']
+                        giris_fiyati = float(poz.get('entryPrice', kayitli_veri.get('giris_fiyati', guncel_fiyat)))
+                        yon = kayitli_veri.get("yon", "LONG")
+                        
+                        if yon == "LONG":
+                            fiyat_farki_yuzde = ((guncel_fiyat - giris_fiyati) / giris_fiyati) * 100
+                        else:
+                            fiyat_farki_yuzde = ((giris_fiyati - guncel_fiyat) / giris_fiyati) * 100
+
+                        # Eğer fiyat lehimize %0.8 üstüne çıktıysa ve Trailing aktifleşmediyse -> Stop'u Giriş Fiyata Çek
+                        if fiyat_farki_yuzde >= 0.8 and not kayitli_veri.get("trailing_aktif", False):
+                            kayitli_veri["trailing_aktif"] = True
+                            tum_emirleri_iptal_et(sym)
+                            
+                            kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
+                            miktar = float(poz.get('contracts', 0) or poz.get('size', 0))
+                            
+                            breakeven_fiyat = float(exchange.price_to_precision(sym, giris_fiyati))
+                            stop_params = {
+                                'stopPrice': breakeven_fiyat,
+                                'triggerPrice': breakeven_fiyat,
+                                'reduceOnly': True,
+                                'price_type': 'mark_price'
+                            }
+                            try:
+                                exchange.create_order(sym, 'stop', kapatma_yonu, miktar, breakeven_fiyat, stop_params)
+                            except Exception:
+                                exchange.create_order(sym, 'stop_market', kapatma_yonu, miktar, breakeven_fiyat, stop_params)
+
+                            hedef_fiyat = kayitli_veri.get("hedef_fiyat")
+                            if hedef_fiyat:
+                                exchange.create_order(sym, 'limit', kapatma_yonu, miktar, hedef_fiyat, {'reduceOnly': True})
+
+                            hafizayi_kaydet()
+                            print(f"🛡️ [TRAILING AKTİF] {sym} kârda ilerledi, stop giriş fiyatına sabitlendi!", flush=True)
+                            telegram_mesaj_gonder(f"🛡️ *KÂR KİLİTLENDİ (Trailing)*\n📌 `{sym}` pozisyonu kârda ilerlediği için stop seviyesi giriş fiyatına çekildi.")
+                    except Exception as ex:
+                        print(f"⚠️ Trailing yönetimi hatası ({sym}): {ex}", flush=True)
 
             # --- KAPATILAN POZİSYONLARI KONTROL ETME ---
             for sym in list(AKTIF_GRID_SISTEMLERI.keys()):
@@ -375,10 +425,10 @@ def otomatik_arkaplan_tarayici():
 
                     if basarili_islem:
                         ANALitik_HAFIZA["basarili_islem_sayisi"] = ANALitik_HAFIZA.get("basarili_islem_sayisi", 0) + 1
-                        telegram_mesaj_gonder(f"🎉 *Kâr Alındı*\n📌 Coindaki pozisyon kârla kapandı: `{sym}` 🟢")
+                        telegram_mesaj_gonder(f"🎉 *Kâr Alındı (Dinamik Hedef)*\n📌 Coindaki pozisyon başarıyla kapandı: `{sym}` 🟢")
                     else:
                         ANALitik_HAFIZA["basarisiz_islem_sayisi"] = ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0) + 1
-                        telegram_mesaj_gonder(f"❌ *Stop Oldu*\n📌 Coindaki pozisyon kapandı: `{sym}` 🔴")
+                        telegram_mesaj_gonder(f"❌ *Pozisyon Kapandı (Stop/Trailing)*\n📌 Coindaki pozisyon kapandı: `{sym}` 🔴")
 
                     COIN_COOLDOWNLAR[sym] = time.time() + COOLDOWN_SURESI_SANIYE
                     
@@ -402,33 +452,36 @@ def otomatik_arkaplan_tarayici():
                     yapay_zekayi_egit_ve_guncelle()
                     hafizayi_kaydet()
 
-            # --- TÜM COİNLERİ TARAYIP MARJ VE DÖNÜŞ ONAYI ARAMA ---
+            # --- TÜM COİNLERİ TARAYIP MULTI-TIMEFRAME VE MARJ ONAYI ARAMA ---
             taranan_sinyaller = []
             su_anki_zaman = time.time()
 
-            print(f"👀 Takip edilen {len(TAKIP_EDILENLER)} coin marj ve yön için taranıyor...", flush=True)
+            print(f"👀 Takip edilen {len(TAKIP_EDILENLER)} coin taraniyor...", flush=True)
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU:
                     break
                 if symbol in aktif_borsa_map:
-                    print(f"   ℹ️ [{symbol}] Aktif pozisyon var, pas geçiliyor.", flush=True)
                     continue
 
                 bitis_zamani = COIN_COOLDOWNLAR.get(symbol, 0)
                 if su_anki_zaman < bitis_zamani:
-                    kalan_dakika = int((bitis_zamani - su_anki_zaman) / 60)
-                    print(f"   ⏳ [{symbol}] Cooldown süresinde (Kalan: ~{kalan_dakika} dk)", flush=True)
                     continue
 
                 try:
-                    print(f"   🔍 [{symbol}] Mumlar ve %2 hedef marjı inceleniyor...", flush=True)
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
+                    
                     ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     
+                    ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=30)
+                    df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    
                     if not hacim_ve_likidite_kontrolu(df_15m):
-                        print(f"      ⚠️ [{symbol}] Hacim/likidite yetersiz.", flush=True)
                         continue
+
+                    ema7_1h = ta.trend.ema_indicator(df_1h['close'], window=7).iloc[-1]
+                    ema21_1h = ta.trend.ema_indicator(df_1h['close'], window=21).iloc[-1]
+                    trend_1h_boga = ema7_1h > ema21_1h
 
                     ema7 = ta.trend.ema_indicator(df_15m['close'], window=7).iloc[-1]
                     ema21 = ta.trend.ema_indicator(df_15m['close'], window=21).iloc[-1]
@@ -444,18 +497,12 @@ def otomatik_arkaplan_tarayici():
                     degisim_yuzdesi = ((guncel_fiyat - fiyat_10_mum_once) / fiyat_10_mum_once) * 100
                     derinlik_durumu = emir_defteri_derinlik_analizi(symbol)
 
-                    # --- NET MARJ & FİYAT BAZLI DÖNÜŞ ONAYI ---
-                    # Amacımız: Hedeflediğimiz %2'lik fiyat hareketinin (10x'te %20 ROE) 
-                    # önünün o anki mum yapısı ve RSI bölgesiyle açık olup olmadığını denetlemek.
-                    hedef_marj_orani = 0.02  # %2 Net Fiyat Hareketi
-                    
                     son_mum = df_15m.iloc[-1]
                     m_acilis = son_mum['open']
                     m_kapanis = son_mum['close']
                     
-                    # Long/Short Marj ve Dönüş Şartları
-                    long_onayli = (rsi < 48) and (m_kapanis >= m_acilis or degisim_yuzdesi <= -1.0)
-                    short_onayli = (rsi > 52) and (m_kapanis <= m_acilis or degisim_yuzdesi >= 1.0)
+                    long_onayli = (rsi < 48) and (m_kapanis >= m_acilis or degisim_yuzdesi <= -0.8) and trend_1h_boga
+                    short_onayli = (rsi > 52) and (m_kapanis <= m_acilis or degisim_yuzdesi >= 0.8) and (not trend_1h_boga)
 
                 except Exception as e:
                     print(f"      ❌ [{symbol}] Veri çekme hatası: {e}", flush=True)
@@ -467,17 +514,16 @@ def otomatik_arkaplan_tarayici():
                 guclu_trend_var = adx_val >= 25
                 trend_yonu_boga = plus_di > minus_di
 
-                if degisim_yuzdesi >= 1.5 and short_onayli:
+                if degisim_yuzdesi >= 1.2 and short_onayli:
                     grid_yonu = "SHORT"
                     sinyal_puani = 92
-                elif degisim_yuzdesi <= -1.5 and long_onayli:
+                elif degisim_yuzdesi <= -1.2 and long_onayli:
                     grid_yonu = "LONG"
                     sinyal_puani = 92
                 elif guclu_trend_var and ((trend_yonu_boga and long_onayli) or (not trend_yonu_boga and short_onayli)):
                     grid_yonu = "LONG" if trend_yonu_boga else "SHORT"
                     sinyal_puani = 78
                 else:
-                    print(f"      🛡️ [{symbol}] %2 marj hedefine uygun dönüş veya RSI onayı alınamadı, pas geçiliyor.", flush=True)
                     continue
 
                 is_altin_atis = sinyal_puani >= 90
@@ -491,10 +537,8 @@ def otomatik_arkaplan_tarayici():
                 hacim_orani = float(son_hacim / ortalama_hacim) if ortalama_hacim > 0 else 1.0
                 
                 if not yapay_zeka_islem_onayi(rsi, adx_val, ema_fark_val, yon_kod, atr_yuzdesi, coin_id, derinlik_val, hacim_orani, degisim_yuzdesi, sinyal_puani):
-                    print(f"      🤖 [{symbol}] ({grid_yonu}) Yapay Zeka filtresinden GEÇEMEDİ.", flush=True)
                     continue
 
-                print(f"      ✅ [{symbol}] Onaylı Sinyal -> Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | Hedef Marj: %2", flush=True)
                 taranan_sinyaller.append({
                     "symbol": symbol,
                     "puan": sinyal_puani,
@@ -511,7 +555,6 @@ def otomatik_arkaplan_tarayici():
                 })
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
-            print(f"🎯 Toplam onaylı sinyal sayısı: {len(taranan_sinyaller)}", flush=True)
 
             # --- İŞLEM AÇMA ---
             for sinyal in taranan_sinyaller:
@@ -537,25 +580,22 @@ def otomatik_arkaplan_tarayici():
                 izin_verilen_maks_poz = MAKSIMUM_TOPLAM_POZISYON + 1 if is_altin_atis else MAKSIMUM_TOPLAM_POZISYON
 
                 if len(aktif_borsa_map) >= izin_verilen_maks_poz:
-                    print(f"   ⚠️ Maksimum açık pozisyon sınırına ulaşıldı.", flush=True)
                     break
 
                 ayni_yon_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == grid_yonu)
                 if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
-                    print(f"   ⚠️ {grid_yonu} yönünde maksimum pozisyon sınırına ulaşıldı.", flush=True)
                     continue 
 
-                dinamik_kaldirac = 10
+                dinamik_kaldirac = 5 if atr_yuzdesi > 2.5 else 10
                 kasa_orani = 0.20
 
                 try:
                     balance = exchange.fetch_balance()
                     toplam_bakiye = float(balance['total'].get('USDT', 0))
                 except Exception as e:
-                    print(f"   ⚠️ Bakiye alınamadı: {e}", flush=True)
                     continue
 
-                if not set_leverage_safely(symbol, dinamik_kaldirac):
+                if not set_leverage_and_margin_safely(symbol, dinamik_kaldirac):
                     continue
                 
                 hedef_marjin = toplam_bakiye * kasa_orani
@@ -591,12 +631,18 @@ def otomatik_arkaplan_tarayici():
                             pass
 
                     # ==========================================
-                    # ATR BAZLI DİNAMİK STOP VE %2 NET HEDEF
+                    # DİNAMİK HEDEF SEÇİMİ (%1 veya %2)
                     # ==========================================
-                    hedef_roe = 20.0  # %20 ROE (Fiyatta tam %2)
-                    guvenli_stop_yuzdesi = max(atr_yuzdesi * 1.5, 1.2)
-                    
-                    hedef_oran_fiyat = 0.02  # Net %2 Fiyat Hedefi
+                    # Oynaklık düşükse veya fiyat hareketi yatay/orta seviyedeyse %1 hedefleyip seri kâr al,
+                    # Güçlü trend ve yüksek momentum varsa %2 hedefle.
+                    if atr_yuzdesi < 1.2 or abs(degisim_yuzdesi) < 1.5:
+                        hedef_oran_fiyat = 0.01  # Net %1 Fiyat Hedefi
+                        hedef_roe = 10.0         # %10 ROE (10x kaldıraçla)
+                    else:
+                        hedef_oran_fiyat = 0.02  # Net %2 Fiyat Hedefi
+                        hedef_roe = 20.0         # %20 ROE
+
+                    guvenli_stop_yuzdesi = max(atr_yuzdesi * 1.5, 1.0)
                     stop_oran_fiyat = guvenli_stop_yuzdesi / 100.0
 
                     if grid_yonu == 'LONG':
@@ -639,30 +685,33 @@ def otomatik_arkaplan_tarayici():
                         "giris_fiyati": giris_fiyati,
                         "derinlik_durumu": derinlik_durumu,
                         "hacim_orani": hacim_orani,
-                        "fiyat_degisim": degisim_yuzdesi
+                        "fiyat_degisim": degisim_yuzdesi,
+                        "hedef_fiyat": hedef_fiyat,
+                        "hedef_oran_fiyat": hedef_oran_fiyat,
+                        "trailing_aktif": False
                     }
                     hafizayi_kaydet()
                     
-                    islem_tipi_str = "🌟 Altın Vuruş (%2 Hedefli)" if is_altin_atis else "📊 Standart Marj Kontrollü"
+                    islem_tipi_str = f"🌟 Dinamik Hedef (%{hedef_oran_fiyat*100:.0f}) + Trailing"
 
-                    print(f"🚀 İŞLEM AÇILDI & KORUMA AKTİF: {symbol} | Giriş: {giris_fiyati} | SL: {stop_fiyat} | TP: {hedef_fiyat}", flush=True)
+                    print(f"🚀 İŞLEM AÇILDI: {symbol} | Kaldıraç: {dinamik_kaldirac}x | Hedef: %{hedef_oran_fiyat*100:.0f} | Giriş: {giris_fiyati} | TP: {hedef_fiyat}", flush=True)
                     telegram_mesaj_gonder(
-                        f"🛡️ *MARJ KONTROLLÜ İŞLEM AÇILDI*\n\n"
+                        f"🛡️ *DİNAMİK HEDEFLİ İŞLEM AÇILDI*\n\n"
                         f"📌 *Coin:* `{symbol}` | 📊 *Yön:* `{grid_yonu}`\n"
                         f"🎯 *İşlem Türü:* `{islem_tipi_str}`\n"
                         f"📈 *Sinyal Puanı:* `{sinyal_puani} / 100`\n"
-                        f"⚙️ *Kaldıraç:* `{dinamik_kaldirac}x`\n"
-                        f"🎯 *Hedef TP:* `+{hedef_roe:.1f}% ROE` (`{hedef_fiyat}` - Net %2)\n"
-                        f"🛑 *Stop SL:* `-{guvenli_stop_yuzdesi*dinamik_kaldirac:.1f}% ROE` (`{stop_fiyat}`)"
+                        f"⚙️ *Dinamik Kaldıraç:* `{dinamik_kaldirac}x`\n"
+                        f"🎯 *Hedef TP:* `+{hedef_roe:.0f}% ROE` (`{hedef_fiyat}` - Net %{hedef_oran_fiyat*100:.0f})\n"
+                        f"🛑 *Stop SL:* `-{guvenli_stop_yuzdesi*dinamik_kaldirac:.1f}% ROE` (`{stop_fiyat}`)\n"
+                        f"⚡ *Özellik:* `%0.8 kârda stop otomatik giriş fiyatına kilitlenecek.`"
                     )
                     break 
                 except Exception as e:
-                    print(f"❌ Emir açma/koruma hatası ({symbol}): {e}", flush=True)
+                    print(f"❌ Emir açma hatası ({symbol}): {e}", flush=True)
 
         except Exception as e:
             print(f"⚠️ Tarayıcı döngü genel hatası: {e}", flush=True)
             
-        print(f"💤 Tur tamamlandı. Bot aktif, 10 saniye sonra yeni tur başlayacak...", flush=True)
         time.sleep(10)
 
 def flask_web_server():
@@ -674,6 +723,7 @@ if __name__ == '__main__':
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
+    app.add_handler if hasattr(app_tg, 'add_handler') else None
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
