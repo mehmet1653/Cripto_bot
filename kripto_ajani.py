@@ -218,11 +218,11 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total = float(balance['total'].get('USDT', 0))
         try:
             raw_positions = exchange.fetch_positions()
-            borsa_poslari = [p for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
+            borsa_poslari = {p['symbol']: p for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0}
         except Exception:
-            borsa_poslari = []
+            borsa_poslari = {}
 
-        toplam_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in borsa_poslari)
+        toplam_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in borsa_poslari.values())
         pnl_ikon = "🟢" if toplam_pnl >= 0 else "🔴"
         
         basarili_sayisi = ANALITIK_HAFIZA.get("basarili_islem_sayisi", 0)
@@ -245,7 +245,10 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             for sym, veri in AKTIF_SISTEMLER.items():
                 mod = veri.get("mod", "TREND")
-                mesaj += f"• `{sym}` | Mod: `{mod}`\n"
+                pos = borsa_poslari.get(sym, {})
+                pos_pnl = float(pos.get('unrealizedPnl', 0) or 0)
+                pnl_ikon_coin = "🟢" if pos_pnl >= 0 else "🔴"
+                mesaj += f"• `{sym}` | Mod: `{mod}` | {pnl_ikon_coin} `{pos_pnl:+.2f} USDT`\n"
 
         await update.message.reply_text(mesaj, parse_mode='Markdown')
     except Exception as e:
