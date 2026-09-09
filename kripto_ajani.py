@@ -129,7 +129,6 @@ def hafizayi_borsa_ile_senkronize_et():
             except Exception:
                 pass
 
-            # Eğer borsa üzerinde pozisyon varsa veya grid için açık limit emirler dizilmişse hafızaya işle
             if symbol in borsa_poslari and symbol not in AKTIF_SISTEMLER:
                 pos = borsa_poslari[symbol]
                 yon = str(pos.get('side', '')).upper()
@@ -237,7 +236,7 @@ def set_leverage_and_margin_safely(symbol, leverage):
 # ==================== TELEGRAM KOMUTLARI ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        hafizayi_borsa_il_senk = hafizayi_borsa_ile_senkronize_et()
+        hafizayi_borsa_ile_senkronize_et()
         balance = exchange.fetch_balance()
         total = float(balance['total'].get('USDT', 0))
         try:
@@ -519,7 +518,8 @@ def otomatik_arkaplan_tarayici():
                         tum_emirleri_iptal_et(symbol)
 
                         for i in range(kademe_sayisi):
-                            kademe_fiyat = guncel_fiyat * (1.0 - ((i + 1) * 0.01))
+                            # Sapma kuralına (%2 sınırı) takılmamak için kademeleri yakın (%0.4 ara ile) tutuyoruz
+                            kademe_fiyat = guncel_fiyat * (1.0 - ((i + 1) * 0.004))
                             kademe_fiyat = float(exchange.price_to_precision(symbol, kademe_fiyat))
                             
                             ham_mask = (hedef_marjin * KALDIRAC) / kademe_fiyat
@@ -528,8 +528,8 @@ def otomatik_arkaplan_tarayici():
                             # 1. Alım Emri (Limit Buy)
                             exchange.create_order(symbol, 'limit', 'buy', miktar, kademe_fiyat)
                             
-                            # 2. Kar Al Emri (Limit Sell +%1.5 üstüne - reduce_only yok)
-                            satis_fiyat = kademe_fiyat * 1.015
+                            # 2. Kar Al Emri (Limit Sell hemen üzerine)
+                            satis_fiyat = kademe_fiyat * 1.008
                             satis_fiyat = float(exchange.price_to_precision(symbol, satis_fiyat))
                             exchange.create_order(symbol, 'limit', 'sell', miktar, satis_fiyat)
 
