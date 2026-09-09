@@ -538,7 +538,8 @@ def otomatik_arkaplan_tarayici():
                         tum_emirleri_iptal_et(symbol)
 
                         for i in range(kademe_sayisi):
-                            kademe_fiyat = guncel_fiyat * (1.0 - ((i + 1) * 0.01))
+                            # Sapma sınırını aşmamak için kademeleri anlık fiyata yakın başlatıyoruz (%0.3 adımlarla)
+                            kademe_fiyat = guncel_fiyat * (1.0 - ((i + 1) * 0.003))
                             kademe_fiyat = float(exchange.price_to_precision(symbol, kademe_fiyat))
                             
                             ham_mask = (hedef_marjin * KALDIRAC) / kademe_fiyat
@@ -546,7 +547,7 @@ def otomatik_arkaplan_tarayici():
                             
                             exchange.create_order(symbol, 'limit', 'buy', miktar, kademe_fiyat)
                             
-                            satis_fiyat = kademe_fiyat * 1.015
+                            satis_fiyat = kademe_fiyat * 1.006
                             satis_fiyat = float(exchange.price_to_precision(symbol, satis_fiyat))
                             exchange.create_order(symbol, 'limit', 'sell', miktar, satis_fiyat)
 
@@ -556,7 +557,7 @@ def otomatik_arkaplan_tarayici():
                         hafizayi_kaydet()
 
                         print(f"⚡ [EMİR] TESTNET 5 KADEMELİ AKILLI GRID EMİRLERİ KURULDU: {symbol}", flush=True)
-                        telegram_mesaj_gonder(f"⚡ *TESTNET AKILLI GRID AKTİF*\n📌 Coin: `{symbol}` | Sıkışma & Hacim Onaylı 5 Kademe Kuruldu.")
+                        telegram_mesaj_gonder(f"⚡ *TESTNET AKILLI GRID AKTİF*\n📌 Coin: `{symbol}` | Sıkışma & Hacim Onaylı Yakın Kademeler Kuruldu.")
                         break
                     except Exception as e:
                         hata_mesaji = f"❌ [EMİR] Testnet Grid emir hatası ({symbol}): {e}"
