@@ -246,7 +246,7 @@ async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏸️ *Bot Durduruldu.*", parse_mode='Markdown')
 
 async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 *Tüm emirler ve pozisyonlar temizleniyor...*", parse_mode='Markdown')
+    await update.message.reply_text("🔄 *Tüm emirler and pozisyonlar temizleniyor...*", parse_mode='Markdown')
     try:
         for pos in exchange.fetch_positions():
             kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
@@ -335,11 +335,9 @@ def otomatik_arkaplan_tarayici():
                         guncel_fiyat = df_1h['close'].iloc[-1]
                         merkez = veri.get("merkez_fiyat", guncel_fiyat)
 
-                        # Eğer ADX 30'un üzerine çıkar ve fiyat merkezden %3'ten fazla uzaklaşırsa (Onaylı Trend Çıkışı)
                         fiyat_sapma = abs((guncel_fiyat - merkez) / merkez) * 100
                         if adx_val > 30 and fiyat_sapma > 3.0:
                             tum_emirleri_iptal_et(sym)
-                            # Açık grid pozisyonu varsa market fiyatından kapat
                             if sym in aktif_borsa_map:
                                 pos = aktif_borsa_map[sym]
                                 kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
@@ -473,7 +471,7 @@ def otomatik_arkaplan_tarayici():
                         print(f"❌ Trend emir hatası: {e}", flush=True)
 
                 elif mod == "GRID":
-                    # Testnet için 5 Kademeli Gerçek Limit Alım ve Satış Emirleri
+                    # Testnet için 5 Kademeli Gerçek Limit Alım ve Satış Emirleri (reduce_only kaldırıldı)
                     try:
                         kademe_sayisi = 5
                         hedef_marjin = (toplam_bakiye * 0.15) / kademe_sayisi 
@@ -481,20 +479,19 @@ def otomatik_arkaplan_tarayici():
                         tum_emirleri_iptal_et(symbol)
 
                         for i in range(kademe_sayisi):
-                            # Aşağı yönlü kademeli alım fiyatları (%1, %2, %3, %4, %5 aşağısı)
                             kademe_fiyat = guncel_fiyat * (1.0 - ((i + 1) * 0.01))
                             kademe_fiyat = float(exchange.price_to_precision(symbol, kademe_fiyat))
                             
                             ham_mask = (hedef_marjin * KALDIRAC) / kademe_fiyat
                             miktar = float(exchange.amount_to_precision(symbol, max(round(ham_mask / float(market_info.get('contractSize', 1.0))), 1)))
                             
-                            # 1. Alım Emri (Limit Buy) Testnet'e gönderiliyor
+                            # 1. Alım Emri (Limit Buy)
                             exchange.create_order(symbol, 'limit', 'buy', miktar, kademe_fiyat)
                             
-                            # 2. Kar Al Emri (Limit Sell +%1.5 üstüne) Testnet'e gönderiliyor
+                            # 2. Kar Al Emri (Limit Sell +%1.5 üstüne - reduce_only yok)
                             satis_fiyat = kademe_fiyat * 1.015
                             satis_fiyat = float(exchange.price_to_precision(symbol, satis_fiyat))
-                            exchange.create_order(symbol, 'limit', 'sell', miktar, satis_fiyat, {'reduceOnly': True})
+                            exchange.create_order(symbol, 'limit', 'sell', miktar, satis_fiyat)
 
                         AKTIF_SISTEMLER[symbol] = {
                             "mod": "GRID", "merkez_fiyat": guncel_fiyat, "parametreler": sinyal["parametreler"]
@@ -502,7 +499,7 @@ def otomatik_arkaplan_tarayici():
                         hafizayi_kaydet()
 
                         print(f"⚡ TESTNET 5 KADEMELİ GRID EMİRLERİ KURULDU: {symbol}", flush=True)
-                        telegram_mesaj_gonder(f"⚡ *TESTNET GRID AKTİF*\n📌 Coin: `{symbol}` | 5 Kademeli Al/Sat Ağ Emirleri Borsa Testnetine Girildi.")
+                        telegram_mesaj_gonder(f"⚡ *TESTNET GRID AKTİF*\n📌 Coin: `{symbol}` | 5 Kademeli Al/Sat Ağ Emirleri Girildi.")
                         break
                     except Exception as e:
                         print(f"❌ Testnet Grid emir hatası: {e}", flush=True)
