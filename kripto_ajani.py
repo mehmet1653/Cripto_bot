@@ -225,6 +225,9 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         toplam_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in borsa_poslari.values())
         pnl_ikon = "🟢" if toplam_pnl >= 0 else "🔴"
         
+        anappara_tahmini = total - toplam_pnl
+        toplam_pnl_yuzde = (toplam_pnl / anappara_tahmini * 100) if anappara_tahmini > 0 else 0.0
+
         basarili_sayisi = ANALITIK_HAFIZA.get("basarili_islem_sayisi", 0)
         basarisiz_sayisi = ANALITIK_HAFIZA.get("basarisiz_islem_sayisi", 0)
         toplam_islem = basarili_sayisi + basarisiz_sayisi
@@ -233,7 +236,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mesaj = (
             f"🚀 *TESTNET HİBRİT BOT DURUMU*\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
-            f"{pnl_ikon} Anlık Kâr/Zarar: `{toplam_pnl:+.2f} USDT`\n"
+            f"{pnl_ikon} Anlık Kâr/Zarar: `{toplam_pnl:+.2f} USDT` (`%{toplam_pnl_yuzde:+.2f}`)\n"
             f"📌 Aktif Sistemler: `{len(AKTIF_SISTEMLER)} / {MAKSIMUM_TOPLAM_POZISYON}`\n"
             f"✅ Başarılı: `{basarili_sayisi}` | ❌ Başarısız: `{basarisiz_sayisi}`\n"
             f"📈 Başarı Oranı: `%{basari_orani:.1f}`\n\n"
@@ -247,8 +250,12 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 mod = veri.get("mod", "TREND")
                 pos = borsa_poslari.get(sym, {})
                 pos_pnl = float(pos.get('unrealizedPnl', 0) or 0)
+                
+                pos_margin = float(pos.get('initialMargin', 0) or pos.get('margin', 0) or 1)
+                pos_pnl_yuzde = (pos_pnl / pos_margin * 100) if pos_margin > 0 else 0.0
+                
                 pnl_ikon_coin = "🟢" if pos_pnl >= 0 else "🔴"
-                mesaj += f"• `{sym}` | Mod: `{mod}` | {pnl_ikon_coin} `{pos_pnl:+.2f} USDT`\n"
+                mesaj += f"• `{sym}` | Mod: `{mod}` | {pnl_ikon_coin} `{pos_pnl:+.2f}$` (`%{pos_pnl_yuzde:+.2f}`)\n"
 
         await update.message.reply_text(mesaj, parse_mode='Markdown')
     except Exception as e:
@@ -374,7 +381,7 @@ def otomatik_arkaplan_tarayici():
                                 kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
                                 yon = str(pos.get('side', '')).upper()
                                 kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
-                                exchange.create_order(sym, 'market', kapatma_yonu, kontrat, None, {'reduce_only': True})
+                                exchange.create_order(symbol, 'market', kapatma_yonu, kontrat, None, {'reduce_only': True})
                             
                             AKTIF_SISTEMLER.pop(sym)
                             hafizayi_kaydet()
