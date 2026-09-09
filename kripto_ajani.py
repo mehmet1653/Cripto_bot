@@ -262,7 +262,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pozisyon_detaylari = "\n🔍 *Açık Pozisyon:* `Yok`\n"
 
         mesaj = (
-            f"📊 *HİBRİT BOT DURUMU*\n\n"
+            f"📊 *HİBRİT BOT DURUMU (GÜVENLİ MOD)*\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"{pnl_ikon} Anlık Kâr/Zarar: `{toplam_pnl:+.2f} USDT`\n"
             f"🤖 Yapay Zeka: `{ai_durum}`\n"
@@ -279,7 +279,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 *Bot Aktif Edildi!*", parse_mode='Markdown')
+    await update.message.reply_text("🟢 *Bot Güvenli Modda Aktif Edildi!*", parse_mode='Markdown')
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -310,7 +310,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 [BAŞLANGIÇ] Gelişmiş Hibrit Tarayıcı ve Canlı Log Modu Devrede.", flush=True)
+    print("🚀 [BAŞLANGIÇ] Güvenli Dönüş Yakalama ve ATR Stop Modu Devrede.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -325,7 +325,7 @@ def otomatik_arkaplan_tarayici():
             tur_sayaci += 1
             zaman_str = datetime.now().strftime('%H:%M:%S')
             print(f"\n==================================================", flush=True)
-            print(f"[{zaman_str}] 🔄 TARAMA TURU BAŞLADI (Tur #{tur_sayaci})", flush=True)
+            print(f"[{zaman_str}] 🔄 GÜVENLİ TARAMA TURU (Tur #{tur_sayaci})", flush=True)
             print(f"==================================================", flush=True)
 
             if not BOT_CALISIYOR_MU:
@@ -379,7 +379,7 @@ def otomatik_arkaplan_tarayici():
                         telegram_mesaj_gonder(f"🎉 *Kâr Alındı*\n📌 Coindaki pozisyon kârla kapandı: `{sym}` 🟢")
                     else:
                         ANALitik_HAFIZA["basarisiz_islem_sayisi"] = ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0) + 1
-                        telegram_mesaj_gonder(f"❌ *Stop Oldu*\n📌 Coindaki pozisyon zararla kapandı: `{sym}` 🔴")
+                        telegram_mesaj_gonder(f"❌ *Stop Oldu (Güvenli Mesafe)*\n📌 Coindaki pozisyon kapandı: `{sym}` 🔴")
 
                     COIN_COOLDOWNLAR[sym] = time.time() + COOLDOWN_SURESI_SANIYE
                     
@@ -402,13 +402,12 @@ def otomatik_arkaplan_tarayici():
                     
                     yapay_zekayi_egit_ve_guncelle()
                     hafizayi_kaydet()
-                    print(f"📊 Pozisyon Kapandı Raporlandı: {sym} | Başarılı: {basarili_islem}", flush=True)
 
-            # --- TÜM COİNLERİ TARAYIP EN İYİ SİNYALİ SEÇME ---
+            # --- TÜM COİNLERİ TARAYIP DÖNÜŞ VE İĞNE ONAYI ARAMA ---
             taranan_sinyaller = []
             su_anki_zaman = time.time()
 
-            print(f"👀 Takip edilen {len(TAKIP_EDILENLER)} coin taranıyor...", flush=True)
+            print(f"👀 Takip edilen {len(TAKIP_EDILENLER)} coin dönüş için taranıyor...", flush=True)
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU:
                     break
@@ -423,7 +422,7 @@ def otomatik_arkaplan_tarayici():
                     continue
 
                 try:
-                    print(f"   🔍 [{symbol}] Veriler çekiliyor ve analiz ediliyor...", flush=True)
+                    print(f"   🔍 [{symbol}] Mumlar ve dönüş formasyonları inceleniyor...", flush=True)
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
                     ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -445,6 +444,28 @@ def otomatik_arkaplan_tarayici():
                     fiyat_10_mum_once = df_15m['close'].iloc[-10]
                     degisim_yuzdesi = ((guncel_fiyat - fiyat_10_mum_once) / fiyat_10_mum_once) * 100
                     derinlik_durumu = emir_defteri_derinlik_analizi(symbol)
+
+                    # --- YENİ: DÖNÜŞ VE İĞNE (REJECTION WICK) ONAY FİLTRESİ ---
+                    son_mum = df_15m.iloc[-1]
+                    m_acilis = son_mum['open']
+                    m_kapanis = son_mum['close']
+                    m_yuksek = son_mum['high']
+                    m_dusuk = son_mum['low']
+                    m_govde = abs(m_kapanis - m_acilis)
+                    m_boy = m_yuksek - m_dusuk
+                    
+                    # Eğer mum boyu çok küçükse iğne hesaplanamaz
+                    if m_boy == 0:
+                        m_boy = 0.0001
+
+                    alt_igne = (min(m_acilis, m_kapanis) - m_dusuk) / m_boy
+                    ust_igne = (m_yuksek - max(m_acilis, m_kapanis)) / m_boy
+
+                    # Long için dipte alt iğne veya aşırı satım dönüşü şart
+                    long_onayli = (rsi < 42) and (alt_igne >= 0.40 or m_kapanis > m_acilis)
+                    # Short için tepede üst iğne veya aşırı alım dönüşü şart
+                    short_onayli = (rsi > 58) and (ust_igne >= 0.40 or m_kapanis < m_acilis)
+
                 except Exception as e:
                     print(f"      ❌ [{symbol}] Veri çekme hatası: {e}", flush=True)
                     continue
@@ -455,28 +476,21 @@ def otomatik_arkaplan_tarayici():
                 guclu_trend_var = adx_val >= 25
                 trend_yonu_boga = plus_di > minus_di
 
-                tepe_kosulu = (degisim_yuzdesi >= 2.5 and rsi > 62 and derinlik_durumu in ["SATICI_BASKIN", "DENGELI"])
-                dip_kosulu = (degisim_yuzdesi <= -2.5 and rsi < 38 and derinlik_durumu in ["ALICI_BASKIN", "DENGELI"])
-
-                if tepe_kosulu:
+                # Puanlama ve Dönüş Tespiti
+                if degisim_yuzdesi >= 2.0 and short_onayli:
                     grid_yonu = "SHORT"
                     sinyal_puani = 92
-                elif dip_kosulu:
+                elif degisim_yuzdesi <= -2.0 and long_onayli:
                     grid_yonu = "LONG"
                     sinyal_puani = 92
-                elif guclu_trend_var:
+                elif guclu_trend_var and ((trend_yonu_boga and long_onayli) or (not trend_yonu_boga and short_onayli)):
                     grid_yonu = "LONG" if trend_yonu_boga else "SHORT"
-                    sinyal_puani = 75
+                    sinyal_puani = 78
                 else:
-                    grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
-                    if adx_val >= 18:
-                        sinyal_puani += 15
-                    if grid_yonu == "LONG" and rsi < 50:
-                        sinyal_puani += 20
-                    elif grid_yonu == "SHORT" and rsi > 50:
-                        sinyal_puani += 20
+                    # Onay almamış sinyaller pas geçilir (gürültüden kaçınmak için)
+                    print(f"      🛡️ [{symbol}] Belirgin bir dönüş veya iğne onayı alınamadı, pas geçiliyor.", flush=True)
+                    continue
 
-                # ALTIN VURUŞ KRİTERİ: 90 ve üzeri puan
                 is_altin_atis = sinyal_puani >= 90
                 ema_fark_val = float(ema7 - ema21)
                 yon_kod = 1 if grid_yonu == 'LONG' else -1
@@ -491,7 +505,7 @@ def otomatik_arkaplan_tarayici():
                     print(f"      🤖 [{symbol}] ({grid_yonu}) Yapay Zeka filtresinden GEÇEMEDİ.", flush=True)
                     continue
 
-                print(f"      ✅ [{symbol}] Sinyal Uygun -> Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
+                print(f"      ✅ [{symbol}] Onaylı Sinyal -> Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | Alt İğne: %{alt_igne*100:.1f}", flush=True)
                 taranan_sinyaller.append({
                     "symbol": symbol,
                     "puan": sinyal_puani,
@@ -508,7 +522,7 @@ def otomatik_arkaplan_tarayici():
                 })
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
-            print(f"🎯 Toplam geçerli sinyal sayısı: {len(taranan_sinyaller)}", flush=True)
+            print(f"🎯 Toplam onaylı sinyal sayısı: {len(taranan_sinyaller)}", flush=True)
 
             # --- İŞLEM AÇMA ---
             for sinyal in taranan_sinyaller:
@@ -529,21 +543,20 @@ def otomatik_arkaplan_tarayici():
                 degisim_yuzdesi = sinyal["fiyat_degisim"]
 
                 if sinyal_puani < 70 and not is_altin_atis:
-                    print(f"   ℹ️ [{symbol}] Puanı ({sinyal_puani}) eşik altında, işlem açılmadı.", flush=True)
                     continue
 
                 izin_verilen_maks_poz = MAKSIMUM_TOPLAM_POZISYON + 1 if is_altin_atis else MAKSIMUM_TOPLAM_POZISYON
 
                 if len(aktif_borsa_map) >= izin_verilen_maks_poz:
-                    print(f"   ⚠️ Maksimum açık pozisyon sınırına ulaşıldı ({len(aktif_borsa_map)}).", flush=True)
+                    print(f"   ⚠️ Maksimum açık pozisyon sınırına ulaşıldı.", flush=True)
                     break
 
                 ayni_yon_sayisi = sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == grid_yonu)
                 if ayni_yon_sayisi >= MAKSIMUM_AYNI_YON_SAYISI:
-                    print(f"   ⚠️ {grid_yonu} yönünde maksimum pozisyon sınırına ulaşıldı ({ayni_yon_sayisi}).", flush=True)
+                    print(f"   ⚠️ {grid_yonu} yönünde maksimum pozisyon sınırına ulaşıldı.", flush=True)
                     continue 
 
-                dinamik_kaldirac = 15 if is_altin_atis else 10
+                dinamik_kaldirac = 10  # Sabit ve güvenli 10x kaldıraç
                 kasa_orani = 0.20
 
                 try:
@@ -589,14 +602,16 @@ def otomatik_arkaplan_tarayici():
                             pass
 
                     # ==========================================
-                    # SABİT HEDEF VE STOP ORANLARI (%20 Kâr, %10 Zarar ROE)
+                    # YENİ: ATR BAZLI DİNAMİK VE GÜVENLİ STOP MESAFESİ
                     # ==========================================
                     hedef_roe = 20.0  # %20 Kâr
-                    stop_roe = 10.0   # %10 Zarar
                     
-                    # Kaldıraç oranına bölünerek doğru fiyat değişim yüzdesi elde edilir
+                    # Stop mesafesi coinin anlık volatilitesine (ATR) bağlanır. 
+                    # Böylece ufak iğneler stopu patlatamaz, coinin kendi doğal dalgalanma payı bırakılır.
+                    guvenli_stop_yuzdesi = max(atr_yuzdesi * 1.5, 1.2)  # En az %1.2 veya ATR'nin 1.5 katı
+                    
                     hedef_oran_fiyat = (hedef_roe / 100.0) / dinamik_kaldirac
-                    stop_oran_fiyat = (stop_roe / 100.0) / dinamik_kaldirac
+                    stop_oran_fiyat = guvenli_stop_yuzdesi / 100.0  # Doğrudan güvenli marj
 
                     if grid_yonu == 'LONG':
                         stop_fiyat = giris_fiyati * (1.0 - stop_oran_fiyat)
@@ -634,7 +649,7 @@ def otomatik_arkaplan_tarayici():
                         "ema_fark": ema_fark_val,
                         "atr_yuzde": atr_yuzdesi,
                         "hedef_roe": hedef_roe,
-                        "stop_roe": stop_roe,
+                        "stop_roe": guvenli_stop_yuzdesi * dinamik_kaldirac,
                         "giris_fiyati": giris_fiyati,
                         "derinlik_durumu": derinlik_durumu,
                         "hacim_orani": hacim_orani,
@@ -642,18 +657,17 @@ def otomatik_arkaplan_tarayici():
                     }
                     hafizayi_kaydet()
                     
-                    islem_tipi_str = "🌟 Altın Vuruş (+90 Skor)" if is_altin_atis else "📊 Standart İşlem"
+                    islem_tipi_str = "🌟 Altın Vuruş (Onaylı)" if is_altin_atis else "📊 Standart Onaylı İşlem"
 
-                    print(f"🚀 İŞLEM AÇILDI & SABİT KORUMA AKTİF: {symbol} | Giriş: {giris_fiyati} | SL: {stop_fiyat} | TP: {hedef_fiyat}", flush=True)
+                    print(f"🚀 İŞLEM AÇILDI & GÜVENLİ KORUMA: {symbol} | Giriş: {giris_fiyati} | SL: {stop_fiyat} | TP: {hedef_fiyat}", flush=True)
                     telegram_mesaj_gonder(
-                        f"⚡ *İŞLEM AÇILDI VE SABİT KORUMA AKTİF*\n\n"
+                        f"🛡️ *GÜVENLİ ONAYLI İŞLEM AÇILDI*\n\n"
                         f"📌 *Coin:* `{symbol}` | 📊 *Yön:* `{grid_yonu}`\n"
                         f"🎯 *İşlem Türü:* `{islem_tipi_str}`\n"
                         f"📈 *Sinyal Puanı:* `{sinyal_puani} / 100`\n"
                         f"⚙️ *Kaldıraç:* `{dinamik_kaldirac}x`\n"
-                        f"💰 *Kasa Oranı:* `%{int(kasa_orani * 100)}`\n"
                         f"🎯 *Hedef TP:* `+{hedef_roe:.1f}%` (`{hedef_fiyat}`)\n"
-                        f"🛑 *Stop SL:* `-{stop_roe:.1f}%` (`{stop_fiyat}`)"
+                        f"🛑 *Stop SL (ATR Bazlı):* `-{guvenli_stop_yuzdesi*dinamik_kaldirac:.1f}% ROE` (`{stop_fiyat}`)"
                     )
                     break 
                 except Exception as e:
