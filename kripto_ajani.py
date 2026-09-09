@@ -13,6 +13,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
 
+# Terminal çıktı tamponunu tamamen kaldırıyoruz (Anlık log akışı için)
 sys.stdout.reconfigure(line_buffering=True)
 
 app = Flask(__name__)
@@ -62,21 +63,24 @@ def hafizayi_yukle():
         "cooldownlar": {}
     }
     try:
+        print("🔍 [SUPABASE] Hafıza verileri yükleniyor...", flush=True)
         response = supabase.table("bot_hafiza").select("*").eq("id", 1).execute()
         if response.data and len(response.data) > 0:
             veri = response.data[0]
+            print("✅ [SUPABASE] Hafıza başarıyla yüklendi.", flush=True)
             return {
                 "aktif_sistemler": veri.get("aktif_sistemler", {}),
                 "analitik": veri.get("analitik", varsayilan["analitik"]),
                 "cooldownlar": veri.get("cooldownlar", {})
             }
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"⚠️ [SUPABASE] Hafıza yükleme hatası: {e}", flush=True)
     
     try:
+        print("🛠️ [SUPABASE] Varsayılan hafıza tablosu oluşturuluyor/güncelleniyor...", flush=True)
         supabase.table("bot_hafiza").upsert({"id": 1, **varsayilan}).execute()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"⚠️ [SUPABASE] Varsayılan hafıza kayıt hatası: {e}", flush=True)
         
     return varsayilan
 
@@ -88,8 +92,9 @@ def hafizayi_kaydet():
             "analitik": ANALITIK_HAFIZA,
             "cooldownlar": COIN_COOLDOWNLAR
         }).execute()
-    except Exception:
-        pass
+        print("💾 [SUPABASE] Hafıza güncellendi ve kaydedildi.", flush=True)
+    except Exception as e:
+        print(f"⚠️ [SUPABASE] Hafıza kayıt hatası: {e}", flush=True)
 
 kalici_veri = hafizayi_yukle()
 AKTIF_SISTEMLER = kalici_veri.get("aktif_sistemler", {})
@@ -109,25 +114,32 @@ def yapay_zekayi_egit_ve_guncelle():
     veriler = ANALITIK_HAFIZA.get("egitim_verileri", [])
     if len(veriler) < 15:
         ai_model_egitildi = False
+        print(f"🤖 [YAPAY ZEKA] Yeterli eğitim verisi yok ({len(veriler)}/15). Model pasif.", flush=True)
         return
     try:
         X = [item[:9] for item in veriler]
         y = [item[9] for item in veriler]
         if len(set(y)) < 2:
             ai_model_egitildi = False
+            print("🤖 [YAPAY ZEKA] Hedef sınıflar tek tip, model eğitilemedi.", flush=True)
             return
         ai_model.fit(np.array(X), np.array(y))
         ai_model_egitildi = True
-    except Exception:
+        print(f"🤖 [YAPAY ZEKA] Model {len(veriler)} örnek ile başarıyla eğitildi!", flush=True)
+    except Exception as e:
         ai_model_egitildi = False
+        print(f"⚠️ [YAPAY ZEKA] Eğitim hatası: {e}", flush=True)
 
 def yapay_zeka_islem_onayi(features):
     if not ai_model_egitildi:
         return True
     try:
         tahmin = ai_model.predict(np.array([features]))[0]
-        return int(tahmin) == 1
-    except Exception:
+        onay = int(tahmin) == 1
+        print(f"🤖 [YAPAY ZEKA] İşlem Tahmini: {'ONAYLANDI ✅' if onay else 'REDDEDİLDİ ❌'}", flush=True)
+        return onay
+    except Exception as e:
+        print(f"⚠️ [YAPAY ZEKA] Tahmin hatası: {e}", flush=True)
         return True
 
 def atr_ve_volatilite_hesapla(df, period=14):
@@ -158,6 +170,7 @@ def emir_defteri_derinlik_analizi(symbol):
 
 def tum_emirleri_iptal_et(symbol):
     try:
+        print(f"🧹 [BORSA] {symbol} için açık emirler iptal ediliyor...", flush=True)
         acik_emirler = exchange.fetch_open_orders(symbol)
         for emir in acik_emirler:
             try:
@@ -177,8 +190,9 @@ def telegram_mesaj_gonder(mesaj):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
         requests.post(url, json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}, timeout=10)
-    except Exception:
-        pass
+        print("📱 [TELEGRAM] Bilgilendirme mesajı gönderildi.", flush=True)
+    except Exception as e:
+        print(f"⚠️ [TELEGRAM] Mesaj gönderme hatası: {e}", flush=True)
 
 @app.route('/')
 def home():
@@ -192,11 +206,13 @@ def set_leverage_and_margin_safely(symbol, leverage):
         except Exception:
             pass
         return True
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ [BORSA] Kaldıraç/Marjin ayarlama hatası ({symbol}): {e}", flush=True)
         return False
 
 # ==================== TELEGRAM KOMUTLARI ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("👤 [TELEGRAM] /durum komutu alındı.", flush=True)
     try:
         balance = exchange.fetch_balance()
         total = float(balance['total'].get('USDT', 0))
@@ -238,15 +254,18 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
+    print("▶️ [KONTROL] Bot kullanıcı tarafından AKTİF edildi.", flush=True)
     await update.message.reply_text("🚀 *Bot Aktif Edildi!*", parse_mode='Markdown')
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = False
+    print("⏸️ [KONTROL] Bot kullanıcı tarafından DURDURULDU.", flush=True)
     await update.message.reply_text("⏸️ *Bot Durduruldu.*", parse_mode='Markdown')
 
 async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 *Tüm emirler and pozisyonlar temizleniyor...*", parse_mode='Markdown')
+    print("🔄 [KONTROL] /kapat komutu ile tüm pozisyonlar temizleniyor...", flush=True)
+    await update.message.reply_text("🔄 *Tüm emirler ve pozisyonlar temizleniyor...*", parse_mode='Markdown')
     try:
         for pos in exchange.fetch_positions():
             kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
@@ -263,19 +282,20 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         AKTIF_SISTEMLER.clear()
         hafizayi_kaydet()
         await update.message.reply_text("✅ Testnet tamamen temizlendi.", parse_mode='Markdown')
-    except Exception:
+    except Exception as e:
         AKTIF_SISTEMLER.clear()
         hafizayi_kaydet()
-        await update.message.reply_text("✅ Hafıza temizlendi.", parse_mode='Markdown')
+        await update.message.reply_text(f"✅ Hafıza temizlendi (Borsa temizleme uyarısı: {e}).", parse_mode='Markdown')
 
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALITIK_HAFIZA
-    print("🚀 [TESTNET HİBRİT MİMARİ] Başlatıldı.", flush=True)
+    print("🚀 [TESTNET HİBRİT MİMARİ] Arka plan tarayıcısı başlatıldı.", flush=True)
     try:
         exchange.load_markets()
-    except Exception:
-        pass
+        print(f"📊 [BORSA] Marketler yüklendi. Takip edilen parite sayısı: {len(TAKIP_EDILENLER)}", flush=True)
+    except Exception as e:
+        print(f"⚠️ [BORSA] Market yükleme hatası: {e}", flush=True)
     
     yapay_zekayi_egit_ve_guncelle()
     
@@ -285,16 +305,21 @@ def otomatik_arkaplan_tarayici():
                 time.sleep(5)
                 continue
 
+            print("--------------------------------------------------", flush=True)
+            print(f"🔄 [DÖNGÜ] Tarama turu başlatılıyor... Aktif Sistemler: {len(AKTIF_SISTEMLER)}/{MAKSIMUM_TOPLAM_POZISYON}", flush=True)
+
             try:
                 raw_positions = exchange.fetch_positions()
                 aktif_borsa_map = {p['symbol']: p for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0}
-            except Exception:
+            except Exception as e:
+                print(f"⚠️ [BORSA] Pozisyonlar çekilemedi: {e}", flush=True)
                 aktif_borsa_map = {}
 
             # --- 1. TREND MODU TAKİBİ VE KAPATILANLAR ---
             for sym in list(AKTIF_SISTEMLER.keys()):
                 veri = AKTIF_SISTEMLER[sym]
                 if veri.get("mod") == "TREND" and sym not in aktif_borsa_map:
+                    print(f"🏁 [TREND] {sym} pozisyonu kapanmış/hedefe ulaşmış tespit edildi.", flush=True)
                     AKTIF_SISTEMLER.pop(sym)
                     basarili_islem = False
                     realized_pnl = 0.0
@@ -305,15 +330,17 @@ def otomatik_arkaplan_tarayici():
                             son_trade = my_trades[-1]
                             realized_pnl = float(son_trade.get('info', {}).get('pnl', 0) or 0)
                             basarili_islem = realized_pnl > 0
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"⚠️ [BORSA] Trade geçmişi okunamadı: {e}", flush=True)
 
                     if basarili_islem:
                         ANALITIK_HAFIZA["basarili_islem_sayisi"] = ANALITIK_HAFIZA.get("basarili_islem_sayisi", 0) + 1
                         telegram_mesaj_gonder(f"🎉 *Trend Hedefe Ulaştı* -> `{sym}` 🟢 (PnL: `{realized_pnl:+.2f}$`)")
+                        print(f"✅ [SONUÇ] Trend Başarılı: {sym} | PnL: {realized_pnl:+.2f}$", flush=True)
                     else:
                         ANALITIK_HAFIZA["basarisiz_islem_sayisi"] = ANALITIK_HAFIZA.get("basarisiz_islem_sayisi", 0) + 1
                         telegram_mesaj_gonder(f"❌ *Trend Stop Oldu* -> `{sym}` 🔴 (PnL: `{realized_pnl:+.2f}$`)")
+                        print(f"❌ [SONUÇ] Trend Stop: {sym} | PnL: {realized_pnl:+.2f}$", flush=True)
 
                     if "parametreler" in veri:
                         egitim_kaydi = veri["parametreler"] + [1 if basarili_islem else 0]
@@ -337,6 +364,7 @@ def otomatik_arkaplan_tarayici():
 
                         fiyat_sapma = abs((guncel_fiyat - merkez) / merkez) * 100
                         if adx_val > 30 and fiyat_sapma > 3.0:
+                            print(f"⚠️ [GRID] Trend patlaması algılandı! {sym} için Grid sonlandırılıyor. ADX: {adx_val:.1f}", flush=True)
                             tum_emirleri_iptal_et(sym)
                             if sym in aktif_borsa_map:
                                 pos = aktif_borsa_map[sym]
@@ -348,8 +376,8 @@ def otomatik_arkaplan_tarayici():
                             AKTIF_SISTEMLER.pop(sym)
                             hafizayi_kaydet()
                             telegram_mesaj_gonder(f"⚠️ *Grid Modu Sonlandırıldı (Trend Patlaması)* -> `{sym}` (ADX: `{adx_val:.1f}`)")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"⚠️ [GRID] Kontrol hatası ({sym}): {e}", flush=True)
 
             # --- 3. TARAMA VE YENİ SİSTEM KURULUMU ---
             taranan_sinyaller = []
@@ -382,6 +410,8 @@ def otomatik_arkaplan_tarayici():
                     coin_id = COIN_ID_MAP.get(symbol, 1)
                     features = [rsi, adx_val, ema_fark, (1 if trend_boga else -1), atr_yuzdesi, coin_id, derinlik_kod, hacim_orani, fiyat_degisim]
 
+                    print(f"🔎 [ANALİZ] {symbol} | Fiyat: {guncel_fiyat} | RSI: {rsi:.1f} | ADX: {adx_val:.1f} | Boğa: {trend_boga}", flush=True)
+
                     if adx_val > 24:
                         puan = 75 if trend_boga else 70
                         grid_yonu = "LONG" if trend_boga else "SHORT"
@@ -390,14 +420,17 @@ def otomatik_arkaplan_tarayici():
                                 "symbol": symbol, "mod": "TREND", "puan": puan, "yon": grid_yonu, 
                                 "fiyat": guncel_fiyat, "atr": atr_yuzdesi, "parametreler": features
                             })
+                            print(f"✨ [SINYAL] Trend Sinyali Yakalandı -> {symbol} ({grid_yonu})", flush=True)
                     else:
                         if 40 <= rsi <= 60:
                             taranan_sinyaller.append({
                                 "symbol": symbol, "mod": "GRID", "puan": 80, "yon": "SIDWAYS", 
                                 "fiyat": guncel_fiyat, "atr": atr_yuzdesi, "parametreler": features
                             })
+                            print(f"✨ [SINYAL] Grid Sinyali Yakalandı -> {symbol} (Yatay)", flush=True)
 
-                except Exception:
+                except Exception as e:
+                    print(f"⚠️ [ANALİZ] Parite analiz hatası ({symbol}): {e}", flush=True)
                     continue
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
@@ -464,14 +497,13 @@ def otomatik_arkaplan_tarayici():
                         }
                         hafizayi_kaydet()
 
-                        print(f"🚀 TESTNET TREND İŞLEMİ AÇILDI: {symbol} | Yön: {grid_yonu}", flush=True)
+                        print(f"🚀 [EMİR] TESTNET TREND İŞLEMİ AÇILDI: {symbol} | Yön: {grid_yonu}", flush=True)
                         telegram_mesaj_gonder(f"🚀 *TESTNET TREND İŞLEMİ*\n📌 Coin: `{symbol}` | Yön: `{grid_yonu}` | Hedef: `{hedef_fiyat}`")
                         break
                     except Exception as e:
-                        print(f"❌ Trend emir hatası: {e}", flush=True)
+                        print(f"❌ [EMİR] Trend emir hatası ({symbol}): {e}", flush=True)
 
                 elif mod == "GRID":
-                    # Testnet için 5 Kademeli Gerçek Limit Alım ve Satış Emirleri (reduce_only kaldırıldı)
                     try:
                         kademe_sayisi = 5
                         hedef_marjin = (toplam_bakiye * 0.15) / kademe_sayisi 
@@ -488,7 +520,7 @@ def otomatik_arkaplan_tarayici():
                             # 1. Alım Emri (Limit Buy)
                             exchange.create_order(symbol, 'limit', 'buy', miktar, kademe_fiyat)
                             
-                            # 2. Kar Al Emri (Limit Sell +%1.5 üstüne - reduce_only yok)
+                            # 2. Kar Al Emri (Limit Sell)
                             satis_fiyat = kademe_fiyat * 1.015
                             satis_fiyat = float(exchange.price_to_precision(symbol, satis_fiyat))
                             exchange.create_order(symbol, 'limit', 'sell', miktar, satis_fiyat)
@@ -498,20 +530,23 @@ def otomatik_arkaplan_tarayici():
                         }
                         hafizayi_kaydet()
 
-                        print(f"⚡ TESTNET 5 KADEMELİ GRID EMİRLERİ KURULDU: {symbol}", flush=True)
+                        print(f"⚡ [EMİR] TESTNET 5 KADEMELİ GRID EMİRLERİ KURULDU: {symbol}", flush=True)
                         telegram_mesaj_gonder(f"⚡ *TESTNET GRID AKTİF*\n📌 Coin: `{symbol}` | 5 Kademeli Al/Sat Ağ Emirleri Girildi.")
                         break
                     except Exception as e:
-                        print(f"❌ Testnet Grid emir hatası: {e}", flush=True)
+                        print(f"❌ [EMİR] Testnet Grid emir hatası ({symbol}): {e}", flush=True)
 
         except Exception as e:
-            print(f"⚠️ Döngü hatası: {e}", flush=True)
+            print(f"⚠️ [DÖNGÜ] Genel döngü hatası: {e}", flush=True)
         time.sleep(10)
 
 def flask_web_server():
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+    port = int(os.environ.get("PORT", 5000))
+    print(f"🌐 [FLASK] Web sunucusu başlatılıyor (Port: {port})...", flush=True)
+    app.run(host='0.0.0.0', port=port)
 
 if __name__ == '__main__':
+    print("🎬 [BAŞLANGIÇ] Bot servisleri tetikleniyor...", flush=True)
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     threading.Thread(target=flask_web_server, daemon=True).start()
     
@@ -521,4 +556,5 @@ if __name__ == '__main__':
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
+    print("🤖 [TELEGRAM] Bot polling (komut dinleme) modu başlatıldı.", flush=True)
     app_tg.run_polling()
