@@ -49,10 +49,9 @@ KALDIRAC = 10
 MAKSIMUM_TOPLAM_POZISYON = 3
 COOLDOWN_SURESI_SANIYE = 10 * 60
 
-# Volatilite ve Tahtacı Kalkanı Parametreleri
-MIN_GRID_ADIM = 0.0035  # %0.35 
-MAX_GRID_ADIM = 0.008   # %0.80 
-STOP_SAPMA_YUZDESI = 2.2 # Tahtacı iğnelerine karşı optimize edilmiş sıkı koridor
+MIN_GRID_ADIM = 0.0035  
+MAX_GRID_ADIM = 0.008   
+STOP_SAPMA_YUZDESI = 2.2 
 
 # ==================== SUPABASE HAFIZA FONKSİYONLARI ====================
 def hafizayi_yukle():
@@ -160,11 +159,7 @@ def bollinger_bandwidth_hesapla(df, window=20):
     except Exception:
         return 0.05
 
-def piyasa_rejimini_analiz_et(df, orderbook=None):
-    """
-    Piyasanın 3 halini (Testere, Boğa Impuls, Şelale/Ayı) tahtacı tuzaklarını 
-    (hacim teyidi ve emir defteri dengesizliğiyle) eleyerek tespit eder.
-    """
+def piyasa_rejimini_analiz_et(df):
     try:
         if len(df) < 20:
             return "RANGE"
@@ -174,23 +169,21 @@ def piyasa_rejimini_analiz_et(df, orderbook=None):
         p_di = adx_ind.adx_pos().iloc[-1]
         n_di = adx_ind.adx_neg().iloc[-1]
         
-        # Hacim teyidi (Son mumun hacmi ortalama hacmin üzerinde mi?)
         ortalama_hacim = df['volume'].rolling(20).mean().iloc[-1]
         son_hacim = df['volume'].iloc[-1]
         hacim_patlamasi = son_hacim > (ortalama_hacim * 1.5)
         
-        # Tahtacı Tuzak Filtresi: Düşük hacimli sahte kırılımları şelale sayma!
         if adx > 26 and n_di > p_di:
             if not hacim_patlamasi:
-                return "RANGE" # Sahte aşağı iğne / Stop avı -> Testere kabul et, bozulma!
-            return "BEAR_SHARK" # Gerçek hacimli şelale
+                return "RANGE"
+            return "BEAR_SHARK"
             
         if adx > 26 and p_di > n_di:
             if not hacim_patlamasi:
-                return "RANGE" # Sahte yukarı iğne -> Testere kabul et
-            return "BULL_IMPULSE" # Gerçek yukarı trend
+                return "RANGE"
+            return "BULL_IMPULSE"
             
-        return "RANGE" # Klasik testere / yatay bant
+        return "RANGE"
     except Exception:
         return "RANGE"
 
@@ -272,7 +265,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🚀 *Bot Aktif Edildi ve Savunma Modu Devrede!*", parse_mode='Markdown')
+    await update.message.reply_text("🚀 *Bot Aktif Edildi ve Canlı Log Modu Devrede!*", parse_mode='Markdown')
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -301,7 +294,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALITIK_HAFIZA
-    print("🚀 [GRID] Anti-Ezber Korumalı Arka Plan Tarayıcısı Başlatıldı.", flush=True)
+    print("🚀 [GRID] Canlı Log Akışlı Anti-Ezber Tarayıcı Başlatıldı.", flush=True)
     try:
         exchange.load_markets()
     except Exception:
@@ -321,7 +314,7 @@ def otomatik_arkaplan_tarayici():
             except Exception:
                 aktif_borsa_map = {}
 
-            # --- 1. AKTİF GRID KONTROLÜ VE REJİM DENETİMİ ---
+            # --- 1. AKTİF GRID KONTROLÜ ---
             for sym in list(AKTIF_SISTEMLER.keys()):
                 veri = AKTIF_SISTEMLER[sym]
                 try:
@@ -331,13 +324,13 @@ def otomatik_arkaplan_tarayici():
                     ohlcv_data = exchange.fetch_ohlcv(sym, timeframe='1h', limit=35)
                     df_1h = pd.DataFrame(ohlcv_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     
-                    # Piyasa rejimini tahtacı süzgeciyle tespit et
                     rejim = piyasa_rejimini_analiz_et(df_1h)
                     fiyat_sapma = abs((guncel_fiyat - merkez) / merkez) * 100
 
-                    # Şelale (Bear Shark) veya Sınır aşımı durumunda güvenli limana kaçış
+                    print(f"📊 [AKTİF KONTROL] {sym} | Fiyat: {guncel_fiyat} | Rejim: {rejim} | Sapma: %{fiyat_sapma:.2f}", flush=True)
+
                     if rejim == "BEAR_SHARK" or fiyat_sapma > STOP_SAPMA_YUZDESI:
-                        print(f"⚠️ [GÜVENLİ LİMAN] {sym} şelale rejimine yakalandı veya sapma aşıldı! Nakite geçiliyor.", flush=True)
+                        print(f"⚠️ [GÜVENLİ LİMAN] {sym} şelale rejimine yakalandı! Nakite geçiliyor.", flush=True)
                         tum_emirleri_iptal_et(sym)
                         if sym in aktif_borsa_map:
                             pos = aktif_borsa_map[sym]
@@ -352,41 +345,10 @@ def otomatik_arkaplan_tarayici():
                         telegram_mesaj_gonder(f"🛡️ *Fırtına Kalkanı Devrede* -> `{sym}` nakite çekildi. (Rejim: `{rejim}`)")
                         continue
 
-                    # DİNAMİK ADIM VE TAZELEME (Sadece Testere / Range rejimindeyse çalışır)
-                    if rejim == "RANGE":
-                        acik_emirler = exchange.fetch_open_orders(sym)
-                        if len(acik_emirler) < 4:
-                            print(f"🔄 [DİNAMİK GRID] {sym} testere rejiminde emirleri tazeliyor...", flush=True)
-                            tum_emirleri_iptal_et(sym)
-                            
-                            guncel_adim = dinamik_adim_hesapla(df_1h)
-                            kademe_sayisi = 3
-                            balance = exchange.fetch_balance()
-                            toplam_bakiye = float(balance['total'].get('USDT', 0))
-                            
-                            coin_toplam_butce = toplam_bakiye / MAKSIMUM_TOPLAM_POZISYON
-                            kademe_butce = coin_toplam_butce / (kademe_sayisi * 2)
-                            market_info = exchange.market(sym)
-
-                            for i in range(1, kademe_sayisi + 1):
-                                alis_fiyat = float(exchange.price_to_precision(sym, guncel_fiyat * (1.0 - (i * guncel_adim))))
-                                ham_mask_alis = (kademe_butce * KALDIRAC) / alis_fiyat
-                                mik_alis = float(exchange.amount_to_precision(sym, max(round(ham_mask_alis / float(market_info.get('contractSize', 1.0))), 1)))
-                                exchange.create_order(sym, 'limit', 'buy', mik_alis, alis_fiyat)
-
-                                satis_fiyat = float(exchange.price_to_precision(sym, guncel_fiyat * (1.0 + (i * guncel_adim))))
-                                ham_mask_satis = (kademe_butce * KALDIRAC) / satis_fiyat
-                                mik_satis = float(exchange.amount_to_precision(sym, max(round(ham_mask_satis / float(market_info.get('contractSize', 1.0))), 1)))
-                                exchange.create_order(sym, 'limit', 'sell', mik_satis, satis_fiyat)
-
-                            veri["merkez_fiyat"] = guncel_fiyat
-                            veri["guncel_adim"] = guncel_adim
-                            hafizayi_kaydet()
-
                 except Exception as e:
-                    print(f"⚠️ [GRID YÖNETİMİ] Hata ({sym}): {e}", flush=True)
+                    print(f"⚠️ [AKTİF HATA] ({sym}): {e}", flush=True)
 
-            # --- 2. YENİ PARİTE TARAMA (Sadece Sağlıklı Testere Piyasasında Kurulum) ---
+            # --- 2. YENİ PARİTE TARAMA (Canlı Loglar) ---
             su_anki_zaman = time.time()
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU or symbol in AKTIF_SISTEMLER or len(AKTIF_SISTEMLER) >= MAKSIMUM_TOPLAM_POZISYON or su_anki_zaman < COIN_COOLDOWNLAR.get(symbol, 0):
@@ -399,18 +361,18 @@ def otomatik_arkaplan_tarayici():
                     df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     
                     rejim = piyasa_rejimini_analiz_et(df_15m)
+                    rsi = float(ta.momentum.rsi(df_15m['close'], window=14).iloc[-1])
+                    bb_bandwidth = bollinger_bandwidth_hesapla(df_15m)
+                    guncel_adim = dinamik_adim_hesapla(df_15m)
                     
-                    # Sadece piyasa net bir "Testere (Range)" evresindeyse grid kuruyoruz! Şelale veya trendde asla atlamıyoruz.
-                    if rejim == "RANGE":
-                        rsi = float(ta.momentum.rsi(df_15m['close'], window=14).iloc[-1])
-                        bb_bandwidth = bollinger_bandwidth_hesapla(df_15m)
-                        guncel_adim = dinamik_adim_hesapla(df_15m)
-                        guncel_fiyat = df_15m['close'].iloc[-1]
+                    print(f"🔍 [TARANIYOR] {symbol} -> Rejim: {rejim} | RSI: {rsi:.1f} | BB Bandwidth: {bb_bandwidth:.4f}", flush=True)
 
-                        features = [rsi, bb_bandwidth, guncel_adim * 100, guncel_fiyat, 0, 0, 0, 0, COIN_ID_MAP.get(symbol, 1)]
+                    if rejim == "RANGE":
+                        features = [rsi, bb_bandwidth, guncel_adim * 100, df_15m['close'].iloc[-1], 0, 0, 0, 0, COIN_ID_MAP.get(symbol, 1)]
                         ai_onay = yapay_zeka_islem_onayi(features)
 
                         if bb_bandwidth < 0.06 and 38 <= rsi <= 62 and ai_onay:
+                            print(f"🎯 [ŞARTLAR SAĞLANDI] {symbol} için grid kuruluyor...", flush=True)
                             if not set_leverage_and_margin_safely(symbol, KALDIRAC):
                                 continue
 
@@ -421,6 +383,7 @@ def otomatik_arkaplan_tarayici():
                             kademe_sayisi = 3
                             kademe_butce = coin_toplam_butce / (kademe_sayisi * 2)
                             market_info = exchange.market(symbol)
+                            guncel_fiyat = df_15m['close'].iloc[-1]
                             
                             tum_emirleri_iptal_et(symbol)
 
@@ -447,10 +410,10 @@ def otomatik_arkaplan_tarayici():
                             break
 
                 except Exception as e:
-                    print(f"⚠️ [TARAMA] Hata ({symbol}): {e}", flush=True)
+                    print(f"⚠️ [TARAMA HATA] ({symbol}): {e}", flush=True)
 
         except Exception as e:
-            print(f"⚠️ [DÖNGÜ] Genel hata: {e}", flush=True)
+            print(f"⚠️ [DÖNGÜ HATA]: {e}", flush=True)
         time.sleep(10)
 
 def flask_web_server():
