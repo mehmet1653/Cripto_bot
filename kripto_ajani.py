@@ -13,7 +13,6 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
 
-# Terminal çıktı tamponunu tamamen kaldırıyoruz (Anlık log akışı için)
 sys.stdout.reconfigure(line_buffering=True)
 
 app = Flask(__name__)
@@ -149,6 +148,19 @@ def atr_ve_volatilite_hesapla(df, period=14):
         return float((atr / fiyat) * 100)
     except Exception:
         return 1.5
+
+def bollinger_bandwidth_hesapla(df, window=20):
+    try:
+        indicator = ta.volatility.BollingerBands(df['close'], window=window, window_dev=2)
+        upper = indicator.bollinger_hband().iloc[-1]
+        lower = indicator.bollinger_lband().iloc[-1]
+        mavg = indicator.bollinger_mavg().iloc[-1]
+        if mavg == 0:
+            return 0.0
+        bw = (upper - lower) / mavg
+        return float(bw)
+    except Exception:
+        return 0.05
 
 def emir_defteri_derinlik_analizi(symbol):
     try:
@@ -409,6 +421,10 @@ def otomatik_arkaplan_tarayici():
                     rsi = float(ta.momentum.rsi(df_15m['close'], window=14).iloc[-1])
                     adx_val = float(ta.trend.ADXIndicator(df_15m['high'], df_15m['low'], df_15m['close'], window=14).adx().iloc[-1])
                     atr_yuzdesi = atr_ve_volatilite_hesapla(df_15m)
+                    
+                    # Yeni Gelişmiş Filtreler
+                    bb_bandwidth = bollinger_bandwidth_hesapla(df_15m)
+                    
                     derinlik = emir_defteri_derinlik_analizi(symbol)
                     derinlik_kod = 1 if derinlik == "ALICI_BASKIN" else (-1 if derinlik == "SATICI_BASKIN" else 0)
 
@@ -420,7 +436,7 @@ def otomatik_arkaplan_tarayici():
                     coin_id = COIN_ID_MAP.get(symbol, 1)
                     features = [rsi, adx_val, ema_fark, (1 if trend_boga else -1), atr_yuzdesi, coin_id, derinlik_kod, hacim_orani, fiyat_degisim]
 
-                    print(f"🔎 [ANALİZ] {symbol} | Fiyat: {guncel_fiyat} | RSI: {rsi:.1f} | ADX: {adx_val:.1f} | Boğa: {trend_boga}", flush=True)
+                    print(f"🔎 [ANALİZ] {symbol} | Fiyat: {guncel_fiyat} | RSI: {rsi:.1f} | ADX: {adx_val:.1f} | BB-BW: {bb_bandwidth:.4f}", flush=True)
 
                     if adx_val > 24:
                         puan = 75 if trend_boga else 70
@@ -432,12 +448,13 @@ def otomatik_arkaplan_tarayici():
                             })
                             print(f"✨ [SINYAL] Trend Sinyali Yakalandı -> {symbol} ({grid_yonu})", flush=True)
                     else:
-                        if 40 <= rsi <= 60:
+                        # Akıllı Grid Koşulu: RSI dengede, aşırı patlak değil ve hacim tamamen ölü/aşırı spekülatif değil
+                        if 40 <= rsi <= 60 and bb_bandwidth < 0.08 and 0.2 < hacim_orani < 3.5:
                             taranan_sinyaller.append({
                                 "symbol": symbol, "mod": "GRID", "puan": 80, "yon": "SIDWAYS", 
                                 "fiyat": guncel_fiyat, "atr": atr_yuzdesi, "parametreler": features
                             })
-                            print(f"✨ [SINYAL] Grid Sinyali Yakalandı -> {symbol} (Yatay)", flush=True)
+                            print(f"✨ [SINYAL] Akıllı Grid Sinyali Yakalandı -> {symbol} (Yatay & Sıkışık)", flush=True)
 
                 except Exception as e:
                     print(f"⚠️ [ANALİZ] Parite analiz hatası ({symbol}): {e}", flush=True)
@@ -527,10 +544,8 @@ def otomatik_arkaplan_tarayici():
                             ham_mask = (hedef_marjin * KALDIRAC) / kademe_fiyat
                             miktar = float(exchange.amount_to_precision(symbol, max(round(ham_mask / float(market_info.get('contractSize', 1.0))), 1)))
                             
-                            # 1. Alım Emri (Limit Buy)
                             exchange.create_order(symbol, 'limit', 'buy', miktar, kademe_fiyat)
                             
-                            # 2. Kar Al Emri (Limit Sell)
                             satis_fiyat = kademe_fiyat * 1.015
                             satis_fiyat = float(exchange.price_to_precision(symbol, satis_fiyat))
                             exchange.create_order(symbol, 'limit', 'sell', miktar, satis_fiyat)
@@ -540,8 +555,8 @@ def otomatik_arkaplan_tarayici():
                         }
                         hafizayi_kaydet()
 
-                        print(f"⚡ [EMİR] TESTNET 5 KADEMELİ GRID EMİRLERİ KURULDU: {symbol}", flush=True)
-                        telegram_mesaj_gonder(f"⚡ *TESTNET GRID AKTİF*\n📌 Coin: `{symbol}` | 5 Kademeli Al/Sat Ağ Emirleri Girildi.")
+                        print(f"⚡ [EMİR] TESTNET 5 KADEMELİ AKILLI GRID EMİRLERİ KURULDU: {symbol}", flush=True)
+                        telegram_mesaj_gonder(f"⚡ *TESTNET AKILLI GRID AKTİF*\n📌 Coin: `{symbol}` | Sıkışma & Hacim Onaylı 5 Kademe Kuruldu.")
                         break
                     except Exception as e:
                         hata_mesaji = f"❌ [EMİR] Testnet Grid emir hatası ({symbol}): {e}"
