@@ -181,14 +181,6 @@ def emir_defteri_derinlik_analizi(symbol):
     except Exception:
         return "DENGELI"
 
-def hacim_ve_likidite_kontrolu(df):
-    try:
-        ortalama_hacim = df['volume'].rolling(window=20).mean().iloc[-1]
-        son_hacim = df['volume'].iloc[-1]
-        return son_hacim >= (ortalama_hacim * 0.10)
-    except Exception:
-        return True
-
 def tum_emirleri_iptal_et(symbol):
     try:
         acik_emirler = exchange.fetch_open_orders(symbol)
@@ -315,7 +307,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 [BAŞLANGIÇ] Dinamik Kâr Hedefi (%1 veya %2) ve Trailing Modu Devrede.", flush=True)
+    print("🚀 [BAŞLANGIÇ] Dinamik Kâr Hedefi (%1 veya %2) ve Trailing Modu Devrede (Hacim Filtresiz).", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -364,7 +356,6 @@ def otomatik_arkaplan_tarayici():
                         else:
                             fiyat_farki_yuzde = ((giris_fiyati - guncel_fiyat) / giris_fiyati) * 100
 
-                        # Eğer fiyat lehimize %0.8 üstüne çıktıysa ve Trailing aktifleşmediyse -> Stop'u Giriş Fiyata Çek
                         if fiyat_farki_yuzde >= 0.8 and not kayitli_veri.get("trailing_aktif", False):
                             kayitli_veri["trailing_aktif"] = True
                             tum_emirleri_iptal_et(sym)
@@ -475,9 +466,6 @@ def otomatik_arkaplan_tarayici():
                     
                     ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=30)
                     df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    
-                    if not hacim_ve_likidite_kontrolu(df_15m):
-                        continue
 
                     ema7_1h = ta.trend.ema_indicator(df_1h['close'], window=7).iloc[-1]
                     ema21_1h = ta.trend.ema_indicator(df_1h['close'], window=21).iloc[-1]
