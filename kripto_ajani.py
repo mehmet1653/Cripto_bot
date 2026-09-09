@@ -46,11 +46,12 @@ COIN_ID_MAP = {symbol: idx + 1 for idx, symbol in enumerate(TAKIP_EDILENLER)}
 
 BOT_CALISIYOR_MU = True
 KALDIRAC = 10
-MARJIN_ORANI = 0.20
 MAKSIMUM_TOPLAM_POZISYON = 3
 COOLDOWN_SURESI_SANIYE = 10 * 60
 
-GRID_ADIM_YUZDESI = 0.006 
+# Volatilite Bazlı Adım Sınırları (Hacimsiz piyasada otomatik daralır)
+MIN_GRID_ADIM = 0.0035  # %0.35 (Hacimsiz piyasa için hızlı tetiklenme)
+MAX_GRID_ADIM = 0.008   # %0.80 (Oynak piyasa için güvenli marj)
 STOP_SAPMA_YUZDESI = 2.5
 
 # ==================== SUPABASE HAFIZA FONKSİYONLARI ====================
@@ -103,7 +104,7 @@ ANALITIK_HAFIZA = kalici_veri.get("analitik", {
 })
 COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
-# ==================== YAPAY ZEKA MODELİ ====================
+# ==================== YAPAY ZEKA VE VOLATİLİTE MOTORU ====================
 ai_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
 ai_model_egitildi = False
 
@@ -133,15 +134,20 @@ def yapay_zeka_islem_onayi(features):
     except Exception:
         return True
 
-def atr_ve_volatilite_hesapla(df, period=14):
+def dinamik_adim_hesapla(df):
+    """Piyasanın anlık oynaklığına (ATR) göre en ideal grid adımını otomatik belirler"""
     try:
-        if len(df) < period:
-            return 1.5
-        atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=period).average_true_range().iloc[-1]
+        if len(df) < 14:
+            return 0.005
+        atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
         fiyat = df['close'].iloc[-1]
-        return float((atr / fiyat) * 100)
+        atr_yuzde = (atr / fiyat)
+        
+        # Oynaklığa göre adımı ölçekle ama sınırların dışına çıkma
+        hesaplanan_adim = atr_yuzde * 0.5 
+        return float(np.clip(hesaplanan_adim, MIN_GRID_ADIM, MAX_GRID_ADIM))
     except Exception:
-        return 1.5
+        return 0.005
 
 def bollinger_bandwidth_hesapla(df, window=20):
     try:
@@ -183,7 +189,7 @@ def telegram_mesaj_gonder(mesaj):
 
 @app.route('/')
 def home():
-    return f"Gelişmiş Trend-Aware Dinamik Grid Bot Aktif | Aktif Sistemler: {len(AKTIF_SISTEMLER)}"
+    return f"Dinamik Volatilite Grid Bot Aktif | Aktif Sistemler: {len(AKTIF_SISTEMLER)}"
 
 def set_leverage_and_margin_safely(symbol, leverage):
     try:
@@ -213,7 +219,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pnl_ikon = "🟢" if toplam_pnl >= 0 else "🔴"
         
         mesaj = (
-            f"🚀 *GRID BOT ANLIK DURUM RAPORU*\n\n"
+            f"🚀 *DİNAMİK VOLATİLİTE GRID RAPORU*\n\n"
             f"💰 Kasa: `{total:.2f} USDT` (Serbest: `{free:.2f} USDT`)\n"
             f"{pnl_ikon} Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Aktif Sistemler: `{len(AKTIF_SISTEMLER)} / {MAKSIMUM_TOPLAM_POZISYON}`\n"
@@ -225,6 +231,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             for sym, veri in AKTIF_SISTEMLER.items():
                 merkez = veri.get("merkez_fiyat", 0)
+                adim = veri.get("guncel_adim", 0.005) * 100
                 pos = borsa_poslari.get(sym)
                 
                 if pos:
@@ -232,9 +239,9 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     yon = str(pos.get('side', '')).upper()
                     pnl = float(pos.get('unrealizedPnl', 0))
                     giris = float(pos.get('entryPrice', 0))
-                    mesaj += f"🔹 *{sym}* (`{yon}`)\n   • Giriş: `{giris}` | Adet: `{kontrat}`\n   • PnL: `{pnl:+.2f} USDT`\n\n"
+                    mesaj += f"🔹 *{sym}* (`{yon}`)\n   • Giriş: `{giris}` | Adım: `%{adim:.2f}`\n   • PnL: `{pnl:+.2f} USDT`\n\n"
                 else:
-                    mesaj += f"🔹 *{sym}* (Beklemede / Emirler Aktif)\n   • Merkez Fiyat: `{merkez}`\n   • Pozisyon: `Henüz tetiklenmedi`\n\n"
+                    mesaj += f"🔹 *{sym}* (Beklemede / Emirler Aktif)\n   • Merkez: `{merkez}` | Adım: `%{adim:.2f}`\n   • Pozisyon: `Henüz tetiklenmedi`\n\n"
 
         await update.message.reply_text(mesaj, parse_mode='Markdown')
     except Exception as e:
@@ -272,7 +279,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALITIK_HAFIZA
-    print("🚀 [GRID] Arka plan tarayıcısı başlatıldı.", flush=True)
+    print("🚀 [GRID] Dinamik Volatilite Arka Plan Tarayıcısı Başlatıldı.", flush=True)
     try:
         exchange.load_markets()
     except Exception:
@@ -292,7 +299,7 @@ def otomatik_arkaplan_tarayici():
             except Exception:
                 aktif_borsa_map = {}
 
-            # --- 1. AKTİF GRID KONTROLÜ VE RESET ---
+            # --- 1. AKTİF GRID KONTROLÜ VE VOLATİLİTE GÜNCELLEMESİ ---
             for sym in list(AKTIF_SISTEMLER.keys()):
                 veri = AKTIF_SISTEMLER[sym]
                 try:
@@ -306,7 +313,7 @@ def otomatik_arkaplan_tarayici():
                     fiyat_sapma = abs((guncel_fiyat - merkez) / merkez) * 100
 
                     if adx_val > 30 or fiyat_sapma > STOP_SAPMA_YUZDESI:
-                        print(f"⚠️ [STOP/RESET] {sym} sınır dışına çıktı! Stop Olunuyor.", flush=True)
+                        print(f"⚠️ [STOP/RESET] {sym} sınır dışına çıktı! Resetleniyor.", flush=True)
                         tum_emirleri_iptal_et(sym)
                         if sym in aktif_borsa_map:
                             pos = aktif_borsa_map[sym]
@@ -318,33 +325,37 @@ def otomatik_arkaplan_tarayici():
                         AKTIF_SISTEMLER.pop(sym)
                         COIN_COOLDOWNLAR[sym] = time.time() + COOLDOWN_SURESI_SANIYE
                         hafizayi_kaydet()
-                        telegram_mesaj_gonder(f"🛑 *Grid Stop / Reset* -> `{sym}` (Sapma: `%{fiyat_sapma:.2f}`)")
+                        telegram_mesaj_gonder(f"🛑 *Grid Reset* -> `{sym}` (Sapma: `%{fiyat_sapma:.2f}`)")
                         continue
 
-                    # DİNAMİK DÖNGÜ KONTROLÜ
+                    # DİNAMİK ADIM VE TAZELEME
                     acik_emirler = exchange.fetch_open_orders(sym)
                     if len(acik_emirler) < 4:
-                        print(f"🔄 [DİNAMİK GRID] {sym} için dolan emirler tazeleniyor...", flush=True)
+                        print(f"🔄 [DİNAMİK GRID] {sym} emirleri güncel volatiliteye göre yenileniyor...", flush=True)
                         tum_emirleri_iptal_et(sym)
                         
+                        guncel_adim = dinamik_adim_hesapla(df_1h)
                         kademe_sayisi = 3
                         balance = exchange.fetch_balance()
                         toplam_bakiye = float(balance['total'].get('USDT', 0))
-                        kademe_butce = (toplam_bakiye * 0.15) / (kademe_sayisi * 2)
+                        
+                        coin_toplam_butce = toplam_bakiye / MAKSIMUM_TOPLAM_POZISYON
+                        kademe_butce = coin_toplam_butce / (kademe_sayisi * 2)
                         market_info = exchange.market(sym)
 
                         for i in range(1, kademe_sayisi + 1):
-                            alis_fiyat = float(exchange.price_to_precision(sym, guncel_fiyat * (1.0 - (i * GRID_ADIM_YUZDESI))))
+                            alis_fiyat = float(exchange.price_to_precision(sym, guncel_fiyat * (1.0 - (i * guncel_adim))))
                             ham_mask_alis = (kademe_butce * KALDIRAC) / alis_fiyat
                             mik_alis = float(exchange.amount_to_precision(sym, max(round(ham_mask_alis / float(market_info.get('contractSize', 1.0))), 1)))
                             exchange.create_order(sym, 'limit', 'buy', mik_alis, alis_fiyat)
 
-                            satis_fiyat = float(exchange.price_to_precision(sym, guncel_fiyat * (1.0 + (i * GRID_ADIM_YUZDESI))))
+                            satis_fiyat = float(exchange.price_to_precision(sym, guncel_fiyat * (1.0 + (i * guncel_adim))))
                             ham_mask_satis = (kademe_butce * KALDIRAC) / satis_fiyat
                             mik_satis = float(exchange.amount_to_precision(sym, max(round(ham_mask_satis / float(market_info.get('contractSize', 1.0))), 1)))
                             exchange.create_order(sym, 'limit', 'sell', mik_satis, satis_fiyat)
 
                         veri["merkez_fiyat"] = guncel_fiyat
+                        veri["guncel_adim"] = guncel_adim
                         hafizayi_kaydet()
 
                 except Exception as e:
@@ -364,42 +375,47 @@ def otomatik_arkaplan_tarayici():
                     
                     rsi = float(ta.momentum.rsi(df_15m['close'], window=14).iloc[-1])
                     bb_bandwidth = bollinger_bandwidth_hesapla(df_15m)
-                    atr_val = atr_ve_volatilite_hesapla(df_15m)
+                    guncel_adim = dinamik_adim_hesapla(df_15m)
                     guncel_fiyat = df_15m['close'].iloc[-1]
 
-                    features = [rsi, bb_bandwidth, atr_val, guncel_fiyat, 0, 0, 0, 0, COIN_ID_MAP.get(symbol, 1)]
+                    features = [rsi, bb_bandwidth, guncel_adim * 100, guncel_fiyat, 0, 0, 0, 0, COIN_ID_MAP.get(symbol, 1)]
                     ai_onay = yapay_zeka_islem_onayi(features)
 
-                    if bb_bandwidth < 0.045 and 40 <= rsi <= 60 and ai_onay:
+                    # Esnetilmiş ve hacimsiz piyasaya duyarlı filtreler
+                    if bb_bandwidth < 0.055 and 38 <= rsi <= 62 and ai_onay:
                         if not set_leverage_and_margin_safely(symbol, KALDIRAC):
                             continue
 
                         balance = exchange.fetch_balance()
                         toplam_bakiye = float(balance['total'].get('USDT', 0))
+                        
+                        coin_toplam_butce = toplam_bakiye / MAKSIMUM_TOPLAM_POZISYON
                         kademe_sayisi = 3
-                        kademe_butce = (toplam_bakiye * 0.15) / (kademe_sayisi * 2)
+                        kademe_butce = coin_toplam_butce / (kademe_sayisi * 2)
                         market_info = exchange.market(symbol)
                         
                         tum_emirleri_iptal_et(symbol)
 
                         for i in range(1, kademe_sayisi + 1):
-                            alis_fiyat = float(exchange.price_to_precision(symbol, guncel_fiyat * (1.0 - (i * GRID_ADIM_YUZDESI))))
+                            alis_fiyat = float(exchange.price_to_precision(symbol, guncel_fiyat * (1.0 - (i * guncel_adim))))
                             ham_mask_alis = (kademe_butce * KALDIRAC) / alis_fiyat
                             mik_alis = float(exchange.amount_to_precision(symbol, max(round(ham_mask_alis / float(market_info.get('contractSize', 1.0))), 1)))
                             exchange.create_order(symbol, 'limit', 'buy', mik_alis, alis_fiyat)
 
-                            satis_fiyat = float(exchange.price_to_precision(symbol, guncel_fiyat * (1.0 + (i * GRID_ADIM_YUZDESI))))
+                            satis_fiyat = float(exchange.price_to_precision(symbol, guncel_fiyat * (1.0 + (i * guncel_adim))))
                             ham_mask_satis = (kademe_butce * KALDIRAC) / satis_fiyat
                             mik_satis = float(exchange.amount_to_precision(symbol, max(round(ham_mask_satis / float(market_info.get('contractSize', 1.0))), 1)))
                             exchange.create_order(symbol, 'limit', 'sell', mik_satis, satis_fiyat)
 
                         AKTIF_SISTEMLER[symbol] = {
-                            "mod": "TREND_AWARE_DINAMIK_GRID", "merkez_fiyat": guncel_fiyat
+                            "mod": "DYNAMIC_VOLATILITY_GRID", 
+                            "merkez_fiyat": guncel_fiyat,
+                            "guncel_adim": guncel_adim
                         }
                         hafizayi_kaydet()
 
-                        print(f"✨ [YENİ GRID] {symbol} üzerinde kuruldu.", flush=True)
-                        telegram_mesaj_gonder(f"⚡ *Dinamik Grid Kuruldu* -> `{symbol}` (Merkez: `{guncel_fiyat}`)")
+                        print(f"✨ [YENİ GRID] {symbol} üzerinde dinamik adım (%{guncel_adim*100:.2f}) ile kuruldu.", flush=True)
+                        telegram_mesaj_gonder(f"⚡ *Dinamik Grid Kuruldu* -> `{symbol}`\nMerkez: `{guncel_fiyat}` | Adım: `%{guncel_adim*100:.2f}`")
                         break
 
                 except Exception as e:
