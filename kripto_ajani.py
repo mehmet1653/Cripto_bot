@@ -221,8 +221,22 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{pnl_ikon} Anlık Kâr/Zarar: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n"
             f"✅ Başarılı: `{basarili_sayisi}` | ❌ Başarısız: `{basarisiz_sayisi}`\n"
-            f"📈 Başarı Oranı: `%{basari_orani:.1f}`\n"
+            f"📈 Başarı Oranı: `%{basari_orani:.1f}`\n\n"
+            f"📋 *AÇIK POZİSYON DETAYLARI:*\n"
         )
+
+        if not borsa_poslari:
+            mesaj += "_Şu an aktif pozisyon bulunmuyor._"
+        else:
+            for p in borsa_poslari:
+                sym = p.get('symbol', '')
+                yon = str(p.get('side', '')).upper()
+                boyut = p.get('contracts', 0) or p.get('size', 0)
+                giris = p.get('entryPrice', 0)
+                pnl = float(p.get('unrealizedPnl', 0))
+                pnl_emoji = "🟢" if pnl >= 0 else "🔴"
+                mesaj += f"• `{sym}` | {yon} | Boyut: `{boyut}`\n  Giriş: `{giris}` | PnL: {pnl_emoji} `{pnl:+.2f}$`\n"
+
         await update.message.reply_text(mesaj, parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
