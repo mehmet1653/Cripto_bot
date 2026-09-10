@@ -34,7 +34,6 @@ exchange = ccxt.gate({
 })
 exchange.set_sandbox_mode(True)
 
-# ==================== 7 KANITLANMIŞ COİN ====================
 TAKIP_EDILENLER = [
     'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT',
     'ADA/USDT:USDT', 'DOGE/USDT:USDT', 'AVAX/USDT:USDT',
@@ -53,49 +52,37 @@ KOMISYON_ORANI = 0.001
 # ==================== MOD TANIMLARI ====================
 MODLAR = {
     "muhafazakar": {
-        "aciklama": "🟢 Muhafazakar - Az işlem, düşük risk",
+        "aciklama": "🟢 Muhafazakar - Hibrit, düşük risk",
         "zaman_dilimi": "1h",
+        "adx_trend_esik": 25, "adx_yatay_esik": 22,
         "bollinger_period": 20, "bollinger_std": 2.0,
         "rsi_period": 14, "rsi_long": 32, "rsi_short": 68,
-        "atr_stop_mult": 2.0, "risk_reward": 2.0, "hacim_esik": 1.0,
+        "atr_stop_mult": 2.0, "risk_reward": 2.0, "hacim_esik_mr": 1.0, "hacim_esik_trend": 1.2,
         "islem_riski_pct": 0.01, "kaldirac": 5, "maks_pozisyon": 3,
         "cooldown_dk": 15, "gunluk_max_kayip_pct": 0.03,
-    },
-    "dengeli": {
-        "aciklama": "🟡 Dengeli - Orta işlem, orta risk",
-        "zaman_dilimi": "1h",
-        "bollinger_period": 20, "bollinger_std": 1.8,
-        "rsi_period": 14, "rsi_long": 38, "rsi_short": 62,
-        "atr_stop_mult": 1.5, "risk_reward": 2.0, "hacim_esik": 0.7,
-        "islem_riski_pct": 0.015, "kaldirac": 7, "maks_pozisyon": 4,
-        "cooldown_dk": 8, "gunluk_max_kayip_pct": 0.05,
-    },
-    "agresif": {
-        "aciklama": "🟠 Agresif - Çok işlem, yüksek risk",
-        "zaman_dilimi": "1h",
-        "bollinger_period": 20, "bollinger_std": 1.6,
-        "rsi_period": 14, "rsi_long": 42, "rsi_short": 58,
-        "atr_stop_mult": 1.3, "risk_reward": 2.0, "hacim_esik": 0.5,
-        "islem_riski_pct": 0.02, "kaldirac": 10, "maks_pozisyon": 5,
-        "cooldown_dk": 5, "gunluk_max_kayip_pct": 0.08,
+        "kismi_tp_oran": 0.5, "trailing_atr_mult": 2.0,
     },
     "agresif100": {
-        "aciklama": "🔥 Agresif100 - 7 coin, %3 risk, 10x kaldıraç",
+        "aciklama": "🔥 Agresif100 - Hibrit, %3 risk, 10x",
         "zaman_dilimi": "1h",
+        "adx_trend_esik": 25, "adx_yatay_esik": 22,
         "bollinger_period": 20, "bollinger_std": 1.7,
         "rsi_period": 14, "rsi_long": 38, "rsi_short": 62,
-        "atr_stop_mult": 1.5, "risk_reward": 2.0, "hacim_esik": 0.6,
+        "atr_stop_mult": 1.5, "risk_reward": 2.0, "hacim_esik_mr": 0.6, "hacim_esik_trend": 1.0,
         "islem_riski_pct": 0.03, "kaldirac": 10, "maks_pozisyon": 3,
         "cooldown_dk": 10, "gunluk_max_kayip_pct": 0.10,
+        "kismi_tp_oran": 0.5, "trailing_atr_mult": 2.0,
     },
-    "yildirim": {
-        "aciklama": "🔴 Yıldırım - ÇILGIN mod (kumar)",
-        "zaman_dilimi": "15m",
-        "bollinger_period": 20, "bollinger_std": 1.4,
-        "rsi_period": 14, "rsi_long": 45, "rsi_short": 55,
-        "atr_stop_mult": 1.2, "risk_reward": 1.8, "hacim_esik": 0.3,
-        "islem_riski_pct": 0.03, "kaldirac": 15, "maks_pozisyon": 6,
-        "cooldown_dk": 3, "gunluk_max_kayip_pct": 0.12,
+    "agresif": {
+        "aciklama": "🟠 Agresif - Hibrit, yüksek risk",
+        "zaman_dilimi": "1h",
+        "adx_trend_esik": 25, "adx_yatay_esik": 22,
+        "bollinger_period": 20, "bollinger_std": 1.6,
+        "rsi_period": 14, "rsi_long": 42, "rsi_short": 58,
+        "atr_stop_mult": 1.3, "risk_reward": 2.0, "hacim_esik_mr": 0.5, "hacim_esik_trend": 0.9,
+        "islem_riski_pct": 0.02, "kaldirac": 10, "maks_pozisyon": 5,
+        "cooldown_dk": 5, "gunluk_max_kayip_pct": 0.08,
+        "kismi_tp_oran": 0.5, "trailing_atr_mult": 1.8,
     },
 }
 
@@ -148,11 +135,8 @@ kalici = hafizayi_yukle()
 AKTIF_GRID_SISTEMLERI = kalici["aktif_sistemler"]
 ANALITIK_HAFIZA = kalici["analitik"]
 COIN_COOLDOWNLAR = kalici["cooldownlar"]
-COIN_PARAMS = kalici.get("coin_params", {})
+COIN_PARAMS = {k: v for k, v in kalici.get("coin_params", {}).items() if k in TAKIP_EDILENLER}
 AKTIF_MOD = kalici.get("aktif_mod", "agresif100")
-
-# Sadece bu coinler optimize edilmişse kabul et
-COIN_PARAMS = {k: v for k, v in COIN_PARAMS.items() if k in TAKIP_EDILENLER}
 
 def mod_al():
     return MODLAR.get(AKTIF_MOD, MODLAR["agresif100"])
@@ -243,6 +227,30 @@ def atr_hesapla(df, period=14):
     ], axis=1).max(axis=1)
     return tr.rolling(period).mean()
 
+def ema_hesapla(close, period):
+    return close.ewm(span=period, adjust=False).mean()
+
+def adx_hesapla(df, period=14):
+    """Basit ADX hesaplama."""
+    try:
+        up = df['high'].diff()
+        down = -df['low'].diff()
+        plus_dm = np.where((up > down) & (up > 0), up, 0.0)
+        minus_dm = np.where((down > up) & (down > 0), down, 0.0)
+        tr = pd.concat([
+            df['high'] - df['low'],
+            (df['high'] - df['close'].shift()).abs(),
+            (df['low'] - df['close'].shift()).abs()
+        ], axis=1).max(axis=1)
+        atr14 = tr.rolling(period).mean()
+        plus_di = 100 * pd.Series(plus_dm, index=df.index).rolling(period).mean() / atr14
+        minus_di = 100 * pd.Series(minus_dm, index=df.index).rolling(period).mean() / atr14
+        dx = (abs(plus_di - minus_di) / (plus_di + minus_di).replace(0, np.nan)) * 100
+        val = dx.rolling(period).mean().iloc[-1]
+        return float(val) if not pd.isna(val) else 0.0
+    except Exception:
+        return 0.0
+
 def hacim_onay(df, period=20, esik=1.0):
     try:
         ort = df['volume'].rolling(period).mean().iloc[-1]
@@ -250,61 +258,161 @@ def hacim_onay(df, period=20, esik=1.0):
     except Exception:
         return False
 
-# ==================== SİNYAL ====================
-def sinyal_uret(df, params):
+def btc_trend_al():
+    """BTC 1h trend yönü."""
+    try:
+        ohlcv = exchange.fetch_ohlcv('BTC/USDT:USDT', '1h', limit=60)
+        df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
+        if len(df) < 50:
+            return "UP"
+        ema20 = ema_hesapla(df['close'], 20).iloc[-1]
+        ema50 = ema_hesapla(df['close'], 50).iloc[-1]
+        return "UP" if ema20 > ema50 else "DOWN"
+    except Exception:
+        return "UP"
+
+# ==================== REJİM TESPİTİ ====================
+def piyasa_rejimi(df, mod):
+    """Piyasa rejimini tespit et: TREND / YATAY / BELIRSIZ."""
+    if len(df) < 50:
+        return "BELIRSIZ"
+    adx = adx_hesapla(df, 14)
+    if adx > mod['adx_trend_esik']:
+        return "TREND"
+    elif adx < mod['adx_yatay_esik']:
+        return "YATAY"
+    else:
+        return "BELIRSIZ"
+
+# ==================== HİBRİT SİNYAL ====================
+def sinyal_uret(df, mod, btc_trend="UP"):
+    """
+    3 Katmanlı Hibrit Sinyal:
+    1. Piyasa rejimi (ADX) → TREND veya YATAY
+    2. BTC filtresi → Ana yön
+    3. Rejime göre strateji seç
+    """
     if len(df) < 50:
         return None, "veri yetersiz"
-    close = df['close']; open_ = df['open']; high = df['high']; low = df['low']
-    sma, ust, alt = bollinger_hesapla(close, params['bollinger_period'], params['bollinger_std'])
-    rsi = rsi_hesapla(close, params['rsi_period'])
-    atr = atr_hesapla(df, 14)
-    son_fiyat = close.iloc[-1]; son_open = open_.iloc[-1]
-    son_ust = ust.iloc[-1]; son_alt = alt.iloc[-1]
-    son_rsi = rsi.iloc[-1]; son_atr = atr.iloc[-1]
-    if pd.isna(son_ust) or pd.isna(son_alt) or pd.isna(son_rsi) or pd.isna(son_atr) or son_atr == 0:
-        return None, "gösterge NaN"
-    atr_pct = (son_atr / son_fiyat) * 100
+
+    close = df['close']; open_ = df['open']
+    high = df['high']; low = df['low']
+
+    rejim = piyasa_rejimi(df, mod)
+
+    # Rejim BELIRSIZ ise işlem yok
+    if rejim == "BELIRSIZ":
+        return None, "rejim belirsiz"
+
+    atr = atr_hesapla(df, 14).iloc[-1]
+    son_fiyat = close.iloc[-1]
+    if pd.isna(atr) or atr == 0 or son_fiyat <= 0:
+        return None, "ATR NaN"
+    atr_pct = (atr / son_fiyat) * 100
     if not (0.3 <= atr_pct <= 5.0):
         return None, f"ATR %{atr_pct:.2f} dışı"
-    if not hacim_onay(df, 20, params['hacim_esik']):
-        return None, "hacim yok"
 
-    if son_fiyat <= son_alt and son_rsi < params['rsi_long'] and son_fiyat > son_open:
-        stop_mesafe = son_atr * params['atr_stop_mult']
-        stop = min(low.iloc[-1] - son_atr * 0.5, son_fiyat - stop_mesafe)
-        stop_pct = max(0.008, min(0.035, (son_fiyat - stop) / son_fiyat))
-        stop = son_fiyat * (1 - stop_pct)
-        tp_pct = stop_pct * params['risk_reward'] + KOMISYON_ORANI
-        tp = son_fiyat * (1 + tp_pct)
-        return {"yon": "LONG", "giris": float(son_fiyat), "stop": float(stop), "tp": float(tp),
-                "stop_pct": stop_pct, "tp_pct": tp_pct, "rsi": float(son_rsi), "atr_pct": atr_pct}, "OK"
+    # ============ STRATEJİ 1: YATAY PİYASA (Mean Reversion) ============
+    if rejim == "YATAY":
+        sma, ust, alt = bollinger_hesapla(close, mod['bollinger_period'], mod['bollinger_std'])
+        rsi = rsi_hesapla(close, mod['rsi_period'])
+        son_ust = ust.iloc[-1]; son_alt = alt.iloc[-1]
+        son_rsi = rsi.iloc[-1]; son_open = open_.iloc[-1]
 
-    if son_fiyat >= son_ust and son_rsi > params['rsi_short'] and son_fiyat < son_open:
-        stop_mesafe = son_atr * params['atr_stop_mult']
-        stop = max(high.iloc[-1] + son_atr * 0.5, son_fiyat + stop_mesafe)
-        stop_pct = max(0.008, min(0.035, (stop - son_fiyat) / son_fiyat))
-        stop = son_fiyat * (1 + stop_pct)
-        tp_pct = stop_pct * params['risk_reward'] + KOMISYON_ORANI
-        tp = son_fiyat * (1 - tp_pct)
-        return {"yon": "SHORT", "giris": float(son_fiyat), "stop": float(stop), "tp": float(tp),
-                "stop_pct": stop_pct, "tp_pct": tp_pct, "rsi": float(son_rsi), "atr_pct": atr_pct}, "OK"
+        if pd.isna(son_ust) or pd.isna(son_rsi):
+            return None, "gösterge NaN"
 
-    if son_fiyat > son_alt and son_fiyat < son_ust:
-        return None, "fiyat bantlar arasında"
-    if params['rsi_long'] <= son_rsi <= params['rsi_short']:
-        return None, f"RSI {son_rsi:.1f} nötr"
-    return None, "koşullar uygun değil"
+        if not hacim_onay(df, 20, mod['hacim_esik_mr']):
+            return None, "hacim yok (MR)"
+
+        # LONG (Mean Reversion)
+        if son_fiyat <= son_alt and son_rsi < mod['rsi_long'] and son_fiyat > son_open:
+            if btc_trend == "DOWN":
+                return None, "BTC düşüyor (LONG engel)"
+            stop_mesafe = atr * mod['atr_stop_mult']
+            stop = min(low.iloc[-1] - atr * 0.5, son_fiyat - stop_mesafe)
+            stop_pct = max(0.008, min(0.035, (son_fiyat - stop) / son_fiyat))
+            stop = son_fiyat * (1 - stop_pct)
+            tp_pct = stop_pct * mod['risk_reward'] + KOMISYON_ORANI
+            tp = son_fiyat * (1 + tp_pct)
+            return {"yon": "LONG", "giris": float(son_fiyat), "stop": float(stop),
+                    "tp": float(tp), "stop_pct": stop_pct, "tp_pct": tp_pct,
+                    "rsi": float(son_rsi), "atr": float(atr), "rejim": rejim}, "OK"
+
+        # SHORT (Mean Reversion)
+        if son_fiyat >= son_ust and son_rsi > mod['rsi_short'] and son_fiyat < son_open:
+            if btc_trend == "UP":
+                return None, "BTC yükseliyor (SHORT engel)"
+            stop_mesafe = atr * mod['atr_stop_mult']
+            stop = max(high.iloc[-1] + atr * 0.5, son_fiyat + stop_mesafe)
+            stop_pct = max(0.008, min(0.035, (stop - son_fiyat) / son_fiyat))
+            stop = son_fiyat * (1 + stop_pct)
+            tp_pct = stop_pct * mod['risk_reward'] + KOMISYON_ORANI
+            tp = son_fiyat * (1 - tp_pct)
+            return {"yon": "SHORT", "giris": float(son_fiyat), "stop": float(stop),
+                    "tp": float(tp), "stop_pct": stop_pct, "tp_pct": tp_pct,
+                    "rsi": float(son_rsi), "atr": float(atr), "rejim": rejim}, "OK"
+
+        return None, "MR koşulları uygun değil"
+
+    # ============ STRATEJİ 2: TREND PİYASASI (Trend Takip) ============
+    elif rejim == "TREND":
+        ema9 = ema_hesapla(close, 9).iloc[-1]
+        ema21 = ema_hesapla(close, 21).iloc[-1]
+        ema50 = ema_hesapla(close, 50).iloc[-1]
+        rsi = rsi_hesapla(close, mod['rsi_period']).iloc[-1]
+
+        if pd.isna(ema50) or pd.isna(rsi):
+            return None, "EMA/RSI NaN"
+
+        if not hacim_onay(df, 20, mod['hacim_esik_trend']):
+            return None, "hacim yok (TREND)"
+
+        # LONG (Trend Takip)
+        if ema9 > ema21 > ema50 and 50 < rsi < 72:
+            if btc_trend == "DOWN":
+                return None, "BTC düşüyor (LONG engel)"
+            stop_mesafe = atr * mod['atr_stop_mult']
+            stop = min(ema21 - atr * 0.5, son_fiyat - stop_mesafe)
+            stop_pct = max(0.008, min(0.035, (son_fiyat - stop) / son_fiyat))
+            stop = son_fiyat * (1 - stop_pct)
+            tp_pct = stop_pct * mod['risk_reward'] + KOMISYON_ORANI
+            tp = son_fiyat * (1 + tp_pct)
+            return {"yon": "LONG", "giris": float(son_fiyat), "stop": float(stop),
+                    "tp": float(tp), "stop_pct": stop_pct, "tp_pct": tp_pct,
+                    "rsi": float(rsi), "atr": float(atr), "rejim": rejim}, "OK"
+
+        # SHORT (Trend Takip)
+        if ema9 < ema21 < ema50 and 28 < rsi < 50:
+            if btc_trend == "UP":
+                return None, "BTC yükseliyor (SHORT engel)"
+            stop_mesafe = atr * mod['atr_stop_mult']
+            stop = max(ema21 + atr * 0.5, son_fiyat + stop_mesafe)
+            stop_pct = max(0.008, min(0.035, (stop - son_fiyat) / son_fiyat))
+            stop = son_fiyat * (1 + stop_pct)
+            tp_pct = stop_pct * mod['risk_reward'] + KOMISYON_ORANI
+            tp = son_fiyat * (1 - tp_pct)
+            return {"yon": "SHORT", "giris": float(son_fiyat), "stop": float(stop),
+                    "tp": float(tp), "stop_pct": stop_pct, "tp_pct": tp_pct,
+                    "rsi": float(rsi), "atr": float(atr), "rejim": rejim}, "OK"
+
+        return None, "Trend koşulları uygun değil"
+
+    return None, "rejim dışı"
 
 # ==================== BACKTEST ====================
-def backtest_coin_params(symbol, params, gun_sayisi=365):
+def backtest_coin(symbol, mod, btc_df, gun_sayisi=365):
+    """Hibrit backtest — rejim + BTC filtresi + strateji."""
     try:
-        limit = min(gun_sayisi * 24, 1000) if params['zaman_dilimi'] == '1h' else 1000
-        ohlcv = exchange.fetch_ohlcv(symbol, params['zaman_dilimi'], limit=limit)
+        limit = min(gun_sayisi * 24, 1000) if mod['zaman_dilimi'] == '1h' else 1000
+        ohlcv = exchange.fetch_ohlcv(symbol, mod['zaman_dilimi'], limit=limit)
         df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
         if len(df) < 100:
             return None
+
         trades = []
         pozisyon = None
+
         for i in range(50, len(df)):
             if pozisyon is not None:
                 high = df['high'].iloc[i]; low = df['low'].iloc[i]
@@ -319,15 +427,28 @@ def backtest_coin_params(symbol, params, gun_sayisi=365):
                     elif low <= pozisyon['tp']:
                         trades.append({**pozisyon, 'cikis': pozisyon['tp']}); pozisyon = None
                 continue
+
+            # BTC trend bu zamanda
+            ts = df['timestamp'].iloc[i]
+            btc_slice = btc_df[btc_df['timestamp'] <= ts]
+            if len(btc_slice) >= 50:
+                e20 = btc_slice['close'].ewm(span=20, adjust=False).mean().iloc[-1]
+                e50 = btc_slice['close'].ewm(span=50, adjust=False).mean().iloc[-1]
+                btc_t = "UP" if e20 > e50 else "DOWN"
+            else:
+                btc_t = "UP"
+
             df_slice = df.iloc[max(0, i-100):i+1].reset_index(drop=True)
             try:
-                sig, _ = sinyal_uret(df_slice, params)
+                sig, _ = sinyal_uret(df_slice, mod, btc_t)
             except Exception:
                 continue
             if sig:
                 pozisyon = {**sig}
+
         if not trades:
             return {"symbol": symbol, "islem": 0, "win_rate": 0, "pf": 0, "ev": 0, "max_dd": 0, "toplam": 0}
+
         kazanclar = []
         for t in trades:
             if t['yon'] == 'LONG':
@@ -336,6 +457,7 @@ def backtest_coin_params(symbol, params, gun_sayisi=365):
                 pct = (t['giris'] - t['cikis']) / t['giris']
             pct -= KOMISYON_ORANI
             kazanclar.append(pct)
+
         k = np.array(kazanclar)
         kaz = k[k > 0]; kay = k[k < 0]
         win = len(kaz) / len(k) * 100 if len(k) else 0
@@ -350,96 +472,10 @@ def backtest_coin_params(symbol, params, gun_sayisi=365):
     except Exception as e:
         return {"symbol": symbol, "islem": -1, "hata": str(e)[:40]}
 
-# ==================== OPTİMİZASYON ====================
-def backtest_with_data(symbol, df, params):
-    try:
-        trades = []
-        pozisyon = None
-        for i in range(50, len(df)):
-            if pozisyon is not None:
-                high = df['high'].iloc[i]; low = df['low'].iloc[i]
-                if pozisyon['yon'] == 'LONG':
-                    if low <= pozisyon['stop']:
-                        trades.append({**pozisyon, 'cikis': pozisyon['stop']}); pozisyon = None
-                    elif high >= pozisyon['tp']:
-                        trades.append({**pozisyon, 'cikis': pozisyon['tp']}); pozisyon = None
-                else:
-                    if high >= pozisyon['stop']:
-                        trades.append({**pozisyon, 'cikis': pozisyon['stop']}); pozisyon = None
-                    elif low <= pozisyon['tp']:
-                        trades.append({**pozisyon, 'cikis': pozisyon['tp']}); pozisyon = None
-                continue
-            df_slice = df.iloc[max(0, i-100):i+1].reset_index(drop=True)
-            try:
-                sig, _ = sinyal_uret(df_slice, params)
-            except Exception:
-                continue
-            if sig:
-                pozisyon = {**sig}
-        if not trades:
-            return None
-        kazanclar = []
-        for t in trades:
-            if t['yon'] == 'LONG':
-                pct = (t['cikis'] - t['giris']) / t['giris']
-            else:
-                pct = (t['giris'] - t['cikis']) / t['giris']
-            pct -= KOMISYON_ORANI
-            kazanclar.append(pct)
-        k = np.array(kazanclar)
-        kaz = k[k > 0]; kay = k[k < 0]
-        win = len(kaz) / len(k) * 100 if len(k) else 0
-        pf = abs(kaz.sum() / kay.sum()) if len(kay) and kay.sum() != 0 else 999
-        equity = np.cumprod(1 + k)
-        peak = np.maximum.accumulate(equity)
-        dd = (equity - peak) / peak
-        max_dd = dd.min() * 100 if len(dd) else 0
-        return {"islem": len(trades), "win_rate": round(win, 2),
-                "pf": round(pf, 3) if pf != 999 else 999, "ev": round(k.mean() * 100, 4),
-                "max_dd": round(max_dd, 2), "toplam": round((equity[-1] - 1) * 100, 2) if len(equity) else 0}
-    except Exception:
-        return None
-
-def optimize_coin(symbol, gun_sayisi=365):
-    base_mod = mod_al()
-    bstd_list = [1.5, 2.0, 2.5]
-    rl_list = [28, 32, 36]
-    asm_list = [1.2, 1.5, 2.0]
-    rr_list = [1.5, 2.0, 2.5]
-    limit = min(gun_sayisi * 24, 1000) if base_mod['zaman_dilimi'] == '1h' else 1000
-    try:
-        ohlcv = exchange.fetch_ohlcv(symbol, base_mod['zaman_dilimi'], limit=limit)
-        df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
-    except Exception:
-        return None
-    if len(df) < 100:
-        return None
-    en_iyi = None
-    for bstd in bstd_list:
-        for rl in rl_list:
-            for asm in asm_list:
-                for rr in rr_list:
-                    params = dict(base_mod)
-                    params['bollinger_std'] = bstd
-                    params['rsi_long'] = rl
-                    params['rsi_short'] = 100 - rl
-                    params['atr_stop_mult'] = asm
-                    params['risk_reward'] = rr
-                    r = backtest_with_data(symbol, df, params)
-                    if r and r['islem'] >= 5:
-                        if en_iyi is None or r['pf'] > en_iyi['pf']:
-                            en_iyi = {"params": {"bollinger_std": bstd, "rsi_long": rl,
-                                                "rsi_short": 100 - rl, "atr_stop_mult": asm,
-                                                "risk_reward": rr},
-                                     "pf": r['pf'], "win_rate": r['win_rate'],
-                                     "toplam": r['toplam'], "ev": r['ev'],
-                                     "max_dd": r['max_dd'], "islem": r['islem']}
-    return en_iyi
-
 # ==================== FLASK ====================
 @app.route('/')
 def home():
-    return f"Bot Aktif | Mod: {AKTIF_MOD} | Coin: {len(TAKIP_EDILENLER)} | Optimize: {len(COIN_PARAMS)} | Poz: {len(AKTIF_GRID_SISTEMLERI)}"
+    return f"Hibrit Bot | Mod: {AKTIF_MOD} | Coin: {len(TAKIP_EDILENLER)} | Poz: {len(AKTIF_GRID_SISTEMLERI)}"
 
 # ==================== TELEGRAM ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -468,13 +504,14 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 detay += f"• `{p.get('symbol')}` | {str(p.get('side','')).upper()} | `{float(p.get('unrealizedPnl',0)):+.2f}`\n"
         else:
             detay = "\n📋 *Aktif Pozisyon Yok*\n"
-        opt = len(COIN_PARAMS)
+        btc_t = btc_trend_al()
         mesaj = (
-            f"🎯 *{mod['aciklama']}*\n\n"
+            f"🎯 *HİBRİT SİSTEM — {mod['aciklama']}*\n\n"
             f"💰 Toplam: `{total:.2f}` USDT (Serbest: `{free:.2f}`)\n"
             f"{ikon} PnL: `{pnl:+.2f}` USDT (`%{pnl_pct:+.2f}`)\n"
             f"📌 Pozisyon: `{len(poslari)}/{mod['maks_pozisyon']}`\n"
-            f"🧠 Optimize: `{opt}/{len(TAKIP_EDILENLER)}`\n"
+            f"🧠 Optimize: `{len(COIN_PARAMS)}/{len(TAKIP_EDILENLER)}`\n"
+            f"🌐 BTC Trend: `{btc_t}`\n"
             f"⚙️ Zaman: `{mod['zaman_dilimi']}` | Kaldıraç: `{mod['kaldirac']}x`\n"
             f"{detay}\n"
             f"✅ TP: `{bs}` | ❌ Stop: `{bz}`\n"
@@ -517,11 +554,10 @@ async def mod_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AKTIF_MOD
     args = context.args
     if not args:
-        satirlar = ["🎚️ *Mod Seçenekleri:*\n"]
+        satirlar = ["🎚️ *Modlar (Hibrit Sistem):*\n"]
         for k, v in MODLAR.items():
             isaret = "▶️" if k == AKTIF_MOD else "  "
             satirlar.append(f"{isaret} `{k}` → {v['aciklama']}")
-        satirlar.append("\nKullanım: `/mod agresif100`")
         await update.message.reply_text("\n".join(satirlar), parse_mode='Markdown')
         return
     yeni_mod = args[0].lower()
@@ -532,14 +568,10 @@ async def mod_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     hafizayi_kaydet()
     mod = MODLAR[yeni_mod]
     await update.message.reply_text(
-        f"✅ Mod değiştirildi: *{mod['aciklama']}*\n\n"
-        f"⚙️ Zaman: `{mod['zaman_dilimi']}`\n"
+        f"✅ Mod: *{mod['aciklama']}*\n\n"
         f"🎚️ RSI: `{mod['rsi_long']}/{mod['rsi_short']}`\n"
-        f"📊 STD: `{mod['bollinger_std']}` | ATR×`{mod['atr_stop_mult']}`\n"
-        f"💪 Risk: `%{mod['islem_riski_pct']*100}` | Kaldıraç: `{mod['kaldirac']}x`\n"
-        f"📌 Maks poz: `{mod['maks_pozisyon']}`\n"
-        f"🧠 Optimize edilmiş coin: `{len(COIN_PARAMS)}/{len(TAKIP_EDILENLER)}`\n\n"
-        f"_Bir sonraki döngüde devreye girecek._",
+        f"📊 ADX eşik: TREND>{mod['adx_trend_esik']}, YATAY<{mod['adx_yatay_esik']}\n"
+        f"💪 Risk: `%{mod['islem_riski_pct']*100}` | Kaldıraç: `{mod['kaldirac']}x`",
         parse_mode='Markdown')
 
 async def backtest_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -550,24 +582,27 @@ async def backtest_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     test_modu = args[0].lower() if args else AKTIF_MOD
     if test_modu not in MODLAR:
-        await update.message.reply_text(f"❌ Geçersiz mod. Seçenekler: {', '.join(MODLAR.keys())}")
+        await update.message.reply_text(f"❌ Geçersiz mod.")
         return
     BACKTEST_CALISIYOR = True
     mod = MODLAR[test_modu]
     await update.message.reply_text(
-        f"⏳ *Backtest başlatıldı*\nMod: {mod['aciklama']}\n365 gün / {mod['zaman_dilimi']}\n{len(TAKIP_EDILENLER)} coin",
+        f"⏳ *Hibrit Backtest başlatıldı*\nMod: {mod['aciklama']}\n365 gün / {mod['zaman_dilimi']}",
         parse_mode='Markdown')
 
     def run():
         global BACKTEST_CALISIYOR
         try:
-            satirlar = [f"*📊 BACKTEST — {mod['aciklama']}*\n```"]
+            # BTC verisini bir kez çek
+            btc_ohlcv = exchange.fetch_ohlcv('BTC/USDT:USDT', mod['zaman_dilimi'], limit=1000)
+            btc_df = pd.DataFrame(btc_ohlcv, columns=['timestamp','open','high','low','close','volume'])
+
+            satirlar = [f"*📊 HİBRİT BACKTEST — {mod['aciklama']}*\n```"]
             satirlar.append(f"{'COIN':<14} {'İŞL':>4} {'WIN%':>6} {'PF':>6} {'EV%':>7} {'DD%':>6} {'TOT%':>7}")
             satirlar.append("-" * 58)
             toplam = 0
             for c in TAKIP_EDILENLER:
-                params = coin_parametre_al(c)
-                r = backtest_coin_params(c, params, gun_sayisi=365)
+                r = backtest_coin(c, mod, btc_df, gun_sayisi=365)
                 if r is None:
                     satirlar.append(f"{c[:12]:<14} HATA")
                 elif r.get('islem', -1) == -1:
@@ -580,7 +615,6 @@ async def backtest_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             satirlar.append("-" * 58)
             ort = toplam / len(TAKIP_EDILENLER)
             satirlar.append(f"Ortalama getiri: {ort:.2f}%")
-            satirlar.append(f"Optimize coin: {len(COIN_PARAMS)}/{len(TAKIP_EDILENLER)}")
             satirlar.append("```")
             telegram_mesaj_gonder("\n".join(satirlar))
         except Exception as e:
@@ -593,40 +627,121 @@ async def backtest_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def optimize_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global OPTIMIZE_CALISIYOR, COIN_PARAMS
     if BACKTEST_CALISIYOR or OPTIMIZE_CALISIYOR:
-        await update.message.reply_text("⏳ Zaten bir işlem çalışıyor.")
+        await update.message.reply_text("⏳ Zaten çalışıyor.")
         return
     OPTIMIZE_CALISIYOR = True
     await update.message.reply_text(
-        f"🧠 *Optimizasyon başlatıldı!*\n"
+        f"🧠 *Hibrit Optimizasyon başlatıldı!*\n"
         f"{len(TAKIP_EDILENLER)} coin × 81 kombinasyon.\n"
-        f"Aktif mod: `{AKTIF_MOD}`\n"
-        f"Tahmini süre: 15-20 dakika.",
+        f"Tahmini süre: 20-30 dk.",
         parse_mode='Markdown')
 
     def run():
         global OPTIMIZE_CALISIYOR, COIN_PARAMS
         try:
-            telegram_mesaj_gonder("🔬 *Optimizasyon başladı...*")
+            btc_ohlcv = exchange.fetch_ohlcv('BTC/USDT:USDT', '1h', limit=1000)
+            btc_df = pd.DataFrame(btc_ohlcv, columns=['timestamp','open','high','low','close','volume'])
+            mod = mod_al()
+
+            telegram_mesaj_gonder("🔬 *Hibrit optimizasyon başladı...*")
             for c in TAKIP_EDILENLER:
-                en_iyi = optimize_coin(c, gun_sayisi=365)
-                if en_iyi is None:
-                    telegram_mesaj_gonder(f"⚠️ `{c}` — yeterli sinyal yok.")
+                # Basit optimizasyon (hibrit için daha az kombinasyon)
+                bstd_list = [1.7, 2.0, 2.3]
+                rl_list = [32, 38, 42]
+                asm_list = [1.3, 1.5, 1.8]
+                rr_list = [1.8, 2.0, 2.5]
+
+                limit = min(365 * 24, 1000)
+                try:
+                    ohlcv = exchange.fetch_ohlcv(c, mod['zaman_dilimi'], limit=limit)
+                    df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
+                except Exception:
                     continue
-                COIN_PARAMS[c] = en_iyi['params']
-                hafizayi_kaydet()
-                p = en_iyi['params']
-                mesaj = (
-                    f"🏆 *{c}* — EN İYİ\n"
-                    f"STD: `{p['bollinger_std']}` | RSI: `{p['rsi_long']}/{p['rsi_short']}` | "
-                    f"ATR×`{p['atr_stop_mult']}` | R/R: `{p['risk_reward']}`\n"
-                    f"📊 İŞL: `{en_iyi['islem']}` | WIN: `{en_iyi['win_rate']}%` | "
-                    f"PF: `{en_iyi['pf']}` | TOT: `{en_iyi['toplam']}%`"
-                )
-                telegram_mesaj_gonder(mesaj)
+
+                en_iyi = None
+                for bstd in bstd_list:
+                    for rl in rl_list:
+                        for asm in asm_list:
+                            for rr in rr_list:
+                                test_mod = dict(mod)
+                                test_mod['bollinger_std'] = bstd
+                                test_mod['rsi_long'] = rl
+                                test_mod['rsi_short'] = 100 - rl
+                                test_mod['atr_stop_mult'] = asm
+                                test_mod['risk_reward'] = rr
+
+                                # Bu parametrelerle mini backtest
+                                trades = []
+                                poz = None
+                                for i in range(50, len(df)):
+                                    if poz is not None:
+                                        h = df['high'].iloc[i]; l = df['low'].iloc[i]
+                                        if poz['yon'] == 'LONG':
+                                            if l <= poz['stop']:
+                                                trades.append({**poz, 'c': poz['stop']}); poz = None
+                                            elif h >= poz['tp']:
+                                                trades.append({**poz, 'c': poz['tp']}); poz = None
+                                        else:
+                                            if h >= poz['stop']:
+                                                trades.append({**poz, 'c': poz['stop']}); poz = None
+                                            elif l <= poz['tp']:
+                                                trades.append({**poz, 'c': poz['tp']}); poz = None
+                                        continue
+                                    ts = df['timestamp'].iloc[i]
+                                    bs = btc_df[btc_df['timestamp'] <= ts]
+                                    if len(bs) >= 50:
+                                        e20 = bs['close'].ewm(span=20, adjust=False).mean().iloc[-1]
+                                        e50 = bs['close'].ewm(span=50, adjust=False).mean().iloc[-1]
+                                        bt = "UP" if e20 > e50 else "DOWN"
+                                    else:
+                                        bt = "UP"
+                                    dfs = df.iloc[max(0, i-100):i+1].reset_index(drop=True)
+                                    try:
+                                        s, _ = sinyal_uret(dfs, test_mod, bt)
+                                    except Exception:
+                                        continue
+                                    if s:
+                                        poz = {**s}
+
+                                if len(trades) >= 5:
+                                    kaz = []
+                                    for t in trades:
+                                        if t['yon'] == 'LONG':
+                                            p = (t['c'] - t['giris']) / t['giris']
+                                        else:
+                                            p = (t['giris'] - t['c']) / t['giris']
+                                        p -= KOMISYON_ORANI
+                                        kaz.append(p)
+                                    k = np.array(kaz)
+                                    kazp = k[k > 0]; kayp = k[k < 0]
+                                    pf = abs(kazp.sum() / kayp.sum()) if len(kayp) and kayp.sum() != 0 else 999
+                                    if en_iyi is None or pf > en_iyi['pf']:
+                                        en_iyi = {
+                                            "params": {"bollinger_std": bstd, "rsi_long": rl,
+                                                       "rsi_short": 100-rl, "atr_stop_mult": asm,
+                                                       "risk_reward": rr},
+                                            "pf": round(pf, 3), "win": round(len(kazp)/len(k)*100, 2),
+                                            "islem": len(trades), "tot": round((np.cumprod(1+k)[-1]-1)*100, 2)
+                                        }
+
+                if en_iyi:
+                    COIN_PARAMS[c] = en_iyi['params']
+                    hafizayi_kaydet()
+                    p = en_iyi['params']
+                    telegram_mesaj_gonder(
+                        f"🏆 *{c}* — EN İYİ (Hibrit)\n"
+                        f"STD: `{p['bollinger_std']}` | RSI: `{p['rsi_long']}/{p['rsi_short']}` | "
+                        f"ATR×`{p['atr_stop_mult']}` | R/R: `{p['risk_reward']}`\n"
+                        f"📊 İŞL: `{en_iyi['islem']}` | WIN: `{en_iyi['win']}%` | "
+                        f"PF: `{en_iyi['pf']}` | TOT: `{en_iyi['tot']}%`"
+                    )
+                else:
+                    telegram_mesaj_gonder(f"⚠️ `{c}` — yeterli sinyal yok.")
                 time.sleep(1)
+
             telegram_mesaj_gonder(
                 f"✅ *Optimizasyon tamamlandı!*\n"
-                f"Optimize edilen: `{len(COIN_PARAMS)}/{len(TAKIP_EDILENLER)}`\n"
+                f"Optimize: `{len(COIN_PARAMS)}/{len(TAKIP_EDILENLER)}`\n"
                 f"Şimdi `/backtest` yaz."
             )
         except Exception as e:
@@ -638,28 +753,24 @@ async def optimize_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def params_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not COIN_PARAMS:
-        await update.message.reply_text("Henüz optimize yok. `/optimize` yaz.", parse_mode='Markdown')
+        await update.message.reply_text("Optimize yok. `/optimize` yaz.", parse_mode='Markdown')
         return
-    satirlar = ["🧠 *Optimize Edilmiş Parametreler:*\n"]
+    satirlar = ["🧠 *Optimize (Hibrit):*\n"]
     for sym, p in COIN_PARAMS.items():
-        satirlar.append(
-            f"`{sym[:12]}`\n"
-            f"  STD: {p['bollinger_std']} | RSI: {p['rsi_long']}/{p['rsi_short']} | "
-            f"ATR×{p['atr_stop_mult']} | R/R: {p['risk_reward']}"
-        )
+        satirlar.append(f"`{sym[:12]}` STD:{p['bollinger_std']} RSI:{p['rsi_long']}/{p['rsi_short']} ATR×{p['atr_stop_mult']} R/R:{p['risk_reward']}")
     await update.message.reply_text("\n".join(satirlar), parse_mode='Markdown')
 
 async def temizle_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global COIN_PARAMS
     COIN_PARAMS = {}
     hafizayi_kaydet()
-    await update.message.reply_text("🗑️ Optimize parametreler silindi.", parse_mode='Markdown')
+    await update.message.reply_text("🗑️ Temizlendi.", parse_mode='Markdown')
 
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALITIK_HAFIZA
     mod = mod_al()
-    print(f"🎯 [BOT] Mod: {AKTIF_MOD} | Coin: {len(TAKIP_EDILENLER)} | Optimize: {len(COIN_PARAMS)}", flush=True)
+    print(f"🎯 [HİBRİT] Mod: {AKTIF_MOD} | Coin: {len(TAKIP_EDILENLER)}", flush=True)
     try:
         exchange.load_markets()
     except Exception:
@@ -669,14 +780,14 @@ def otomatik_arkaplan_tarayici():
     while True:
         try:
             if not BOT_CALISIYOR_MU:
-                time.sleep(5)
-                continue
+                time.sleep(5); continue
             mod = mod_al()
             if gunluk_kayip_kontrol(mod):
-                telegram_mesaj_gonder(f"🛑 *Günlük %{mod['gunluk_max_kayip_pct']*100:.0f} kayıp limiti aşıldı!*")
+                telegram_mesaj_gonder(f"🛑 Günlük limit aşıldı!")
                 BOT_CALISIYOR_MU = False
-                time.sleep(3600)
-                continue
+                time.sleep(3600); continue
+
+            btc_trend = btc_trend_al()
 
             try:
                 raw = exchange.fetch_positions()
@@ -692,12 +803,12 @@ def otomatik_arkaplan_tarayici():
                     try:
                         tum_emirleri_iptal_et(sym)
                         closed = exchange.fetch_closed_orders(sym, limit=10)
-                        gercek_pnl = 0.0
+                        pnl_real = 0.0
                         if closed:
                             son = sorted(closed, key=lambda x: x['timestamp'] or 0)[-2:]
                             for o in son:
-                                gercek_pnl += float(o.get('info', {}).get('pnl', 0) or 0)
-                        basarili = gercek_pnl > 0
+                                pnl_real += float(o.get('info', {}).get('pnl', 0) or 0)
+                        basarili = pnl_real > 0
                     except Exception:
                         pass
                     if basarili:
@@ -723,19 +834,19 @@ def otomatik_arkaplan_tarayici():
                     params = coin_parametre_al(symbol)
                     ohlcv = exchange.fetch_ohlcv(symbol, params['zaman_dilimi'], limit=120)
                     df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
-                    sig, neden = sinyal_uret(df, params)
+                    sig, neden = sinyal_uret(df, params, btc_trend)
                     if sig:
                         sinyaller.append({"symbol": symbol, **sig})
-                        debug.append(f"{symbol.split('/')[0]}:✅{sig['yon']}")
+                        debug.append(f"{symbol.split('/')[0]}:✅{sig['yon']}({sig['rejim']})")
                     else:
-                        debug.append(f"{symbol.split('/')[0]}:{neden[:12]}")
+                        debug.append(f"{symbol.split('/')[0]}:{neden[:14]}")
                 except Exception:
                     continue
 
             dongu_sayaci += 1
             if dongu_sayaci % 40 == 0:
                 ozet = " | ".join(debug[:7])
-                print(f"🔍 #{dongu_sayaci} [{AKTIF_MOD}] opt:{len(COIN_PARAMS)} | {ozet}", flush=True)
+                print(f"🔍 #{dongu_sayaci} [{AKTIF_MOD}] BTC:{btc_trend} | {ozet}", flush=True)
 
             for s in sinyaller:
                 if not BOT_CALISIYOR_MU: break
@@ -744,11 +855,10 @@ def otomatik_arkaplan_tarayici():
                 try:
                     bal = exchange.fetch_balance()
                     kasa = float(bal['total'].get('USDT', 0))
-                except Exception:
-                    continue
+                except Exception: continue
                 if kasa <= 0: continue
-                if not set_leverage_and_margin_safely(symbol, mod['kaldirac']):
-                    continue
+                if not set_leverage_and_margin_safely(symbol, mod['kaldirac']): continue
+
                 risk_usdt = kasa * mod['islem_riski_pct']
                 poz_degeri = risk_usdt / stop_pct
                 try:
@@ -757,21 +867,17 @@ def otomatik_arkaplan_tarayici():
                     ham = poz_degeri / (s["giris"] * cs)
                     miktar = float(exchange.amount_to_precision(symbol, max(ham, 0.001)))
                     if miktar <= 0: continue
-                except Exception:
-                    continue
+                except Exception: continue
+
                 try:
                     tum_emirleri_iptal_et(symbol)
                     emir = exchange.create_order(symbol, 'market', 'buy' if yon == 'LONG' else 'sell', miktar)
                     giris = float(emir.get('average') or emir.get('price') or s["giris"])
                     time.sleep(0.5)
                     if yon == 'LONG':
-                        stop = giris * (1 - stop_pct)
-                        tp = giris * (1 + s["tp_pct"])
-                        kapat_yon = 'sell'
+                        stop = giris * (1 - stop_pct); tp = giris * (1 + s["tp_pct"]); kapat_yon = 'sell'
                     else:
-                        stop = giris * (1 + stop_pct)
-                        tp = giris * (1 - s["tp_pct"])
-                        kapat_yon = 'buy'
+                        stop = giris * (1 + stop_pct); tp = giris * (1 - s["tp_pct"]); kapat_yon = 'buy'
                     stop = float(exchange.price_to_precision(symbol, stop))
                     tp = float(exchange.price_to_precision(symbol, tp))
                     try:
@@ -789,13 +895,13 @@ def otomatik_arkaplan_tarayici():
                         "yon": yon, "giris": giris, "stop": stop, "tp": tp, "miktar": miktar
                     }
                     hafizayi_kaydet()
-                    print(f"🎯 {symbol} | {yon} | {miktar} | TP:{tp} | SL:{stop}", flush=True)
+                    print(f"🎯 {symbol} | {yon} | {s['rejim']} | {miktar} | TP:{tp} SL:{stop}", flush=True)
                     telegram_mesaj_gonder(
-                        f"🎯 *İŞLEM AÇILDI* ({AKTIF_MOD})\n"
+                        f"🎯 *İŞLEM AÇILDI* ({s['rejim']})\n"
                         f"📌 `{symbol}` | *{yon}*\n"
                         f"💰 Giriş: `{giris}`\n"
                         f"🎯 TP: `{tp}` | 🛑 SL: `{stop}`\n"
-                        f"📊 Risk: `{risk_usdt:.2f}` | RSI: `{s['rsi']:.1f}`"
+                        f"📊 Risk: `{risk_usdt:.2f}` | RSI: `{s['rsi']:.1f}` | BTC: `{btc_trend}`"
                     )
                     break
                 except Exception as e:
