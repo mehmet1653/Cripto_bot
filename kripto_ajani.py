@@ -34,26 +34,18 @@ exchange = ccxt.gate({
 })
 exchange.set_sandbox_mode(True)
 
-# ==================== 15 COIN LİSTESİ ====================
+# ==================== 7 KANITLANMIŞ COİN ====================
 TAKIP_EDILENLER = [
     'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT',
     'ADA/USDT:USDT', 'DOGE/USDT:USDT', 'AVAX/USDT:USDT',
-    'BTC/USDT:USDT', 'BNB/USDT:USDT', 'LINK/USDT:USDT',
-    'DOT/USDT:USDT', 'LTC/USDT:USDT', 'ATOM/USDT:USDT',
-    'NEAR/USDT:USDT', 'ARB/USDT:USDT', 'INJ/USDT:USDT'
+    'LTC/USDT:USDT'
 ]
 
 SEKTOR_MAP = {
-    'BTC/USDT:USDT': 'BTC',
     'ETH/USDT:USDT': 'ETH',
     'SOL/USDT:USDT': 'L1', 'ADA/USDT:USDT': 'L1', 'AVAX/USDT:USDT': 'L1',
-    'DOT/USDT:USDT': 'L1', 'NEAR/USDT:USDT': 'L1', 'ATOM/USDT:USDT': 'L1',
     'XRP/USDT:USDT': 'PAYMENT', 'LTC/USDT:USDT': 'PAYMENT',
-    'BNB/USDT:USDT': 'EXCH',
-    'LINK/USDT:USDT': 'ORACLE',
-    'DOGE/USDT:USDT': 'MEME',
-    'ARB/USDT:USDT': 'L2',
-    'INJ/USDT:USDT': 'DEFI'
+    'DOGE/USDT:USDT': 'MEME'
 }
 
 KOMISYON_ORANI = 0.001
@@ -88,7 +80,7 @@ MODLAR = {
         "cooldown_dk": 5, "gunluk_max_kayip_pct": 0.08,
     },
     "agresif100": {
-        "aciklama": "🔥 Agresif100 - 15 coin, %3 risk, 10x kaldıraç",
+        "aciklama": "🔥 Agresif100 - 7 coin, %3 risk, 10x kaldıraç",
         "zaman_dilimi": "1h",
         "bollinger_period": 20, "bollinger_std": 1.7,
         "rsi_period": 14, "rsi_long": 38, "rsi_short": 62,
@@ -158,6 +150,9 @@ ANALITIK_HAFIZA = kalici["analitik"]
 COIN_COOLDOWNLAR = kalici["cooldownlar"]
 COIN_PARAMS = kalici.get("coin_params", {})
 AKTIF_MOD = kalici.get("aktif_mod", "agresif100")
+
+# Sadece bu coinler optimize edilmişse kabul et
+COIN_PARAMS = {k: v for k, v in COIN_PARAMS.items() if k in TAKIP_EDILENLER}
 
 def mod_al():
     return MODLAR.get(AKTIF_MOD, MODLAR["agresif100"])
@@ -444,7 +439,7 @@ def optimize_coin(symbol, gun_sayisi=365):
 # ==================== FLASK ====================
 @app.route('/')
 def home():
-    return f"Bot Aktif | Mod: {AKTIF_MOD} | Optimize: {len(COIN_PARAMS)}/{len(TAKIP_EDILENLER)} | Poz: {len(AKTIF_GRID_SISTEMLERI)}"
+    return f"Bot Aktif | Mod: {AKTIF_MOD} | Coin: {len(TAKIP_EDILENLER)} | Optimize: {len(COIN_PARAMS)} | Poz: {len(AKTIF_GRID_SISTEMLERI)}"
 
 # ==================== TELEGRAM ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -605,7 +600,7 @@ async def optimize_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🧠 *Optimizasyon başlatıldı!*\n"
         f"{len(TAKIP_EDILENLER)} coin × 81 kombinasyon.\n"
         f"Aktif mod: `{AKTIF_MOD}`\n"
-        f"Tahmini süre: 20-30 dakika. Sabırlı ol.",
+        f"Tahmini süre: 15-20 dakika.",
         parse_mode='Markdown')
 
     def run():
@@ -739,7 +734,7 @@ def otomatik_arkaplan_tarayici():
 
             dongu_sayaci += 1
             if dongu_sayaci % 40 == 0:
-                ozet = " | ".join(debug[:8])
+                ozet = " | ".join(debug[:7])
                 print(f"🔍 #{dongu_sayaci} [{AKTIF_MOD}] opt:{len(COIN_PARAMS)} | {ozet}", flush=True)
 
             for s in sinyaller:
