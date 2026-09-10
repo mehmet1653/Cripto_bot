@@ -640,4 +640,94 @@ def otomatik_arkaplan_tarayici():
                 try:
                     market_info = exchange.market(symbol)
                     contract_size = float(market_info.get('contractSize', 1.0))
-                    ham
+                    ham_kontrat = pozisyon_degeri / (s["giris"] * contract_size)
+                    miktar = float(exchange.amount_to_precision(symbol, max(ham_kontrat, 0.001)))
+                    if miktar <= 0:
+                        continue
+                except Exception as e:
+                    print(f"❌ Miktar hatası ({symbol}): {e}", flush=True)
+                    continue
+
+                try:
+                    tum_emirleri_iptal_et(symbol)
+                    emir = exchange.create_order(
+                        symbol, 'market',
+                        'buy' if yon == 'LONG' else 'sell',
+                        miktar
+                    )
+
+                    giris = float(emir.get('average') or emir.get('price') or s["giris"])
+                    time.sleep(0.5)
+
+                    if yon == 'LONG':
+                        stop = giris * (1 - stop_pct)
+                        tp = giris * (1 + s["tp_pct"])
+                        kapat_yon = 'sell'
+                    else:
+                        stop = giris * (1 + stop_pct)
+                        tp = giris * (1 - s["tp_pct"])
+                        kapat_yon = 'buy'
+
+                    stop = float(exchange.price_to_precision(symbol, stop))
+                    tp = float(exchange.price_to_precision(symbol, tp))
+
+                    try:
+                        exchange.create_order(
+                            symbol, 'stop', kapat_yon, miktar, stop,
+                            {'stopPrice': stop, 'triggerPrice': stop, 'reduceOnly': True}
+                        )
+                    except Exception:
+                        try:
+                            exchange.create_order(
+                                symbol, 'stop_market', kapat_yon, miktar, stop,
+                                {'stopPrice': stop, 'triggerPrice': stop, 'reduceOnly': True}
+                            )
+                        except Exception as e:
+                            print(f"⚠️ Stop emri başarısız: {e}", flush=True)
+
+                    try:
+                        exchange.create_order(
+                            symbol, 'limit', kapat_yon, miktar, tp,
+                            {'reduceOnly': True}
+                        )
+                    except Exception as e:
+                        print(f"⚠️ TP emri başarısız: {e}", flush=True)
+
+                    AKTIF_GRID_SISTEMLERI[symbol] = {
+                        "yon": yon, "giris": giris, "stop": stop, "tp": tp, "miktar": miktar
+                    }
+                    hafizayi_kaydet()
+
+                    print(f"🎯 İŞLEM: {symbol} | {yon} | Miktar: {miktar} | TP: {tp} | SL: {stop}", flush=True)
+                    telegram_mesaj_gonder(
+                        f"🎯 *İŞLEM AÇILDI*\n"
+                        f"📌 `{symbol}` | *{yon}*\n"
+                        f"💰 Giriş: `{giris}`\n"
+                        f"🎯 TP: `{tp}` | 🛑 SL: `{stop}`\n"
+                        f"📊 Miktar: `{miktar}` | Risk: `{risk_usdt:.2f} USDT`"
+                    )
+                    break
+                except Exception as e:
+                    print(f"❌ İşlem açma hatası: {e}", flush=True)
+
+        except Exception as e:
+            print(f"⚠️ Döngü hatası: {e}", flush=True)
+        time.sleep(15)
+
+def flask_web_server():
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
+
+# ==================== BAŞLAT ====================
+if __name__ == '__main__':
+    threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
+    threading.Thread(target=flask_web_server, daemon=True).start()
+
+    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app_tg.add_handler(CommandHandler("durum", durum_komutu))
+    app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
+    app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
+    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
+    app_tg.add_handler(CommandHandler("backtest", backtest_komutu))
+
+    app_tg.run_polling()
