@@ -318,6 +318,34 @@ def otomatik_arkaplan_tarayici():
                     COIN_COOLDOWNLAR[sym] = time.time() + COOLDOWN_SURESI_SANIYE
                     hafizayi_kaydet()
 
+            # --- AÇIK POZİSYONLAR İÇİN ANLIK TRAILING / OTOMATİK KÂR AL (KİLİTLEME) ---
+            for sym, pos in aktif_borsa_map.items():
+                try:
+                    unrealized_pnl = float(pos.get('unrealizedPnl', 0) or 0)
+                    initial_margin = float(pos.get('initialMargin', 0) or pos.get('margin', 0) or 1.0)
+                    
+                    # Eğer kâr 1.5 USDT üzerine çıktıysa, kârı korumak/garantilemek için trailing veya erken TP tetikleyebiliriz
+                    # Kullanıcı +1.7 iken eksiye döndüğünden şikayetçi olduğu için, kâr belli bir seviyeyi (+1.2 USDT veya %6-7+ getiri) 
+                    # gördükten sonra anında piyasadan kârla çıkıp pozisyonu kapatmasını sağlıyoruz!
+                    if unrealized_pnl >= 1.2:
+                        kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
+                        yon = str(pos.get('side', '')).upper()
+                        kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
+                        
+                        tum_emirleri_iptal_et(sym)
+                        exchange.create_order(sym, 'market', kapatma_yonu, kontrat, None, {'reduce_only': True})
+                        
+                        if sym in AKTIF_GRID_SISTEMLERI:
+                            AKTIF_GRID_SISTEMLERI.pop(sym)
+                        
+                        ANALitik_HAFIZA["basarili_islem_sayisi"] = ANALitik_HAFIZA.get("basarili_islem_sayisi", 0) + 1
+                        hafizayi_kaydet()
+                        
+                        print(f"💰 KÂR KORUMA / ERKEN TP: {sym} | Gerçekleşen Kâr: {unrealized_pnl:.2f} USDT", flush=True)
+                        telegram_mesaj_gonder(f"💰 *Kâr Koruma Devrede (Kapatıldı)*\n📌 Coin: `{sym}` | Kâr: `+{unrealized_pnl:.2f} USDT` 🟢")
+                except Exception as e:
+                    pass
+
             # --- PUANLI SİNYAL ANALİZİ ---
             taranan_sinyaller = []
             su_anki_zaman = time.time()
@@ -409,8 +437,9 @@ def otomatik_arkaplan_tarayici():
                     giris_fiyati = guncel_fiyat
                     time.sleep(0.3)
 
-                    hedef_oran_fiyat = 0.025 # %2.5 Kâr Hedefi
-                    stop_oran_fiyat = (atr_yuzdesi * 1.3) / 100.0
+                    # Kâr hedefi daha erken kilitlensin diye mesafe biraz daraltıldı (+%1.8 hedefleniyor)
+                    hedef_oran_fiyat = 0.018 
+                    stop_oran_fiyat = (atr_yuzdesi * 1.2) / 100.0
 
                     if grid_yonu == 'LONG':
                         stop_fiyat = giris_fiyati * (1.0 - stop_oran_fiyat)
@@ -450,7 +479,7 @@ def flask_web_server():
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
 
 if __name__ == '__main__':
-    threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
+    threading.Thread(target=target:=otomatik_arkaplan_tarayici, daemon=True).start()
     threading.Thread(target=flask_web_server, daemon=True).start()
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
