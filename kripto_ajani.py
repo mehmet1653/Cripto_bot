@@ -324,9 +324,6 @@ def otomatik_arkaplan_tarayici():
                     unrealized_pnl = float(pos.get('unrealizedPnl', 0) or 0)
                     initial_margin = float(pos.get('initialMargin', 0) or pos.get('margin', 0) or 1.0)
                     
-                    # Eğer kâr 1.5 USDT üzerine çıktıysa, kârı korumak/garantilemek için trailing veya erken TP tetikleyebiliriz
-                    # Kullanıcı +1.7 iken eksiye döndüğünden şikayetçi olduğu için, kâr belli bir seviyeyi (+1.2 USDT veya %6-7+ getiri) 
-                    # gördükten sonra anında piyasadan kârla çıkıp pozisyonu kapatmasını sağlıyoruz!
                     if unrealized_pnl >= 1.2:
                         kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
                         yon = str(pos.get('side', '')).upper()
@@ -368,7 +365,6 @@ def otomatik_arkaplan_tarayici():
                     atr_yuzdesi = atr_ve_volatilite_hesapla(df_15m)
                     derinlik = emir_defteri_derinlik_analizi(symbol)
 
-                    # Puan Hesaplama Mekanizması
                     puan = 50
                     grid_yonu = "LONG"
 
@@ -392,7 +388,6 @@ def otomatik_arkaplan_tarayici():
                     elif derinlik == "SATICI_BASKIN" and grid_yonu == "SHORT":
                         puan += 10
 
-                    # Sadece güçlü puan alanlar (>= 75) işleme alınır
                     if puan >= 75:
                         taranan_sinyaller.append({
                             "symbol": symbol, "puan": puan, "yon": grid_yonu, "fiyat": guncel_fiyat, "atr": atr_yuzdesi
@@ -423,7 +418,6 @@ def otomatik_arkaplan_tarayici():
                 if not set_leverage_and_margin_safely(symbol, dinamik_kaldirac):
                     continue
 
-                # Kasanın tam %20'si ile marjin hesaplama
                 hedef_marjin = toplam_bakiye * 0.20
                 ham_mask = (hedef_marjin * dinamik_kaldirac) / guncel_fiyat
                 
@@ -437,7 +431,6 @@ def otomatik_arkaplan_tarayici():
                     giris_fiyati = guncel_fiyat
                     time.sleep(0.3)
 
-                    # Kâr hedefi daha erken kilitlensin diye mesafe biraz daraltıldı (+%1.8 hedefleniyor)
                     hedef_oran_fiyat = 0.018 
                     stop_oran_fiyat = (atr_yuzdesi * 1.2) / 100.0
 
@@ -479,7 +472,7 @@ def flask_web_server():
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
 
 if __name__ == '__main__':
-    threading.Thread(target=target:=otomatik_arkaplan_tarayici, daemon=True).start()
+    threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     threading.Thread(target=flask_web_server, daemon=True).start()
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
