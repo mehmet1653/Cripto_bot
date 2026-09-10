@@ -43,16 +43,6 @@ TAKIP_EDILENLER = [
     'DOGE/USDT:USDT', 'SUI/USDT:USDT', 'LINK/USDT:USDT', 'ADA/USDT:USDT'
 ]
 
-COIN_ID_MAP = {
-    'SOL/USDT:USDT': 1,
-    'AVAX/USDT:USDT': 2,
-    'XRP/USDT:USDT': 3,
-    'DOGE/USDT:USDT': 4,
-    'SUI/USDT:USDT': 5,
-    'LINK/USDT:USDT': 6,
-    'ADA/USDT:USDT': 7
-}
-
 BOT_CALISIYOR_MU = True
 
 # ==================== SUPABASE HAFIZA FONKSİYONLARI ====================
@@ -112,27 +102,7 @@ COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 MAKSIMUM_TOPLAM_POZISYON = 3
 COOLDOWN_SURESI_SANIYE = 10 * 60
 
-# ==================== YAPAY ZEKA MODELİ ====================
-ai_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
-ai_model_egitildi = False
-
-def yapay_zekayi_egit_ve_guncelle():
-    global ai_model, ai_model_egitildi
-    veriler = ANALitik_HAFIZA.get("egitim_verileri", [])
-    if len(veriler) < 20:
-        ai_model_egitildi = False
-        return
-    try:
-        X = [item[:9] for item in veriler]
-        y = [item[9] for item in veriler]
-        if len(set(y)) < 2:
-            ai_model_egitildi = False
-            return
-        ai_model.fit(np.array(X), np.array(y))
-        ai_model_egitildi = True
-    except Exception:
-        ai_model_egitildi = False
-
+# ==================== YARDIMCI FONKSİYONLAR ====================
 def atr_ve_volatilite_hesapla(df, period=14):
     try:
         atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=period).average_true_range().iloc[-1]
@@ -185,7 +155,7 @@ def telegram_mesaj_gonder(mesaj):
 
 @app.route('/')
 def home():
-    return f"15x Puanlı Bot Aktif | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
+    return f"Güvenli Bot Aktif | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
 
 def set_leverage_and_margin_safely(symbol, leverage):
     try:
@@ -220,7 +190,6 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         toplam_islem = basarili_sayisi + basarisiz_sayisi
         basari_orani = (basarili_sayisi / toplam_islem * 100) if toplam_islem > 0 else 0.0
 
-        # Aktif pozisyonların detaylarını listele
         pozisyon_detaylari = ""
         if borsa_poslari:
             pozisyon_detaylari = "\n📋 *Aktif Pozisyonlar:*\n"
@@ -233,7 +202,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pozisyon_detaylari = "\n📋 *Aktif Pozisyon Yok*\n"
 
         mesaj = (
-            f"🎯 *15X PUANLI İŞLEM BOTU*\n\n"
+            f"🎯 *GÜVENLİ İŞLEM BOTU*\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT` (Serbest: `{free:.2f} USDT`)\n"
             f"{pnl_ikon} Anlık Kâr/Zarar: `{toplam_pnl:+.2f} USDT` (`%{pnl_yuzde:+.2f}`)\n"
             f"📌 Açık Pozisyon Sayısı: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n"
@@ -248,7 +217,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🎯 *15x Puanlı Bot Aktif!*", parse_mode='Markdown')
+    await update.message.reply_text("🎯 *Bot Aktif!*", parse_mode='Markdown')
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -277,7 +246,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🎯 [PUANLI MOD] 15x ve %20 Marjin Stratejisi Devrede.", flush=True)
+    print("🎯 [GÜVENLİ MOD] 5x ve Düşük Riskli Pozisyon Boyutu Devrede.", flush=True)
     try:
         exchange.load_markets()
     except Exception:
@@ -294,19 +263,6 @@ def otomatik_arkaplan_tarayici():
                 aktif_borsa_map = {p['symbol']: p for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0}
             except Exception:
                 aktif_borsa_map = {}
-
-            # --- LİMİT KONTROLÜ ---
-            if len(aktif_borsa_map) > MAKSIMUM_TOPLAM_POZISYON:
-                for sym, pos in list(aktif_borsa_map.items()):
-                    if sym not in AKTIF_GRID_SISTEMLERI:
-                        try:
-                            kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
-                            yon = str(pos.get('side', '')).upper()
-                            kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
-                            tum_emirleri_iptal_et(sym)
-                            exchange.create_order(sym, 'market', kapatma_yonu, kontrat, None, {'reduce_only': True})
-                        except Exception:
-                            pass
 
             # --- KAPATILANLARI İŞLE ---
             for sym in list(AKTIF_GRID_SISTEMLERI.keys()):
@@ -325,40 +281,15 @@ def otomatik_arkaplan_tarayici():
 
                     if basarili_islem:
                         ANALitik_HAFIZA["basarili_islem_sayisi"] = ANALitik_HAFIZA.get("basarili_islem_sayisi", 0) + 1
-                        telegram_mesaj_gonder(f"🎉 *Kâr Alındı (15x)* -> `{sym}` 🟢")
+                        telegram_mesaj_gonder(f"🎉 *Kâr Alındı* -> `{sym}` 🟢")
                     else:
                         ANALitik_HAFIZA["basarisiz_islem_sayisi"] = ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0) + 1
-                        telegram_mesaj_gonder(f"❌ *Stop Oldu (15x)* -> `{sym}` 🔴")
+                        telegram_mesaj_gonder(f"❌ *Stop Oldu* -> `{sym}` 🔴")
 
                     COIN_COOLDOWNLAR[sym] = time.time() + COOLDOWN_SURESI_SANIYE
                     hafizayi_kaydet()
 
-            # --- AÇIK POZİSYONLAR İÇİN ANLIK TRAILING / OTOMATİK KÂR AL (KİLİTLEME) ---
-            for sym, pos in aktif_borsa_map.items():
-                try:
-                    unrealized_pnl = float(pos.get('unrealizedPnl', 0) or 0)
-                    initial_margin = float(pos.get('initialMargin', 0) or pos.get('margin', 0) or 1.0)
-                    
-                    if unrealized_pnl >= 1.2:
-                        kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
-                        yon = str(pos.get('side', '')).upper()
-                        kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
-                        
-                        tum_emirleri_iptal_et(sym)
-                        exchange.create_order(sym, 'market', kapatma_yonu, kontrat, None, {'reduce_only': True})
-                        
-                        if sym in AKTIF_GRID_SISTEMLERI:
-                            AKTIF_GRID_SISTEMLERI.pop(sym)
-                        
-                        ANALitik_HAFIZA["basarili_islem_sayisi"] = ANALitik_HAFIZA.get("basarili_islem_sayisi", 0) + 1
-                        hafizayi_kaydet()
-                        
-                        print(f"💰 KÂR KORUMA / ERKEN TP: {sym} | Gerçekleşen Kâr: {unrealized_pnl:.2f} USDT", flush=True)
-                        telegram_mesaj_gonder(f"💰 *Kâr Koruma Devrede (Kapatıldı)*\n📌 Coin: `{sym}` | Kâr: `+{unrealized_pnl:.2f} USDT` 🟢")
-                except Exception as e:
-                    pass
-
-            # --- PUANLI SİNYAL ANALİZİ ---
+            # --- SİNYAL ANALİZİ VE İŞLEM AÇMA ---
             taranan_sinyaller = []
             su_anki_zaman = time.time()
 
@@ -381,23 +312,13 @@ def otomatik_arkaplan_tarayici():
                     derinlik = emir_defteri_derinlik_analizi(symbol)
 
                     puan = 50
-                    grid_yonu = "LONG"
+                    grid_yonu = "LONG" if trend_1h_boga else "SHORT"
+                    puan += 20
 
-                    if trend_1h_boga:
-                        puan += 20
-                        grid_yonu = "LONG"
-                    else:
-                        puan += 20
-                        grid_yonu = "SHORT"
-
-                    if grid_yonu == "LONG" and 40 <= rsi <= 60:
+                    if 40 <= rsi <= 60:
                         puan += 15
-                    elif grid_yonu == "SHORT" and 40 <= rsi <= 60:
-                        puan += 15
-
                     if adx_val > 25:
                         puan += 15
-
                     if derinlik == "ALICI_BASKIN" and grid_yonu == "LONG":
                         puan += 10
                     elif derinlik == "SATICI_BASKIN" and grid_yonu == "SHORT":
@@ -413,7 +334,7 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
-            # --- 15X VE %20 KASA MARJİNİ İLE İŞLEM AÇMA ---
+            # --- 5X VE GÜVENLİ MARJİN İLE İŞLEM AÇMA ---
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU or len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
                     break
@@ -423,7 +344,7 @@ def otomatik_arkaplan_tarayici():
                 guncel_fiyat = sinyal["fiyat"]
                 atr_yuzdesi = sinyal["atr"]
 
-                dinamik_kaldirac = 15
+                dinamik_kaldirac = 5  # Kaldıraç 5x'e düşürüldü
                 try:
                     balance = exchange.fetch_balance()
                     toplam_bakiye = float(balance['total'].get('USDT', 0))
@@ -433,7 +354,8 @@ def otomatik_arkaplan_tarayici():
                 if not set_leverage_and_margin_safely(symbol, dinamik_kaldirac):
                     continue
 
-                hedef_marjin = toplam_bakiye * 0.20
+                # Marjin payı %10'a çekilerek başlangıç komisyon yükü hafifletildi
+                hedef_marjin = toplam_bakiye * 0.10 
                 ham_mask = (hedef_marjin * dinamik_kaldirac) / guncel_fiyat
                 
                 try:
@@ -446,8 +368,8 @@ def otomatik_arkaplan_tarayici():
                     giris_fiyati = guncel_fiyat
                     time.sleep(0.3)
 
-                    hedef_oran_fiyat = 0.018 
-                    stop_oran_fiyat = (atr_yuzdesi * 1.2) / 100.0
+                    hedef_oran_fiyat = 0.015 
+                    stop_oran_fiyat = (atr_yuzdesi * 1.5) / 100.0
 
                     if grid_yonu == 'LONG':
                         stop_fiyat = giris_fiyati * (1.0 - stop_oran_fiyat)
@@ -469,12 +391,12 @@ def otomatik_arkaplan_tarayici():
                     exchange.create_order(symbol, 'limit', kapatma_yonu, miktar, hedef_fiyat, {'reduceOnly': True})
 
                     AKTIF_GRID_SISTEMLERI[symbol] = {
-                        "yon": grid_yonu, "giris_fiyati": giris_fiyati, "hedef_fiyat": hedef_fiyat, "trailing_aktif": False
+                        "yon": grid_yonu, "giris_fiyati": giris_fiyati, "hedef_fiyat": hedef_fiyat
                     }
                     hafizayi_kaydet()
 
-                    print(f"🎯 15X PUANLI İŞLEM: {symbol} | Yön: {grid_yonu} | Skor: {sinyal['puan']} | TP: {hedef_fiyat}", flush=True)
-                    telegram_mesaj_gonder(f"🎯 *15X PUANLI İŞLEM AÇILDI*\n📌 Coin: `{symbol}` | Yön: `{grid_yonu}` | Skor: `{sinyal['puan']}` | Hedef: `{hedef_fiyat}`")
+                    print(f"🎯 5X İŞLEM: {symbol} | Yön: {grid_yonu} | Skor: {sinyal['puan']} | TP: {hedef_fiyat}", flush=True)
+                    telegram_mesaj_gonder(f"🎯 *5X İŞLEM AÇILDI*\n📌 Coin: `{symbol}` | Yön: `{grid_yonu}` | Skor: `{sinyal['puan']}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası: {e}", flush=True)
