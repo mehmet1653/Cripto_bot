@@ -39,17 +39,25 @@ TAKIP_EDILENLER = [
     'DOGE/USDT:USDT', 'SUI/USDT:USDT', 'LINK/USDT:USDT', 'ADA/USDT:USDT'
 ]
 
-# ==================== RİSK PARAMETRELERİ ====================
-ISLEM_BASI_RISK_PCT = 0.01
+# ==================== RİSK PARAMETRELERİ (OPTİMİZE EDİLMİŞ) ====================
+ISLEM_BASI_RISK_PCT = 0.01        # Kasanın %1'i
 KALDIRAC = 5
 MAKSIMUM_TOPLAM_POZISYON = 3
 GUNLUK_MAX_KAYIP_PCT = 0.03
 COOLDOWN_SURESI_SANIYE = 10 * 60
-MIN_STOP_PCT = 0.008
-MAX_STOP_PCT = 0.030
-RISK_REWARD = 2.0
+
+# --- STOP/TP (GÜNCELLENDİ) ---
+MIN_STOP_PCT = 0.010              # %1.0
+MAX_STOP_PCT = 0.035              # %3.5
+RISK_REWARD = 2.5                 # 1:2.5
 KOMISYON_ORANI = 0.001
-ATR_STOP_MULT = 1.5
+ATR_STOP_MULT = 2.0               # ATR × 2.0
+
+# --- FİLTRELER (GEVŞETİLDİ) ---
+ADX_ESIK = 18
+HACIM_ESIK = 1.2
+ATR_MIN = 0.5
+ATR_MAX = 4.5
 
 SEKTOR_MAP = {
     'SOL/USDT:USDT': 'L1', 'AVAX/USDT:USDT': 'L1', 'SUI/USDT:USDT': 'L1',
@@ -204,9 +212,10 @@ def rsi_hesapla(close, period=14):
 def ema_hesapla(close, period):
     return close.ewm(span=period, adjust=False).mean()
 
-def hacim_onay(df, period=20):
+def hacim_onay(df, period=20, esik=1.2):
     try:
-        return bool(df['volume'].iloc[-1] > df['volume'].rolling(period).mean().iloc[-1])
+        ort = df['volume'].rolling(period).mean().iloc[-1]
+        return bool(df['volume'].iloc[-1] > ort * esik)
     except Exception:
         return False
 
@@ -232,7 +241,11 @@ def adx_hesapla(df, period=14):
 
 def hesapla_gostergeler(df15, df1h, df4h):
     out = {}
-    if len(df4h) >= 50:
+    # 4h trend: EMA100 (stabil), yetersizse EMA50
+    if len(df4h) >= 100:
+        ema100_4h = ema_hesapla(df4h['close'], 100).iloc[-1]
+        out['trend_4h_yon'] = "LONG" if df4h['close'].iloc[-1] > ema100_4h else "SHORT"
+    elif len(df4h) >= 50:
         ema50_4h = ema_hesapla(df4h['close'], 50).iloc[-1]
         out['trend_4h_yon'] = "LONG" if df4h['close'].iloc[-1] > ema50_4h else "SHORT"
     else:
@@ -244,7 +257,7 @@ def hesapla_gostergeler(df15, df1h, df4h):
 
     out['rsi'] = rsi_hesapla(df15['close'], 14)
     out['atr_pct'] = atr_hesapla(df15, 14)
-    out['hacim_onay'] = hacim_onay(df15, 20)
+    out['hacim_onay'] = hacim_onay(df15, 20, HACIM_ESIK)
     out['adx'] = adx_hesapla(df15, 14)
 
     ema20_15 = ema_hesapla(df15['close'], 20).iloc[-1]
@@ -253,9 +266,6 @@ def hesapla_gostergeler(df15, df1h, df4h):
     return out
 
 def sinyal_uret(g, btc_trend=None):
-    """
-    Filtreleri tek tek geçen sinyaller. Debug için hangi filtreden geçtiğini de döner.
-    """
     if g['trend_4h_yon'] is None:
         return None, "4h trend hesaplanamadı"
     yon = g['trend_4h_yon']
@@ -266,13 +276,13 @@ def sinyal_uret(g, btc_trend=None):
             return None, "BTC düşüyor, LONG engellendi"
         if yon == "SHORT" and btc_trend == "UP":
             return None, "BTC yükseliyor, SHORT engellendi"
-    if not (0.4 <= g['atr_pct'] <= 4.0):
+    if not (ATR_MIN <= g['atr_pct'] <= ATR_MAX):
         return None, f"ATR %{g['atr_pct']:.2f} aralık dışı"
-    if g['adx'] < 22:
-        return None, f"ADX {g['adx']:.1f} < 22"
-    if yon == "LONG" and not (30 <= g['rsi'] <= 55):
+    if g['adx'] < ADX_ESIK:
+        return None, f"ADX {g['adx']:.1f} < {ADX_ESIK}"
+    if yon == "LONG" and not (30 <= g['rsi'] <= 60):
         return None, f"RSI {g['rsi']:.1f} LONG aralığında değil"
-    if yon == "SHORT" and not (45 <= g['rsi'] <= 70):
+    if yon == "SHORT" and not (40 <= g['rsi'] <= 70):
         return None, f"RSI {g['rsi']:.1f} SHORT aralığında değil"
     if not g['hacim_onay']:
         return None, "Hacim onayı yok"
@@ -295,10 +305,9 @@ def sinyal_uret(g, btc_trend=None):
     return {"yon": yon, "giris": giris, "stop": stop, "tp": tp,
             "stop_pct": stop_pct, "tp_pct": tp_pct}, "OK"
 
-# ==================== BACKTEST FONKSİYONU ====================
-def tek_coin_backtest(symbol, gun_sayisi=180):
+# ==================== BACKTEST ====================
+def tek_coin_backtest(symbol, gun_sayisi=365):
     try:
-        # BTC trend referansı
         btc_ohlcv = exchange.fetch_ohlcv('BTC/USDT:USDT', '1h', limit=min(gun_sayisi * 24, 1000))
         df_btc = pd.DataFrame(btc_ohlcv, columns=['timestamp','open','high','low','close','volume'])
 
@@ -476,16 +485,19 @@ async def backtest_komutu(update, context):
         await update.message.reply_text("⏳ Zaten bir backtest çalışıyor, bitmesini bekle.")
         return
     BACKTEST_CALISIYOR = True
-    await update.message.reply_text("⏳ *Backtest başlatıldı...*\nSon 180 gün taranıyor. 2-3 dakika sürebilir. Sonuç gelince atacağım.", parse_mode='Markdown')
+    await update.message.reply_text(
+        "⏳ *Backtest başlatıldı...*\nSon 365 gün taranıyor. 3-5 dakika sürebilir. Sonuç gelince atacağım.",
+        parse_mode='Markdown'
+    )
 
     def run():
         global BACKTEST_CALISIYOR
         try:
-            satirlar = ["*📊 BACKTEST SONUÇLARI* (Son 180 gün)\n", "```"]
+            satirlar = ["*📊 BACKTEST SONUÇLARI* (Son 365 gün)\n", "```"]
             satirlar.append(f"{'COIN':<16} {'İŞL':>4} {'WIN%':>6} {'PF':>6} {'EV%':>7} {'DD%':>6} {'TOT%':>7}")
             satirlar.append("-" * 60)
             for c in TAKIP_EDILENLER:
-                r = tek_coin_backtest(c, gun_sayisi=180)
+                r = tek_coin_backtest(c, gun_sayisi=365)
                 if r.get('islem', -1) == -1:
                     satirlar.append(f"{c[:14]:<16} HATA: {r.get('hata','?')[:20]}")
                 else:
@@ -499,7 +511,6 @@ async def backtest_komutu(update, context):
             satirlar.append("• İŞL > 30 → güvenilir sonuç")
 
             metin = "\n".join(satirlar)
-            # Telegram 4096 karakter limiti
             if len(metin) > 4000:
                 for i in range(0, len(metin), 3500):
                     telegram_mesaj_gonder(metin[i:i+3500])
@@ -515,7 +526,8 @@ async def backtest_komutu(update, context):
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALITIK_HAFIZA
-    print("🎯 [GÜVENLİ MOD] R/R 1:2, Komisyon dahil, BTC filtresi aktif.", flush=True)
+    print("🎯 [GÜVENLİ MOD] Optimize edilmiş parametrelerle başlatıldı.", flush=True)
+    print(f"📊 R/R: 1:{RISK_REWARD} | ATR_STOP_MULT: {ATR_STOP_MULT} | ADX eşik: {ADX_ESIK}", flush=True)
     try:
         exchange.load_markets()
     except Exception:
@@ -541,6 +553,7 @@ def otomatik_arkaplan_tarayici():
             except Exception:
                 aktif_borsa = {}
 
+            # Kapanan pozisyonları işle
             for sym in list(AKTIF_GRID_SISTEMLERI.keys()):
                 if sym not in aktif_borsa:
                     AKTIF_GRID_SISTEMLERI.pop(sym)
@@ -602,11 +615,10 @@ def otomatik_arkaplan_tarayici():
                         debug_mesaj.append(f"{symbol.split('/')[0]}: ✅ SİNYAL {sig['yon']}")
                     else:
                         debug_mesaj.append(f"{symbol.split('/')[0]}: {neden}")
-                except Exception as e:
+                except Exception:
                     debug_mesaj.append(f"{symbol.split('/')[0]}: hata")
                     continue
 
-            # Her 40 döngüde bir (yaklaşık 10 dk) log bas
             dongu_sayaci += 1
             if dongu_sayaci % 40 == 0:
                 ozet = " | ".join(debug_mesaj[:7])
