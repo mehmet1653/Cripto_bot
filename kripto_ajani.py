@@ -246,7 +246,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🎯 [GÜVENLİ MOD] 5x ve Düşük Riskli Pozisyon Boyutu Devrede.", flush=True)
+    print("🎯 [GÜVENLİ MOD] 5x ve Doğru Kontrat Hesaplaması Devrede.", flush=True)
     try:
         exchange.load_markets()
     except Exception:
@@ -334,7 +334,7 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
-            # --- 5X VE GÜVENLİ MARJİN İLE İŞLEM AÇMA ---
+            # --- 5X VE DÜZELTİLMİŞ KONTRAT HESAPLAMASI İLE İŞLEM AÇMA ---
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU or len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
                     break
@@ -344,7 +344,7 @@ def otomatik_arkaplan_tarayici():
                 guncel_fiyat = sinyal["fiyat"]
                 atr_yuzdesi = sinyal["atr"]
 
-                dinamik_kaldirac = 5  # Kaldıraç 5x'e düşürüldü
+                dinamik_kaldirac = 5  # 5x güvenli kaldıraç
                 try:
                     balance = exchange.fetch_balance()
                     toplam_bakiye = float(balance['total'].get('USDT', 0))
@@ -354,14 +354,24 @@ def otomatik_arkaplan_tarayici():
                 if not set_leverage_and_margin_safely(symbol, dinamik_kaldirac):
                     continue
 
-                # Marjin payı %10'a çekilerek başlangıç komisyon yükü hafifletildi
-                hedef_marjin = toplam_bakiye * 0.10 
-                ham_mask = (hedef_marjin * dinamik_kaldirac) / guncel_fiyat
+                # Güvenli Marjin ve Kontrat Hesaplama
+                hedef_marjin = toplam_bakiye * 0.10  # Kasanın %10'u
                 
                 try:
                     market_info = exchange.market(symbol)
-                    miktar = float(exchange.amount_to_precision(symbol, max(round(ham_mask / float(market_info.get('contractSize', 1.0))), 1)))
+                    contract_size = float(market_info.get('contractSize', 1.0))
                     
+                    pozisyon_degeri_usdt = hedef_marjin * dinamik_kaldirac
+                    ham_kontrat = pozisyon_degeri_usdt / (guncel_fiyat * contract_size)
+                    miktar = float(exchange.amount_to_precision(symbol, max(round(ham_kontrat, 4), 0.001)))
+                    
+                    if miktar <= 0:
+                        continue
+                except Exception as e:
+                    print(f"❌ Miktar hesaplama hatası ({symbol}): {e}", flush=True)
+                    continue
+                
+                try:
                     tum_emirleri_iptal_et(symbol)
                     exchange.create_order(symbol, 'market', 'buy' if grid_yonu == 'LONG' else 'sell', miktar)
 
@@ -395,8 +405,8 @@ def otomatik_arkaplan_tarayici():
                     }
                     hafizayi_kaydet()
 
-                    print(f"🎯 5X İŞLEM: {symbol} | Yön: {grid_yonu} | Skor: {sinyal['puan']} | TP: {hedef_fiyat}", flush=True)
-                    telegram_mesaj_gonder(f"🎯 *5X İŞLEM AÇILDI*\n📌 Coin: `{symbol}` | Yön: `{grid_yonu}` | Skor: `{sinyal['puan']}`")
+                    print(f"🎯 5X İŞLEM: {symbol} | Yön: {grid_yonu} | Miktar: {miktar} | TP: {hedef_fiyat}", flush=True)
+                    telegram_mesaj_gonder(f"🎯 *5X İŞLEM AÇILDI*\n📌 Coin: `{symbol}` | Yön: `{grid_yonu}` | Miktar: `{miktar}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası: {e}", flush=True)
