@@ -34,34 +34,40 @@ exchange = ccxt.gate({
 })
 exchange.set_sandbox_mode(True)
 
+# Top 10 likit coin
 TAKIP_EDILENLER = [
-    'SOL/USDT:USDT', 'AVAX/USDT:USDT', 'XRP/USDT:USDT',
-    'DOGE/USDT:USDT', 'SUI/USDT:USDT', 'LINK/USDT:USDT', 'ADA/USDT:USDT'
+    'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'BNB/USDT:USDT',
+    'XRP/USDT:USDT', 'ADA/USDT:USDT', 'DOGE/USDT:USDT', 'AVAX/USDT:USDT',
+    'LINK/USDT:USDT', 'DOT/USDT:USDT'
 ]
 
-# ==================== RİSK PARAMETRELERİ (OPTİMİZE EDİLMİŞ) ====================
+# ==================== RİSK PARAMETRELERİ ====================
 ISLEM_BASI_RISK_PCT = 0.01        # Kasanın %1'i
 KALDIRAC = 5
 MAKSIMUM_TOPLAM_POZISYON = 3
 GUNLUK_MAX_KAYIP_PCT = 0.03
-COOLDOWN_SURESI_SANIYE = 10 * 60
+COOLDOWN_SURESI_SANIYE = 15 * 60
 
-# --- STOP/TP (GÜNCELLENDİ) ---
-MIN_STOP_PCT = 0.010              # %1.0
-MAX_STOP_PCT = 0.035              # %3.5
-RISK_REWARD = 2.5                 # 1:2.5
+# --- MEAN REVERSION PARAMETRELERİ ---
+BOLLINGER_PERIOD = 20
+BOLLINGER_STD = 2.0
+RSI_PERIOD = 14
+RSI_LONG_ESIK = 32              # RSI < 32 → LONG dönüş sinyali
+RSI_SHORT_ESIK = 68             # RSI > 68 → SHORT dönüş sinyali
+ATR_PERIOD = 14
+ATR_STOP_MULT = 1.5
+RISK_REWARD = 2.0
 KOMISYON_ORANI = 0.001
-ATR_STOP_MULT = 2.0               # ATR × 2.0
+MIN_STOP_PCT = 0.008
+MAX_STOP_PCT = 0.030
 
-# --- FİLTRELER (GEVŞETİLDİ) ---
-ADX_ESIK = 18
-HACIM_ESIK = 1.2
-ATR_MIN = 0.5
-ATR_MAX = 4.5
+# Zaman dilimi
+ZAMAN_DILIMI = '1h'
 
 SEKTOR_MAP = {
-    'SOL/USDT:USDT': 'L1', 'AVAX/USDT:USDT': 'L1', 'SUI/USDT:USDT': 'L1',
-    'ADA/USDT:USDT': 'L1', 'XRP/USDT:USDT': 'PAYMENT', 'LINK/USDT:USDT': 'ORACLE',
+    'BTC/USDT:USDT': 'BTC', 'ETH/USDT:USDT': 'ETH',
+    'SOL/USDT:USDT': 'L1', 'AVAX/USDT:USDT': 'L1', 'ADA/USDT:USDT': 'L1', 'DOT/USDT:USDT': 'L1',
+    'BNB/USDT:USDT': 'EXCH', 'XRP/USDT:USDT': 'PAYMENT', 'LINK/USDT:USDT': 'ORACLE',
     'DOGE/USDT:USDT': 'MEME'
 }
 
@@ -177,158 +183,150 @@ def gunluk_kayip_kontrol():
     except Exception:
         return False
 
-def btc_trend_al():
-    try:
-        ohlcv = exchange.fetch_ohlcv('BTC/USDT:USDT', '1h', limit=60)
-        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        if len(df) < 50:
-            return None
-        ema20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
-        ema50 = df['close'].ewm(span=50, adjust=False).mean().iloc[-1]
-        return "UP" if ema20 > ema50 else "DOWN"
-    except Exception:
-        return None
-
-def atr_hesapla(df, period=14):
-    try:
-        high = df['high']; low = df['low']; close = df['close']
-        tr1 = high - low
-        tr2 = (high - close.shift()).abs()
-        tr3 = (low - close.shift()).abs()
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        atr = tr.rolling(period).mean().iloc[-1]
-        return float((atr / close.iloc[-1]) * 100)
-    except Exception:
-        return 1.5
-
+# ==================== GÖSTERGELER ====================
 def rsi_hesapla(close, period=14):
     delta = close.diff()
     gain = delta.where(delta > 0, 0).rolling(period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
     rs = gain / loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
-    return float(rsi.iloc[-1]) if not pd.isna(rsi.iloc[-1]) else 50.0
+    return rsi
+
+def bollinger_hesapla(close, period=20, std_mult=2.0):
+    sma = close.rolling(period).mean()
+    std = close.rolling(period).std()
+    ust = sma + (std * std_mult)
+    alt = sma - (std * std_mult)
+    return sma, ust, alt
+
+def atr_hesapla(df, period=14):
+    high = df['high']; low = df['low']; close = df['close']
+    tr1 = high - low
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(period).mean()
+    return atr
 
 def ema_hesapla(close, period):
     return close.ewm(span=period, adjust=False).mean()
 
-def hacim_onay(df, period=20, esik=1.2):
+def hacim_onay(df, period=20, esik=1.0):
     try:
         ort = df['volume'].rolling(period).mean().iloc[-1]
         return bool(df['volume'].iloc[-1] > ort * esik)
     except Exception:
         return False
 
-def adx_hesapla(df, period=14):
-    try:
-        up = df['high'].diff()
-        down = -df['low'].diff()
-        plus_dm = np.where((up > down) & (up > 0), up, 0.0)
-        minus_dm = np.where((down > up) & (down > 0), down, 0.0)
-        tr = pd.concat([
-            df['high'] - df['low'],
-            (df['high'] - df['close'].shift()).abs(),
-            (df['low'] - df['close'].shift()).abs()
-        ], axis=1).max(axis=1)
-        atr14 = tr.rolling(period).mean()
-        plus_di = 100 * pd.Series(plus_dm).rolling(period).mean() / atr14
-        minus_di = 100 * pd.Series(minus_dm).rolling(period).mean() / atr14
-        dx = (abs(plus_di - minus_di) / (plus_di + minus_di).replace(0, np.nan)) * 100
-        val = dx.rolling(period).mean().iloc[-1]
-        return float(val) if not pd.isna(val) else 0.0
-    except Exception:
-        return 0.0
+# ==================== SİNYAL ÜRETİMİ ====================
+def sinyal_uret_mean_reversion(df, btc_df=None):
+    """
+    Mean Reversion stratejisi:
+    - Fiyat Bollinger alt bandının altına indi + RSI < 32 + son mum yeşil → LONG
+    - Fiyat Bollinger üst bandının üstüne çıktı + RSI > 68 + son mum kırmızı → SHORT
+    """
+    if len(df) < 50:
+        return None, "veri yetersiz"
 
-def hesapla_gostergeler(df15, df1h, df4h):
-    out = {}
-    # 4h trend: EMA100 (stabil), yetersizse EMA50
-    if len(df4h) >= 100:
-        ema100_4h = ema_hesapla(df4h['close'], 100).iloc[-1]
-        out['trend_4h_yon'] = "LONG" if df4h['close'].iloc[-1] > ema100_4h else "SHORT"
-    elif len(df4h) >= 50:
-        ema50_4h = ema_hesapla(df4h['close'], 50).iloc[-1]
-        out['trend_4h_yon'] = "LONG" if df4h['close'].iloc[-1] > ema50_4h else "SHORT"
-    else:
-        out['trend_4h_yon'] = None
+    close = df['close']
+    open_ = df['open']
+    high = df['high']
+    low = df['low']
 
-    ema7_1h = ema_hesapla(df1h['close'], 7).iloc[-1]
-    ema21_1h = ema_hesapla(df1h['close'], 21).iloc[-1]
-    out['trend_1h_yon'] = "LONG" if ema7_1h > ema21_1h else "SHORT"
+    sma, ust, alt = bollinger_hesapla(close, BOLLINGER_PERIOD, BOLLINGER_STD)
+    rsi = rsi_hesapla(close, RSI_PERIOD)
+    atr = atr_hesapla(df, ATR_PERIOD)
 
-    out['rsi'] = rsi_hesapla(df15['close'], 14)
-    out['atr_pct'] = atr_hesapla(df15, 14)
-    out['hacim_onay'] = hacim_onay(df15, 20, HACIM_ESIK)
-    out['adx'] = adx_hesapla(df15, 14)
+    son_fiyat = close.iloc[-1]
+    son_open = open_.iloc[-1]
+    son_sma = sma.iloc[-1]
+    son_ust = ust.iloc[-1]
+    son_alt = alt.iloc[-1]
+    son_rsi = rsi.iloc[-1]
+    son_atr = atr.iloc[-1]
 
-    ema20_15 = ema_hesapla(df15['close'], 20).iloc[-1]
-    out['fiyat_ema20_ustu'] = df15['close'].iloc[-1] > ema20_15
-    out['fiyat'] = float(df15['close'].iloc[-1])
-    return out
+    if pd.isna(son_sma) or pd.isna(son_rsi) or pd.isna(son_atr) or son_atr == 0:
+        return None, "gösterge hesaplanamadı"
 
-def sinyal_uret(g, btc_trend=None):
-    if g['trend_4h_yon'] is None:
-        return None, "4h trend hesaplanamadı"
-    yon = g['trend_4h_yon']
-    if g['trend_1h_yon'] != yon:
-        return None, f"1h ({g['trend_1h_yon']}) 4h ({yon}) uyumsuz"
-    if btc_trend is not None:
-        if yon == "LONG" and btc_trend == "DOWN":
-            return None, "BTC düşüyor, LONG engellendi"
-        if yon == "SHORT" and btc_trend == "UP":
-            return None, "BTC yükseliyor, SHORT engellendi"
-    if not (ATR_MIN <= g['atr_pct'] <= ATR_MAX):
-        return None, f"ATR %{g['atr_pct']:.2f} aralık dışı"
-    if g['adx'] < ADX_ESIK:
-        return None, f"ADX {g['adx']:.1f} < {ADX_ESIK}"
-    if yon == "LONG" and not (30 <= g['rsi'] <= 60):
-        return None, f"RSI {g['rsi']:.1f} LONG aralığında değil"
-    if yon == "SHORT" and not (40 <= g['rsi'] <= 70):
-        return None, f"RSI {g['rsi']:.1f} SHORT aralığında değil"
-    if not g['hacim_onay']:
-        return None, "Hacim onayı yok"
-    if yon == "LONG" and not g['fiyat_ema20_ustu']:
-        return None, "Fiyat EMA20 altında (LONG)"
-    if yon == "SHORT" and g['fiyat_ema20_ustu']:
-        return None, "Fiyat EMA20 üstünde (SHORT)"
+    atr_pct = (son_atr / son_fiyat) * 100
 
-    stop_pct = max(MIN_STOP_PCT, min(MAX_STOP_PCT, (g['atr_pct'] * ATR_STOP_MULT) / 100.0))
-    tp_pct = stop_pct * RISK_REWARD + KOMISYON_ORANI
+    # ATR filtresi
+    if not (0.3 <= atr_pct <= 5.0):
+        return None, f"ATR %{atr_pct:.2f} aralık dışı"
 
-    giris = g['fiyat']
-    if yon == "LONG":
-        stop = giris * (1 - stop_pct)
-        tp = giris * (1 + tp_pct)
-    else:
-        stop = giris * (1 + stop_pct)
-        tp = giris * (1 - tp_pct)
+    # Hacim onayı
+    if not hacim_onay(df, 20, 1.0):
+        return None, "hacim yok"
 
-    return {"yon": yon, "giris": giris, "stop": stop, "tp": tp,
-            "stop_pct": stop_pct, "tp_pct": tp_pct}, "OK"
+    # LONG sinyali
+    if son_fiyat <= son_alt and son_rsi < RSI_LONG_ESIK and son_fiyat > son_open:
+        stop_mesafe = son_atr * ATR_STOP_MULT
+        stop = min(low.iloc[-1] - son_atr * 0.5, son_fiyat - stop_mesafe)
+        stop_pct_hesap = (son_fiyat - stop) / son_fiyat
+        stop_pct = max(MIN_STOP_PCT, min(MAX_STOP_PCT, stop_pct_hesap))
+        stop = son_fiyat * (1 - stop_pct)
+        tp_pct = stop_pct * RISK_REWARD + KOMISYON_ORANI
+        tp = son_fiyat * (1 + tp_pct)
+        return {
+            "yon": "LONG",
+            "giris": float(son_fiyat),
+            "stop": float(stop),
+            "tp": float(tp),
+            "stop_pct": stop_pct,
+            "tp_pct": tp_pct,
+            "rsi": float(son_rsi),
+            "atr_pct": atr_pct
+        }, "OK"
+
+    # SHORT sinyali
+    if son_fiyat >= son_ust and son_rsi > RSI_SHORT_ESIK and son_fiyat < son_open:
+        stop_mesafe = son_atr * ATR_STOP_MULT
+        stop = max(high.iloc[-1] + son_atr * 0.5, son_fiyat + stop_mesafe)
+        stop_pct_hesap = (stop - son_fiyat) / son_fiyat
+        stop_pct = max(MIN_STOP_PCT, min(MAX_STOP_PCT, stop_pct_hesap))
+        stop = son_fiyat * (1 + stop_pct)
+        tp_pct = stop_pct * RISK_REWARD + KOMISYON_ORANI
+        tp = son_fiyat * (1 - tp_pct)
+        return {
+            "yon": "SHORT",
+            "giris": float(son_fiyat),
+            "stop": float(stop),
+            "tp": float(tp),
+            "stop_pct": stop_pct,
+            "tp_pct": tp_pct,
+            "rsi": float(son_rsi),
+            "atr_pct": atr_pct
+        }, "OK"
+
+    # Hangi filtre takıldı?
+    if son_fiyat > son_alt and son_fiyat < son_ust:
+        return None, "fiyat bantlar arasında"
+    if son_rsi >= RSI_LONG_ESIK and son_rsi <= RSI_SHORT_ESIK:
+        return None, f"RSI {son_rsi:.1f} nötr"
+    return None, "koşullar uygun değil"
 
 # ==================== BACKTEST ====================
 def tek_coin_backtest(symbol, gun_sayisi=365):
     try:
-        btc_ohlcv = exchange.fetch_ohlcv('BTC/USDT:USDT', '1h', limit=min(gun_sayisi * 24, 1000))
-        df_btc = pd.DataFrame(btc_ohlcv, columns=['timestamp','open','high','low','close','volume'])
+        # 1h mum, kaç tane lazım?
+        limit = min(gun_sayisi * 24, 1000)
+        ohlcv = exchange.fetch_ohlcv(symbol, ZAMAN_DILIMI, limit=limit)
+        df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
 
-        o15 = exchange.fetch_ohlcv(symbol, '15m', limit=1000)
-        o1h = exchange.fetch_ohlcv(symbol, '1h', limit=1000)
-        o4h = exchange.fetch_ohlcv(symbol, '4h', limit=500)
-
-        df15 = pd.DataFrame(o15, columns=['timestamp','open','high','low','close','volume'])
-        df1h = pd.DataFrame(o1h, columns=['timestamp','open','high','low','close','volume'])
-        df4h = pd.DataFrame(o4h, columns=['timestamp','open','high','low','close','volume'])
+        if len(df) < 100:
+            return {"symbol": symbol, "islem": 0, "win_rate": 0, "pf": 0,
+                    "ev": 0, "max_dd": 0, "toplam": 0}
 
         trades = []
         pozisyon = None
-        baslangic = 100
+        baslangic = 50
 
-        for i in range(baslangic, len(df15)):
-            ts = df15['timestamp'].iloc[i]
+        for i in range(baslangic, len(df)):
+            ts = df['timestamp'].iloc[i]
 
             if pozisyon is not None:
-                high = df15['high'].iloc[i]
-                low = df15['low'].iloc[i]
+                high = df['high'].iloc[i]
+                low = df['low'].iloc[i]
                 if pozisyon['yon'] == 'LONG':
                     if low <= pozisyon['stop']:
                         trades.append({**pozisyon, 'cikis': pozisyon['stop'], 'sonuc': 'STOP'})
@@ -345,22 +343,9 @@ def tek_coin_backtest(symbol, gun_sayisi=365):
                         pozisyon = None
                 continue
 
-            df1h_s = df1h[df1h['timestamp'] <= ts]
-            df4h_s = df4h[df4h['timestamp'] <= ts]
-            df_btc_s = df_btc[df_btc['timestamp'] <= ts]
-            df15_s = df15.iloc[max(0, i-100):i+1].reset_index(drop=True)
-
-            if len(df1h_s) < 30 or len(df4h_s) < 50:
-                continue
-
+            df_slice = df.iloc[max(0, i-100):i+1].reset_index(drop=True)
             try:
-                g = hesapla_gostergeler(df15_s, df1h_s, df4h_s)
-                btc_t = None
-                if len(df_btc_s) >= 50:
-                    ema20 = df_btc_s['close'].ewm(span=20, adjust=False).mean().iloc[-1]
-                    ema50 = df_btc_s['close'].ewm(span=50, adjust=False).mean().iloc[-1]
-                    btc_t = "UP" if ema20 > ema50 else "DOWN"
-                sig, _ = sinyal_uret(g, btc_t)
+                sig, _ = sinyal_uret_mean_reversion(df_slice)
             except Exception:
                 continue
 
@@ -401,12 +386,12 @@ def tek_coin_backtest(symbol, gun_sayisi=365):
             "toplam": round((equity[-1] - 1) * 100, 2) if len(equity) else 0
         }
     except Exception as e:
-        return {"symbol": symbol, "islem": -1, "hata": str(e)}
+        return {"symbol": symbol, "islem": -1, "hata": str(e)[:40]}
 
 # ==================== FLASK ====================
 @app.route('/')
 def home():
-    return f"Bot Aktif | Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
+    return f"Bot Aktif | Strateji: Mean Reversion | Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
 
 # ==================== TELEGRAM ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -438,7 +423,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             detay = "\n📋 *Aktif Pozisyon Yok*\n"
 
         mesaj = (
-            f"🎯 *GÜVENLİ İŞLEM BOTU*\n\n"
+            f"🎯 *MEAN REVERSION BOT*\n\n"
             f"💰 Toplam: `{total:.2f}` USDT (Serbest: `{free:.2f}`)\n"
             f"{ikon} PnL: `{pnl:+.2f}` USDT (`%{pnl_pct:+.2f}`)\n"
             f"📌 Pozisyon: `{len(poslari)}/{MAKSIMUM_TOPLAM_POZISYON}`\n"
@@ -486,20 +471,20 @@ async def backtest_komutu(update, context):
         return
     BACKTEST_CALISIYOR = True
     await update.message.reply_text(
-        "⏳ *Backtest başlatıldı...*\nSon 365 gün taranıyor. 3-5 dakika sürebilir. Sonuç gelince atacağım.",
+        "⏳ *Mean Reversion Backtest başlatıldı...*\nSon 365 gün / 1h mum taranıyor. 3-5 dakika sürebilir.",
         parse_mode='Markdown'
     )
 
     def run():
         global BACKTEST_CALISIYOR
         try:
-            satirlar = ["*📊 BACKTEST SONUÇLARI* (Son 365 gün)\n", "```"]
+            satirlar = ["*📊 MEAN REVERSION BACKTEST* (1h, 365 gün)\n", "```"]
             satirlar.append(f"{'COIN':<16} {'İŞL':>4} {'WIN%':>6} {'PF':>6} {'EV%':>7} {'DD%':>6} {'TOT%':>7}")
             satirlar.append("-" * 60)
             for c in TAKIP_EDILENLER:
                 r = tek_coin_backtest(c, gun_sayisi=365)
                 if r.get('islem', -1) == -1:
-                    satirlar.append(f"{c[:14]:<16} HATA: {r.get('hata','?')[:20]}")
+                    satirlar.append(f"{c[:14]:<16} HATA: {r.get('hata','?')[:30]}")
                 else:
                     satirlar.append(
                         f"{c[:14]:<16} {r['islem']:>4} {r['win_rate']:>6} {r['pf']:>6} {r['ev']:>7} {r['max_dd']:>6} {r['toplam']:>7}"
@@ -508,7 +493,7 @@ async def backtest_komutu(update, context):
             satirlar.append("\n*Yorumlama:*")
             satirlar.append("• PF > 1.3 ✅ | PF < 1.1 ❌")
             satirlar.append("• EV% > 0 ✅ | EV% < 0 ❌")
-            satirlar.append("• İŞL > 30 → güvenilir sonuç")
+            satirlar.append("• İŞL > 30 → güvenilir")
 
             metin = "\n".join(satirlar)
             if len(metin) > 4000:
@@ -526,8 +511,8 @@ async def backtest_komutu(update, context):
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALITIK_HAFIZA
-    print("🎯 [GÜVENLİ MOD] Optimize edilmiş parametrelerle başlatıldı.", flush=True)
-    print(f"📊 R/R: 1:{RISK_REWARD} | ATR_STOP_MULT: {ATR_STOP_MULT} | ADX eşik: {ADX_ESIK}", flush=True)
+    print("🎯 [MEAN REVERSION MODU] Bollinger + RSI stratejisi aktif.", flush=True)
+    print(f"📊 Zaman: {ZAMAN_DILIMI} | R/R: 1:{RISK_REWARD} | RSI LONG<{RSI_LONG_ESIK} SHORT>{RSI_SHORT_ESIK}", flush=True)
     try:
         exchange.load_markets()
     except Exception:
@@ -579,7 +564,6 @@ def otomatik_arkaplan_tarayici():
                         telegram_mesaj_gonder(f"❌ *Stop* → `{sym}` 🔴")
                     hafizayi_kaydet()
 
-            btc_trend = btc_trend_al()
             su_an = time.time()
             sinyaller = []
             mevcut_sektorler = aktif_sektorler()
@@ -601,18 +585,13 @@ def otomatik_arkaplan_tarayici():
                     continue
 
                 try:
-                    o15 = exchange.fetch_ohlcv(symbol, '15m', limit=120)
-                    o1h = exchange.fetch_ohlcv(symbol, '1h', limit=60)
-                    o4h = exchange.fetch_ohlcv(symbol, '4h', limit=120)
-                    df15 = pd.DataFrame(o15, columns=['timestamp','open','high','low','close','volume'])
-                    df1h = pd.DataFrame(o1h, columns=['timestamp','open','high','low','close','volume'])
-                    df4h = pd.DataFrame(o4h, columns=['timestamp','open','high','low','close','volume'])
+                    ohlcv = exchange.fetch_ohlcv(symbol, ZAMAN_DILIMI, limit=120)
+                    df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
 
-                    g = hesapla_gostergeler(df15, df1h, df4h)
-                    sig, neden = sinyal_uret(g, btc_trend)
+                    sig, neden = sinyal_uret_mean_reversion(df)
                     if sig:
                         sinyaller.append({"symbol": symbol, **sig})
-                        debug_mesaj.append(f"{symbol.split('/')[0]}: ✅ SİNYAL {sig['yon']}")
+                        debug_mesaj.append(f"{symbol.split('/')[0]}: ✅ {sig['yon']} (RSI:{sig['rsi']:.1f})")
                     else:
                         debug_mesaj.append(f"{symbol.split('/')[0]}: {neden}")
                 except Exception:
@@ -621,8 +600,8 @@ def otomatik_arkaplan_tarayici():
 
             dongu_sayaci += 1
             if dongu_sayaci % 40 == 0:
-                ozet = " | ".join(debug_mesaj[:7])
-                print(f"🔍 Tarama #{dongu_sayaci} | BTC: {btc_trend} | {ozet}", flush=True)
+                ozet = " | ".join(debug_mesaj[:10])
+                print(f"🔍 Tarama #{dongu_sayaci} | {ozet}", flush=True)
 
             # İşlem açma
             for s in sinyaller:
@@ -712,11 +691,12 @@ def otomatik_arkaplan_tarayici():
 
                     print(f"🎯 İŞLEM: {symbol} | {yon} | Miktar: {miktar} | TP: {tp} | SL: {stop}", flush=True)
                     telegram_mesaj_gonder(
-                        f"🎯 *İŞLEM AÇILDI*\n"
+                        f"🎯 *İŞLEM AÇILDI* (Mean Reversion)\n"
                         f"📌 `{symbol}` | *{yon}*\n"
                         f"💰 Giriş: `{giris}`\n"
                         f"🎯 TP: `{tp}` | 🛑 SL: `{stop}`\n"
-                        f"📊 Miktar: `{miktar}` | Risk: `{risk_usdt:.2f} USDT`"
+                        f"📊 Miktar: `{miktar}` | Risk: `{risk_usdt:.2f} USDT`\n"
+                        f"📈 RSI: `{s['rsi']:.1f}`"
                     )
                     break
                 except Exception as e:
@@ -724,7 +704,7 @@ def otomatik_arkaplan_tarayici():
 
         except Exception as e:
             print(f"⚠️ Döngü hatası: {e}", flush=True)
-        time.sleep(15)
+        time.sleep(20)  # 1h mum için 20 sn yeter
 
 def flask_web_server():
     port = int(os.environ.get("PORT", 5000))
@@ -742,4 +722,4 @@ if __name__ == '__main__':
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     app_tg.add_handler(CommandHandler("backtest", backtest_komutu))
 
-    app_tg.run_polling()
+    app_tg.run_polling(drop_pending_updates=True)
