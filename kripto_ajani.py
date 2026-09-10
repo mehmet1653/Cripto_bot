@@ -235,7 +235,7 @@ def otomatik_arkaplan_tarayici():
                 borsa_poslari = {}
 
             # --- 1. AÇIK POZİSYONLARI TAKİP ET (Kar Al / Zarar Kes Kontrolü) ---
-            for sym in list(AKTIF_POZISYONLAR.items()[0] if False else list(AKTIF_POZISYONLAR.keys())):
+            for sym in list(AKTIF_POZISYONLAR.keys()):
                 pos_info = AKTIF_POZISYONLAR[sym]
                 try:
                     guncel_fiyat = exchange.fetch_ticker(sym)['last']
@@ -252,8 +252,8 @@ def otomatik_arkaplan_tarayici():
 
                     # Hedefe ulaşıldı mı?
                     if degisim >= KAR_HEDEF_YUZDESI or degisim <= -ZARAR_KES_YUZDESI:
-                        basarili mi = degisim >= KAR_HEDEF_YUZDESI
-                        print(f"🏁 [POZİSYON KAPANIŞI] {sym} kapatılıyor. Sonuç: {'BAŞARILI 🎉' + str(degisim) if basarili else 'ZARAR ❌'}", flush=True)
+                        basarili_mi = degisim >= KAR_HEDEF_YUZDESI
+                        print(f"🏁 [POZİSYON KAPANIŞI] {sym} kapatılıyor. Sonuç: {'BAŞARILI 🎉 ' + str(degisim) if basarili_mi else 'ZARAR ❌'}", flush=True)
                         
                         if sym in borsa_poslari:
                             pos = borsa_poslari[sym]
@@ -262,9 +262,9 @@ def otomatik_arkaplan_tarayici():
 
                         # Hafızaya ve eğitime işle
                         features = pos_info["features"]
-                        hedef_sinif = 1 if basarili else 0
+                        hedef_sinif = 1 if basarili_mi else 0
                         ANALITIK_HAFIZA["egitim_verileri"].append(features + [hedef_sinif])
-                        if basarili:
+                        if basarili_mi:
                             ANALITIK_HAFIZA["basarili_islem"] += 1
                         else:
                             ANALITIK_HAFIZA["basarisiz_islem"] += 1
@@ -272,7 +272,7 @@ def otomatik_arkaplan_tarayici():
                         AKTIF_POZISYONLAR.pop(sym)
                         hafizayi_kaydet()
                         yapay_zekayi_egit()
-                        telegram_mesaj_gonder(f"📊 *Pozisyon Kapandı* -> `{sym}` ({yon})\nSonuç: `{'Kârda 🟢' if basarili else 'Zararda 🔴'}` | Oran: `%{degisim*100:.2f}`")
+                        telegram_mesaj_gonder(f"📊 *Pozisyon Kapandı* -> `{sym}` ({yon})\nSonuç: `{'Kârda 🟢' if basarili_mi else 'Zararda 🔴'}` | Oran: `%{degisim*100:.2f}`")
 
                 except Exception as e:
                     print(f"⚠️ [POZİSYON TAKİP HATA] ({sym}): {e}", flush=True)
