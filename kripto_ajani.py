@@ -211,6 +211,11 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             borsa_poslari = []
 
         toplam_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in borsa_poslari)
+        
+        # Anlık PnL yüzdesini hesapla (Toplam kasaya oranla veya marjine oranla)
+        baslangic_kasa = total - toplam_pnl
+        pnl_yuzde = (toplam_pnl / baslangic_kasa * 100) if baslangic_kasa > 0 else 0.0
+
         pnl_ikon = "🟢" if toplam_pnl >= 0 else "🔴"
         
         basarili_sayisi = ANALitik_HAFIZA.get("basarili_islem_sayisi", 0)
@@ -221,7 +226,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mesaj = (
             f"🎯 *15X PUANLI İŞLEM BOTU*\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT` (Serbest: `{free:.2f} USDT`)\n"
-            f"{pnl_ikon} Anlık Kâr/Zarar: `{toplam_pnl:+.2f} USDT`\n"
+            f"{pnl_ikon} Anlık Kâr/Zarar: `{toplam_pnl:+.2f} USDT` (`%{pnl_yuzde:+.2f}`)\n"
             f"📌 Açık Pozisyon Sayısı: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n"
             f"✅ Kâr (`TP`): `{basarili_sayisi}` | ❌ Zarar (`Stop`): `{basarisiz_sayisi}`\n"
             f"📈 Başarı Oranı: `%{basari_orani:.1f}`\n"
