@@ -631,7 +631,7 @@ def cross_validate_kurgu(df, kurgu, cv_train=0.50, cv_val=0.25, cv_test=0.25):
         if r_train['islem'] < min_i or r_val['islem'] < 1 or r_test['islem'] < 1:
             return None
 
-min_pf = ASAMALAR['3']['min_pf']
+        min_pf = ASAMALAR['3']['min_pf']
         if r_train['pf'] < min_pf:  # Sadece Train'de PF kontrolü
             return None
 # Val ve Test'te PF kontrolü YOK — sadece işlem olsun
