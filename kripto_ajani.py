@@ -35,7 +35,7 @@ exchange = ccxt.gate({
 exchange.set_sandbox_mode(True)
 
 TAKIP_EDILENLER = [
-    'SOL/USDT:USDT', 'XRP/USDT:USDT', 'BNB/USDT:USDT', 'DOGE/USDT:USDT'
+    'SOL/USDT:USDT', 'XRP/USDT:USDT', 'BNB/USDT:USDT', 'ADA/USDT:USDT'
 ]
 
 KOMISYON_ORANI = 0.001
