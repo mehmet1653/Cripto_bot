@@ -39,46 +39,30 @@ TAKIP_EDILENLER = [
     'ADA/USDT:USDT', 'DOGE/USDT:USDT', 'AVAX/USDT:USDT'
 ]
 
-SEKTOR_MAP = {
-    'ETH/USDT:USDT': 'ETH',
-    'SOL/USDT:USDT': 'L1', 'ADA/USDT:USDT': 'L1', 'AVAX/USDT:USDT': 'L1',
-    'XRP/USDT:USDT': 'PAYMENT',
-    'DOGE/USDT:USDT': 'MEME'
-}
-
 KOMISYON_ORANI = 0.001
 
 # ==================== MOD TANIMLARI ====================
 MODLAR = {
-    "muhafazakar": {
-        "aciklama": "🟢 Muhafazakar - Az işlem, düşük risk",
-        "zaman_dilimi": "1h",
-        "bollinger_period": 20, "bollinger_std": 2.0,
-        "rsi_period": 14, "rsi_long": 32, "rsi_short": 68,
-        "atr_stop_mult": 2.0, "risk_reward": 2.0, "hacim_esik": 1.0,
-        "islem_riski_pct": 0.01, "kaldirac": 5, "maks_pozisyon": 3,
-        "cooldown_dk": 15, "gunluk_max_kayip_pct": 0.03,
-        "min_stop_pct": 0.008, "max_stop_pct": 0.030,
-    },
-    "agresif100": {
-        "aciklama": "🔥 Agresif100 - Hybrid stop, R/R 1:2, 10x",
-        "zaman_dilimi": "1h",
-        "bollinger_period": 20, "bollinger_std": 1.7,
-        "rsi_period": 14, "rsi_long": 38, "rsi_short": 62,
-        "atr_stop_mult": 1.5, "risk_reward": 2.0, "hacim_esik": 0.6,
-        "islem_riski_pct": 0.03, "kaldirac": 10, "maks_pozisyon": 3,
-        "cooldown_dk": 10, "gunluk_max_kayip_pct": 0.10,
-        "min_stop_pct": 0.008, "max_stop_pct": 0.025,
-    },
-    "temiz_hybrid": {
-        "aciklama": "⚡ Temiz Hybrid - ATR bazlı, min/max sınırlı, R/R 1:2",
-        "zaman_dilimi": "1h",
-        "bollinger_period": 20, "bollinger_std": 1.7,
-        "rsi_period": 14, "rsi_long": 38, "rsi_short": 62,
-        "atr_stop_mult": 1.5, "risk_reward": 2.0, "hacim_esik": 0.6,
-        "islem_riski_pct": 0.03, "kaldirac": 10, "maks_pozisyon": 3,
-        "cooldown_dk": 10, "gunluk_max_kayip_pct": 0.10,
-        "min_stop_pct": 0.008, "max_stop_pct": 0.025,
+    "puanli": {
+        "aciklama": "🎯 Puanlı Sistem - 5 faktör, 1h+15m, optimize edilebilir",
+        "zaman_ana": "1h",
+        "zaman_sinyal": "15m",
+        "puan_esigi": 75,
+        "puan_trend": 20,
+        "puan_rsi": 15,
+        "puan_adx": 15,
+        "puan_derinlik": 10,
+        "rsi_min": 40, "rsi_max": 60,
+        "adx_esik": 25,
+        "tp_sabit_pct": 0.015,
+        "atr_stop_mult": 1.5,
+        "islem_riski_pct": 0.03,
+        "kaldirac": 10,
+        "maks_pozisyon": 3,
+        "cooldown_dk": 10,
+        "gunluk_max_kayip_pct": 0.10,
+        "min_stop_pct": 0.008,
+        "max_stop_pct": 0.035,
     },
 }
 
@@ -87,13 +71,14 @@ GUN_BASI_KASA = None
 GUN_BASI_TARIH = None
 BACKTEST_CALISIYOR = False
 OPTIMIZE_CALISIYOR = False
+AKTIF_MOD = "puanli"
 
 # ==================== SUPABASE ====================
 def hafizayi_yukle():
     varsayilan = {
         "aktif_sistemler": {},
         "analitik": {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0},
-        "cooldownlar": {}, "coin_params": {}, "aktif_mod": "temiz_hybrid"
+        "cooldownlar": {}, "coin_params": {}, "aktif_mod": "puanli"
     }
     try:
         r = supabase.table("bot_hafiza").select("*").eq("id", 1).execute()
@@ -104,7 +89,7 @@ def hafizayi_yukle():
                 "analitik": v.get("analitik", varsayilan["analitik"]),
                 "cooldownlar": v.get("cooldownlar", {}),
                 "coin_params": v.get("coin_params", {}),
-                "aktif_mod": v.get("aktif_mod", "temiz_hybrid")
+                "aktif_mod": v.get("aktif_mod", "puanli")
             }
     except Exception:
         pass
@@ -132,24 +117,15 @@ AKTIF_GRID_SISTEMLERI = kalici["aktif_sistemler"]
 ANALITIK_HAFIZA = kalici["analitik"]
 COIN_COOLDOWNLAR = kalici["cooldownlar"]
 COIN_PARAMS = {k: v for k, v in kalici.get("coin_params", {}).items() if k in TAKIP_EDILENLER}
-AKTIF_MOD = kalici.get("aktif_mod", "temiz_hybrid")
+AKTIF_MOD = kalici.get("aktif_mod", "puanli")
 
 def mod_al():
-    return MODLAR.get(AKTIF_MOD, MODLAR["temiz_hybrid"])
+    return MODLAR.get(AKTIF_MOD, MODLAR["puanli"])
 
 def coin_parametre_al(symbol):
     base = dict(mod_al())
     if symbol in COIN_PARAMS:
-        ov = COIN_PARAMS[symbol]
-        base["bollinger_std"] = ov.get("bollinger_std", base["bollinger_std"])
-        base["rsi_long"] = ov.get("rsi_long", base["rsi_long"])
-        base["rsi_short"] = ov.get("rsi_short", base["rsi_short"])
-        base["atr_stop_mult"] = ov.get("atr_stop_mult", base["atr_stop_mult"])
-        base["risk_reward"] = ov.get("risk_reward", base["risk_reward"])
-        if "min_stop_pct" in ov:
-            base["min_stop_pct"] = ov["min_stop_pct"]
-        if "max_stop_pct" in ov:
-            base["max_stop_pct"] = ov["max_stop_pct"]
+        base.update(COIN_PARAMS[symbol])
     return base
 
 # ==================== YARDIMCI ====================
@@ -183,9 +159,6 @@ def set_leverage_and_margin_safely(symbol, leverage):
     except Exception:
         return False
 
-def aktif_sektorler():
-    return set(SEKTOR_MAP.get(s, 'DIGER') for s in AKTIF_GRID_SISTEMLERI.keys())
-
 def gunluk_kayip_kontrol(mod):
     global GUN_BASI_KASA, GUN_BASI_TARIH
     bugun = datetime.now(timezone.utc).date()
@@ -214,10 +187,8 @@ def rsi_hesapla(close, period=14):
     rs = gain / loss.replace(0, np.nan)
     return 100 - (100 / (1 + rs))
 
-def bollinger_hesapla(close, period=20, std_mult=2.0):
-    sma = close.rolling(period).mean()
-    std = close.rolling(period).std()
-    return sma, sma + (std * std_mult), sma - (std * std_mult)
+def ema_hesapla(close, period):
+    return close.ewm(span=period, adjust=False).mean()
 
 def atr_hesapla(df, period=14):
     tr = pd.concat([
@@ -227,119 +198,209 @@ def atr_hesapla(df, period=14):
     ], axis=1).max(axis=1)
     return tr.rolling(period).mean()
 
-def hacim_onay(df, period=20, esik=1.0):
+def adx_hesapla(df, period=14):
     try:
-        ort = df['volume'].rolling(period).mean().iloc[-1]
-        return bool(df['volume'].iloc[-1] > ort * esik)
+        up = df['high'].diff()
+        down = -df['low'].diff()
+        plus_dm = np.where((up > down) & (up > 0), up, 0.0)
+        minus_dm = np.where((down > up) & (down > 0), down, 0.0)
+        tr = pd.concat([
+            df['high'] - df['low'],
+            (df['high'] - df['close'].shift()).abs(),
+            (df['low'] - df['close'].shift()).abs()
+        ], axis=1).max(axis=1)
+        atr14 = tr.rolling(period).mean()
+        plus_di = 100 * pd.Series(plus_dm, index=df.index).rolling(period).mean() / atr14
+        minus_di = 100 * pd.Series(minus_dm, index=df.index).rolling(period).mean() / atr14
+        dx = (abs(plus_di - minus_di) / (plus_di + minus_di).replace(0, np.nan)) * 100
+        val = dx.rolling(period).mean().iloc[-1]
+        return float(val) if not pd.isna(val) else 0.0
     except Exception:
-        return False
+        return 0.0
 
-# ==================== HYBRID STOP FORMÜLÜ ====================
-def hybrid_stop_tp_hesapla(fiyat, atr, params):
+def atr_yuzdesi(df, period=14):
+    try:
+        atr = atr_hesapla(df, period).iloc[-1]
+        fiyat = df['close'].iloc[-1]
+        return float((atr / fiyat) * 100)
+    except Exception:
+        return 1.5
+
+# ==================== EMİR DEFTERİ ====================
+def emir_defteri_derinlik_analizi(symbol):
+    try:
+        order_book = exchange.fetch_order_book(symbol, limit=20)
+        bids = order_book.get('bids', [])
+        asks = order_book.get('asks', [])
+        toplam_bid = sum(b[1] for b in bids)
+        toplam_ask = sum(a[1] for a in asks)
+        if toplam_bid + toplam_ask == 0:
+            return "DENGELI"
+        bid_orani = toplam_bid / (toplam_bid + toplam_ask)
+        if bid_orani > 0.55:
+            return "ALICI_BASKIN"
+        elif bid_orani < 0.45:
+            return "SATICI_BASKIN"
+        return "DENGELI"
+    except Exception:
+        return "DENGELI"
+
+# ==================== PUANLI SİNYAL ====================
+def sinyal_uret_puanli(df_15m, df_1h, symbol, mod):
     """
-    Formül E (Hybrid):
-    - Stop: ATR × mult, ama min/max sınırlı
-    - TP: Stop × R/R
+    Puanlı sinyal — mod'a göre parametreler.
     """
-    atr_pct = (atr / fiyat) * 100
+    if len(df_15m) < 50 or len(df_1h) < 30:
+        return None, "veri yetersiz", 0
 
-    # ATR bazlı stop (yüzde olarak)
-    ham_stop_pct = (atr_pct * params['atr_stop_mult']) / 100.0
+    # 1h TREND
+    ema7 = ema_hesapla(df_1h['close'], 7).iloc[-1]
+    ema21 = ema_hesapla(df_1h['close'], 21).iloc[-1]
+    trend_boga = ema7 > ema21
+    grid_yonu = "LONG" if trend_boga else "SHORT"
 
-    # Min/max sınırla
-    stop_pct = max(params['min_stop_pct'], min(params['max_stop_pct'], ham_stop_pct))
+    # 15m RSI
+    rsi = rsi_hesapla(df_15m['close'], 14).iloc[-1]
+    if pd.isna(rsi):
+        return None, "RSI NaN", 0
 
-    # TP = Stop × R/R
-    tp_pct = stop_pct * params['risk_reward']
+    # 15m ADX
+    adx_val = adx_hesapla(df_15m, 14)
 
-    # Komisyon ekle
-    tp_pct += KOMISYON_ORANI
-
-    return stop_pct, tp_pct
-
-# ==================== SİNYAL ====================
-def sinyal_uret(df, params):
-    if len(df) < 50:
-        return None, "veri yetersiz"
-    close = df['close']; open_ = df['open']; high = df['high']; low = df['low']
-    sma, ust, alt = bollinger_hesapla(close, params['bollinger_period'], params['bollinger_std'])
-    rsi = rsi_hesapla(close, params['rsi_period'])
-    atr = atr_hesapla(df, 14)
-    son_fiyat = close.iloc[-1]; son_open = open_.iloc[-1]
-    son_ust = ust.iloc[-1]; son_alt = alt.iloc[-1]
-    son_rsi = rsi.iloc[-1]; son_atr = atr.iloc[-1]
-    if pd.isna(son_ust) or pd.isna(son_alt) or pd.isna(son_rsi) or pd.isna(son_atr) or son_atr == 0:
-        return None, "gösterge NaN"
-    atr_pct = (son_atr / son_fiyat) * 100
+    # ATR
+    atr_pct = atr_yuzdesi(df_15m, 14)
     if not (0.3 <= atr_pct <= 5.0):
-        return None, f"ATR %{atr_pct:.2f} dışı"
-    if not hacim_onay(df, 20, params['hacim_esik']):
-        return None, "hacim yok"
+        return None, f"ATR %{atr_pct:.2f} dışı", 0
 
-    # LONG
-    if son_fiyat <= son_alt and son_rsi < params['rsi_long'] and son_fiyat > son_open:
-        stop_pct, tp_pct = hybrid_stop_tp_hesapla(son_fiyat, son_atr, params)
+    # Emir defteri
+    derinlik = emir_defteri_derinlik_analizi(symbol)
+
+    # ============ PUANLAMA ============
+    puan = 50
+    puan += mod['puan_trend']
+
+    if mod['rsi_min'] <= rsi <= mod['rsi_max']:
+        puan += mod['puan_rsi']
+
+    if adx_val > mod['adx_esik']:
+        puan += mod['puan_adx']
+
+    if derinlik == "ALICI_BASKIN" and grid_yonu == "LONG":
+        puan += mod['puan_derinlik']
+    elif derinlik == "SATICI_BASKIN" and grid_yonu == "SHORT":
+        puan += mod['puan_derinlik']
+
+    if puan < mod['puan_esigi']:
+        return None, f"puan {puan}<{mod['puan_esigi']}", puan
+
+    # ============ STOP / TP ============
+    son_fiyat = df_15m['close'].iloc[-1]
+    stop_pct = (atr_pct * mod['atr_stop_mult']) / 100.0
+    stop_pct = max(mod['min_stop_pct'], min(mod['max_stop_pct'], stop_pct))
+    tp_pct = mod['tp_sabit_pct'] + KOMISYON_ORANI
+
+    if grid_yonu == "LONG":
         stop = son_fiyat * (1 - stop_pct)
         tp = son_fiyat * (1 + tp_pct)
-        return {"yon": "LONG", "giris": float(son_fiyat), "stop": float(stop), "tp": float(tp),
-                "stop_pct": stop_pct, "tp_pct": tp_pct, "rsi": float(son_rsi),
-                "atr": float(son_atr), "atr_pct": atr_pct}, "OK"
-
-    # SHORT
-    if son_fiyat >= son_ust and son_rsi > params['rsi_short'] and son_fiyat < son_open:
-        stop_pct, tp_pct = hybrid_stop_tp_hesapla(son_fiyat, son_atr, params)
+    else:
         stop = son_fiyat * (1 + stop_pct)
         tp = son_fiyat * (1 - tp_pct)
-        return {"yon": "SHORT", "giris": float(son_fiyat), "stop": float(stop), "tp": float(tp),
-                "stop_pct": stop_pct, "tp_pct": tp_pct, "rsi": float(son_rsi),
-                "atr": float(son_atr), "atr_pct": atr_pct}, "OK"
 
-    if son_fiyat > son_alt and son_fiyat < son_ust:
-        return None, "fiyat bantlar arasında"
-    if params['rsi_long'] <= son_rsi <= params['rsi_short']:
-        return None, f"RSI {son_rsi:.1f} nötr"
-    return None, "koşullar uygun değil"
+    return {
+        "yon": grid_yonu, "giris": float(son_fiyat),
+        "stop": float(stop), "tp": float(tp),
+        "stop_pct": stop_pct, "tp_pct": tp_pct,
+        "rsi": float(rsi), "atr_pct": atr_pct,
+        "adx": adx_val, "derinlik": derinlik, "puan": puan
+    }, f"OK (puan {puan})", puan
 
 # ==================== BACKTEST ====================
-def backtest_coin_params(symbol, params, gun_sayisi=365):
-    """Saf Mean Reversion — sabit TP/SL, trailing yok, kısmi TP yok."""
+def backtest_puanli(symbol, params, gun_sayisi=365):
+    """Puanlı sistem backtest — verilen parametrelerle."""
     try:
-        limit = min(gun_sayisi * 24, 1000) if params['zaman_dilimi'] == '1h' else 1000
-        ohlcv = exchange.fetch_ohlcv(symbol, params['zaman_dilimi'], limit=limit)
-        df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
-        if len(df) < 100:
+        limit_1h = min(gun_sayisi * 24, 1000)
+        ohlcv_1h = exchange.fetch_ohlcv(symbol, params['zaman_ana'], limit=limit_1h)
+        ohlcv_15m = exchange.fetch_ohlcv(symbol, params['zaman_sinyal'], limit=1000)
+        df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp','open','high','low','close','volume'])
+        df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp','open','high','low','close','volume'])
+
+        if len(df_1h) < 50 or len(df_15m) < 100:
             return None
+
         trades = []
         pozisyon = None
-        for i in range(50, len(df)):
-            bar = df.iloc[i]
+
+        for i in range(50, len(df_15m)):
+            ts = df_15m['timestamp'].iloc[i]
+            df_1h_slice = df_1h[df_1h['timestamp'] <= ts]
+            if len(df_1h_slice) < 30:
+                continue
+
             if pozisyon is not None:
-                high = bar['high']; low = bar['low']
+                high = df_15m['high'].iloc[i]
+                low = df_15m['low'].iloc[i]
                 if pozisyon['yon'] == 'LONG':
                     if low <= pozisyon['stop']:
-                        trades.append({**pozisyon, 'cikis': pozisyon['stop']})
-                        pozisyon = None
+                        trades.append({**pozisyon, 'cikis': pozisyon['stop']}); pozisyon = None
                     elif high >= pozisyon['tp']:
-                        trades.append({**pozisyon, 'cikis': pozisyon['tp']})
-                        pozisyon = None
+                        trades.append({**pozisyon, 'cikis': pozisyon['tp']}); pozisyon = None
                 else:
                     if high >= pozisyon['stop']:
-                        trades.append({**pozisyon, 'cikis': pozisyon['stop']})
-                        pozisyon = None
+                        trades.append({**pozisyon, 'cikis': pozisyon['stop']}); pozisyon = None
                     elif low <= pozisyon['tp']:
-                        trades.append({**pozisyon, 'cikis': pozisyon['tp']})
-                        pozisyon = None
+                        trades.append({**pozisyon, 'cikis': pozisyon['tp']}); pozisyon = None
                 continue
-            df_slice = df.iloc[max(0, i-100):i+1].reset_index(drop=True)
-            try:
-                sig, _ = sinyal_uret(df_slice, params)
-            except Exception:
+
+            # Yeni sinyal
+            df_15m_slice = df_15m.iloc[max(0, i-100):i+1].reset_index(drop=True)
+            df_1h_slice_r = df_1h_slice.reset_index(drop=True)
+
+            if len(df_1h_slice_r) < 30:
                 continue
-            if sig:
-                pozisyon = {**sig}
+
+            ema7 = ema_hesapla(df_1h_slice_r['close'], 7).iloc[-1]
+            ema21 = ema_hesapla(df_1h_slice_r['close'], 21).iloc[-1]
+            trend_boga = ema7 > ema21
+            grid_yonu = "LONG" if trend_boga else "SHORT"
+
+            rsi = rsi_hesapla(df_15m_slice['close'], 14).iloc[-1]
+            if pd.isna(rsi):
+                continue
+            adx_val = adx_hesapla(df_15m_slice, 14)
+            atr_pct = atr_yuzdesi(df_15m_slice, 14)
+            if not (0.3 <= atr_pct <= 5.0):
+                continue
+
+            # Puanlama (backtest'te derinlik yok)
+            puan = 50 + params['puan_trend']
+            if params['rsi_min'] <= rsi <= params['rsi_max']:
+                puan += params['puan_rsi']
+            if adx_val > params['adx_esik']:
+                puan += params['puan_adx']
+            # Derinlik puanı atlandı
+
+            if puan < params['puan_esigi']:
+                continue
+
+            son_fiyat = df_15m_slice['close'].iloc[-1]
+            stop_pct = max(params['min_stop_pct'],
+                          min(params['max_stop_pct'],
+                              (atr_pct * params['atr_stop_mult']) / 100.0))
+            tp_pct = params['tp_sabit_pct'] + KOMISYON_ORANI
+
+            if grid_yonu == "LONG":
+                stop = son_fiyat * (1 - stop_pct); tp = son_fiyat * (1 + tp_pct)
+            else:
+                stop = son_fiyat * (1 + stop_pct); tp = son_fiyat * (1 - tp_pct)
+
+            pozisyon = {
+                "yon": grid_yonu, "giris": float(son_fiyat),
+                "stop": float(stop), "tp": float(tp),
+                "stop_pct": stop_pct, "tp_pct": tp_pct, "puan": puan
+            }
 
         if not trades:
-            return {"symbol": symbol, "islem": 0, "win_rate": 0, "pf": 0, "ev": 0, "max_dd": 0, "toplam": 0}
+            return {"symbol": symbol, "islem": 0, "win_rate": 0, "pf": 0, "max_dd": 0, "toplam": 0}
         kazanclar = []
         for t in trades:
             if t['yon'] == 'LONG':
@@ -357,20 +418,27 @@ def backtest_coin_params(symbol, params, gun_sayisi=365):
         dd = (equity - peak) / peak
         max_dd = dd.min() * 100 if len(dd) else 0
         return {"symbol": symbol, "islem": len(trades), "win_rate": round(win, 2),
-                "pf": round(pf, 3) if pf != 999 else 999, "ev": round(k.mean() * 100, 4),
-                "max_dd": round(max_dd, 2), "toplam": round((equity[-1] - 1) * 100, 2) if len(equity) else 0}
+                "pf": round(pf, 3) if pf != 999 else 999,
+                "max_dd": round(max_dd, 2),
+                "toplam": round((equity[-1] - 1) * 100, 2) if len(equity) else 0}
     except Exception as e:
         return {"symbol": symbol, "islem": -1, "hata": str(e)[:40]}
 
-# ==================== OPTİMİZASYON ====================
-def backtest_with_data(symbol, df, params):
+# ==================== BACKTEST WITH DATA (Optimize için) ====================
+def backtest_with_data(df_15m, df_1h, params):
+    """Optimize için: veriyi önceden çek, hızlı test."""
     try:
         trades = []
         pozisyon = None
-        for i in range(50, len(df)):
-            bar = df.iloc[i]
+        for i in range(50, len(df_15m)):
+            ts = df_15m['timestamp'].iloc[i]
+            df_1h_slice = df_1h[df_1h['timestamp'] <= ts]
+            if len(df_1h_slice) < 30:
+                continue
+
             if pozisyon is not None:
-                high = bar['high']; low = bar['low']
+                high = df_15m['high'].iloc[i]
+                low = df_15m['low'].iloc[i]
                 if pozisyon['yon'] == 'LONG':
                     if low <= pozisyon['stop']:
                         trades.append({**pozisyon, 'cikis': pozisyon['stop']}); pozisyon = None
@@ -382,13 +450,50 @@ def backtest_with_data(symbol, df, params):
                     elif low <= pozisyon['tp']:
                         trades.append({**pozisyon, 'cikis': pozisyon['tp']}); pozisyon = None
                 continue
-            df_slice = df.iloc[max(0, i-100):i+1].reset_index(drop=True)
-            try:
-                sig, _ = sinyal_uret(df_slice, params)
-            except Exception:
+
+            df_15m_slice = df_15m.iloc[max(0, i-100):i+1].reset_index(drop=True)
+            df_1h_slice_r = df_1h_slice.reset_index(drop=True)
+            if len(df_1h_slice_r) < 30:
                 continue
-            if sig:
-                pozisyon = {**sig}
+
+            ema7 = ema_hesapla(df_1h_slice_r['close'], 7).iloc[-1]
+            ema21 = ema_hesapla(df_1h_slice_r['close'], 21).iloc[-1]
+            trend_boga = ema7 > ema21
+            grid_yonu = "LONG" if trend_boga else "SHORT"
+
+            rsi = rsi_hesapla(df_15m_slice['close'], 14).iloc[-1]
+            if pd.isna(rsi):
+                continue
+            adx_val = adx_hesapla(df_15m_slice, 14)
+            atr_pct = atr_yuzdesi(df_15m_slice, 14)
+            if not (0.3 <= atr_pct <= 5.0):
+                continue
+
+            puan = 50 + params['puan_trend']
+            if params['rsi_min'] <= rsi <= params['rsi_max']:
+                puan += params['puan_rsi']
+            if adx_val > params['adx_esik']:
+                puan += params['puan_adx']
+            if puan < params['puan_esigi']:
+                continue
+
+            son_fiyat = df_15m_slice['close'].iloc[-1]
+            stop_pct = max(params['min_stop_pct'],
+                          min(params['max_stop_pct'],
+                              (atr_pct * params['atr_stop_mult']) / 100.0))
+            tp_pct = params['tp_sabit_pct'] + KOMISYON_ORANI
+
+            if grid_yonu == "LONG":
+                stop = son_fiyat * (1 - stop_pct); tp = son_fiyat * (1 + tp_pct)
+            else:
+                stop = son_fiyat * (1 + stop_pct); tp = son_fiyat * (1 - tp_pct)
+
+            pozisyon = {
+                "yon": grid_yonu, "giris": float(son_fiyat),
+                "stop": float(stop), "tp": float(tp),
+                "stop_pct": stop_pct, "tp_pct": tp_pct
+            }
+
         if not trades:
             return None
         kazanclar = []
@@ -408,53 +513,77 @@ def backtest_with_data(symbol, df, params):
         dd = (equity - peak) / peak
         max_dd = dd.min() * 100 if len(dd) else 0
         return {"islem": len(trades), "win_rate": round(win, 2),
-                "pf": round(pf, 3) if pf != 999 else 999, "ev": round(k.mean() * 100, 4),
-                "max_dd": round(max_dd, 2), "toplam": round((equity[-1] - 1) * 100, 2) if len(equity) else 0}
+                "pf": round(pf, 3) if pf != 999 else 999,
+                "max_dd": round(max_dd, 2),
+                "toplam": round((equity[-1] - 1) * 100, 2) if len(equity) else 0}
     except Exception:
         return None
 
-def optimize_coin(symbol, gun_sayisi=365):
+# ==================== OPTİMİZASYON ====================
+def optimize_coin(symbol, gun_sayisi=180):
+    """Puanlı sistem için optimize: eşik, ağırlıklar, TP, ATR."""
     base_mod = mod_al()
-    bstd_list = [1.5, 2.0, 2.5]
-    rl_list = [28, 32, 36, 40, 42]
-    asm_list = [1.2, 1.5, 1.8, 2.0]
-    rr_list = [1.5, 2.0, 2.5, 3.0]
-    limit = min(gun_sayisi * 24, 1000) if base_mod['zaman_dilimi'] == '1h' else 1000
+    limit_1h = min(gun_sayisi * 24, 1000)
     try:
-        ohlcv = exchange.fetch_ohlcv(symbol, base_mod['zaman_dilimi'], limit=limit)
-        df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
+        ohlcv_1h = exchange.fetch_ohlcv(symbol, base_mod['zaman_ana'], limit=limit_1h)
+        ohlcv_15m = exchange.fetch_ohlcv(symbol, base_mod['zaman_sinyal'], limit=1000)
+        df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp','open','high','low','close','volume'])
+        df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp','open','high','low','close','volume'])
     except Exception:
         return None
-    if len(df) < 100:
+
+    if len(df_1h) < 50 or len(df_15m) < 200:
         return None
+
+    # Optimize parametreleri
+    esik_list = [65, 70, 75, 80]
+    tp_list = [0.010, 0.015, 0.020, 0.025]
+    atr_list = [1.2, 1.5, 1.8, 2.0]
+    trend_w_list = [15, 20, 25]
+    rsi_w_list = [10, 15, 20]
+
     en_iyi = None
-    for bstd in bstd_list:
-        for rl in rl_list:
-            for asm in asm_list:
-                for rr in rr_list:
-                    params = dict(base_mod)
-                    params['bollinger_std'] = bstd
-                    params['rsi_long'] = rl
-                    params['rsi_short'] = 100 - rl
-                    params['atr_stop_mult'] = asm
-                    params['risk_reward'] = rr
-                    r = backtest_with_data(symbol, df, params)
-                    if r and r['islem'] >= 5:
-                        if en_iyi is None or r['pf'] > en_iyi['pf']:
-                            en_iyi = {"params": {"bollinger_std": bstd, "rsi_long": rl,
-                                                "rsi_short": 100 - rl, "atr_stop_mult": asm,
-                                                "risk_reward": rr,
-                                                "min_stop_pct": base_mod['min_stop_pct'],
-                                                "max_stop_pct": base_mod['max_stop_pct']},
-                                     "pf": r['pf'], "win_rate": r['win_rate'],
-                                     "toplam": r['toplam'], "ev": r['ev'],
-                                     "max_dd": r['max_dd'], "islem": r['islem']}
+    sayac = 0
+    for esik in esik_list:
+        for tp in tp_list:
+            for atr in atr_list:
+                for tw in trend_w_list:
+                    for rw in rsi_w_list:
+                        sayac += 1
+                        params = dict(base_mod)
+                        params['puan_esigi'] = esik
+                        params['tp_sabit_pct'] = tp
+                        params['atr_stop_mult'] = atr
+                        params['puan_trend'] = tw
+                        params['puan_rsi'] = rw
+                        r = backtest_with_data(df_15m, df_1h, params)
+                        if r and r['islem'] >= 5:
+                            if en_iyi is None or r['pf'] > en_iyi['pf']:
+                                en_iyi = {
+                                    "params": {
+                                        "puan_esigi": esik,
+                                        "tp_sabit_pct": tp,
+                                        "atr_stop_mult": atr,
+                                        "puan_trend": tw,
+                                        "puan_rsi": rw,
+                                        "puan_adx": base_mod['puan_adx'],
+                                        "puan_derinlik": base_mod['puan_derinlik'],
+                                        "rsi_min": base_mod['rsi_min'],
+                                        "rsi_max": base_mod['rsi_max'],
+                                        "adx_esik": base_mod['adx_esik'],
+                                        "min_stop_pct": base_mod['min_stop_pct'],
+                                        "max_stop_pct": base_mod['max_stop_pct'],
+                                    },
+                                    "pf": r['pf'], "win_rate": r['win_rate'],
+                                    "toplam": r['toplam'], "max_dd": r['max_dd'],
+                                    "islem": r['islem']
+                                }
     return en_iyi
 
 # ==================== FLASK ====================
 @app.route('/')
 def home():
-    return f"Bot | Mod: {AKTIF_MOD} | Coin: {len(TAKIP_EDILENLER)} | Poz: {len(AKTIF_GRID_SISTEMLERI)}"
+    return f"Puanlı Bot | Mod: {AKTIF_MOD} | Coin: {len(TAKIP_EDILENLER)} | Poz: {len(AKTIF_GRID_SISTEMLERI)}"
 
 # ==================== TELEGRAM ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -490,8 +619,9 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{ikon} PnL: `{pnl:+.2f}` USDT (`%{pnl_pct:+.2f}`)\n"
             f"📌 Pozisyon: `{len(poslari)}/{mod['maks_pozisyon']}`\n"
             f"🧠 Optimize: `{opt}/{len(TAKIP_EDILENLER)}`\n"
-            f"⚙️ Zaman: `{mod['zaman_dilimi']}` | Kaldıraç: `{mod['kaldirac']}x`\n"
-            f"📐 Stop: `%{mod['min_stop_pct']*100}-{mod['max_stop_pct']*100}` | R/R: `1:{mod['risk_reward']}`\n"
+            f"⚙️ Zaman: `{mod['zaman_ana']}+{mod['zaman_sinyal']}` | Kaldıraç: `{mod['kaldirac']}x`\n"
+            f"🎚️ Puan eşiği: `{mod['puan_esigi']}`\n"
+            f"📐 TP: `%{mod['tp_sabit_pct']*100}` | Stop: `ATR×{mod['atr_stop_mult']}`\n"
             f"{detay}\n"
             f"✅ TP: `{bs}` | ❌ Stop: `{bz}`\n"
             f"📈 Başarı: `%{oran:.1f}`\n"
@@ -500,10 +630,49 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
 
+async def puan_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Şu anki piyasada her coinin puanını göster."""
+    mod = mod_al()
+    satirlar = ["🎯 *PUAN TESTİ*\n"]
+    for symbol in TAKIP_EDILENLER:
+        try:
+            ohlcv_1h = exchange.fetch_ohlcv(symbol, mod['zaman_ana'], limit=50)
+            ohlcv_15m = exchange.fetch_ohlcv(symbol, mod['zaman_sinyal'], limit=100)
+            df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp','open','high','low','close','volume'])
+            df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp','open','high','low','close','volume'])
+
+            ema7 = ema_hesapla(df_1h['close'], 7).iloc[-1]
+            ema21 = ema_hesapla(df_1h['close'], 21).iloc[-1]
+            trend_boga = ema7 > ema21
+            grid_yonu = "LONG" if trend_boga else "SHORT"
+
+            rsi = rsi_hesapla(df_15m['close'], 14).iloc[-1]
+            adx_val = adx_hesapla(df_15m, 14)
+            atr_pct = atr_yuzdesi(df_15m, 14)
+            derinlik = emir_defteri_derinlik_analizi(symbol)
+
+            puan = 50 + mod['puan_trend']
+            if mod['rsi_min'] <= rsi <= mod['rsi_max']:
+                puan += mod['puan_rsi']
+            if adx_val > mod['adx_esik']:
+                puan += mod['puan_adx']
+            if derinlik == "ALICI_BASKIN" and grid_yonu == "LONG":
+                puan += mod['puan_derinlik']
+            elif derinlik == "SATICI_BASKIN" and grid_yonu == "SHORT":
+                puan += mod['puan_derinlik']
+
+            satirlar.append(
+                f"`{symbol[:12]}` {grid_yonu} | Puan: `{puan}`\n"
+                f"  RSI:{rsi:.1f} ADX:{adx_val:.1f} ATR%:{atr_pct:.2f} Derinlik:{derinlik}"
+            )
+        except Exception:
+            satirlar.append(f"`{symbol[:12]}` HATA")
+    await update.message.reply_text("\n".join(satirlar), parse_mode='Markdown')
+
 async def baslat_komutu(update, context):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🎯 *Bot Aktif!*", parse_mode='Markdown')
+    await update.message.reply_text("▶️ *Bot Aktif!*", parse_mode='Markdown')
 
 async def durdur_komutu(update, context):
     global BOT_CALISIYOR_MU
@@ -529,65 +698,34 @@ async def kapat_komutu(update, context):
         hafizayi_kaydet()
         await update.message.reply_text(f"⚠️ {e}", parse_mode='Markdown')
 
-async def mod_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global AKTIF_MOD
-    args = context.args
-    if not args:
-        satirlar = ["🎚️ *Mod Seçenekleri:*\n"]
-        for k, v in MODLAR.items():
-            isaret = "▶️" if k == AKTIF_MOD else "  "
-            satirlar.append(f"{isaret} `{k}` → {v['aciklama']}")
-        await update.message.reply_text("\n".join(satirlar), parse_mode='Markdown')
-        return
-    yeni_mod = args[0].lower()
-    if yeni_mod not in MODLAR:
-        await update.message.reply_text(f"❌ Geçersiz mod. Seçenekler: {', '.join(MODLAR.keys())}")
-        return
-    AKTIF_MOD = yeni_mod
-    hafizayi_kaydet()
-    mod = MODLAR[yeni_mod]
-    await update.message.reply_text(
-        f"✅ Mod: *{mod['aciklama']}*\n\n"
-        f"⚙️ Zaman: `{mod['zaman_dilimi']}` | Kaldıraç: `{mod['kaldirac']}x`\n"
-        f"💪 Risk: `%{mod['islem_riski_pct']*100}`\n"
-        f"📐 Stop sınırları: `%{mod['min_stop_pct']*100} - %{mod['max_stop_pct']*100}`\n"
-        f"🎯 R/R: `1:{mod['risk_reward']}`",
-        parse_mode='Markdown')
-
 async def backtest_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BACKTEST_CALISIYOR
     if BACKTEST_CALISIYOR or OPTIMIZE_CALISIYOR:
         await update.message.reply_text("⏳ Zaten çalışıyor.")
         return
-    args = context.args
-    test_modu = args[0].lower() if args else AKTIF_MOD
-    if test_modu not in MODLAR:
-        await update.message.reply_text(f"❌ Geçersiz mod.")
-        return
     BACKTEST_CALISIYOR = True
-    mod = MODLAR[test_modu]
-    await update.message.reply_text(f"⏳ *Backtest başlatıldı*\nMod: {mod['aciklama']}", parse_mode='Markdown')
+    await update.message.reply_text("⏳ *Backtest başlatıldı* — 5-10 dk.", parse_mode='Markdown')
 
     def run():
         global BACKTEST_CALISIYOR
         try:
-            satirlar = [f"*📊 BACKTEST — {mod['aciklama']}*\n```"]
-            satirlar.append(f"{'COIN':<14} {'İŞL':>4} {'WIN%':>6} {'PF':>6} {'EV%':>7} {'DD%':>6} {'TOT%':>7}")
-            satirlar.append("-" * 58)
+            satirlar = ["*📊 PUANLI BACKTEST*\n```"]
+            satirlar.append(f"{'COIN':<14} {'İŞL':>4} {'WIN%':>6} {'PF':>6} {'DD%':>6} {'TOT%':>7}")
+            satirlar.append("-" * 52)
             toplam = 0
             for c in TAKIP_EDILENLER:
                 params = coin_parametre_al(c)
-                r = backtest_coin_params(c, params, gun_sayisi=365)
+                r = backtest_puanli(c, params, gun_sayisi=180)
                 if r is None:
                     satirlar.append(f"{c[:12]:<14} HATA")
                 elif r.get('islem', -1) == -1:
-                    satirlar.append(f"{c[:12]:<14} HATA: {r.get('hata','?')[:24]}")
+                    satirlar.append(f"{c[:12]:<14} HATA: {r.get('hata','?')[:20]}")
                 else:
                     satirlar.append(
-                        f"{c[:12]:<14} {r['islem']:>4} {r['win_rate']:>6} {r['pf']:>6} {r['ev']:>7} {r['max_dd']:>6} {r['toplam']:>7}"
+                        f"{c[:12]:<14} {r['islem']:>4} {r['win_rate']:>6} {r['pf']:>6} {r['max_dd']:>6} {r['toplam']:>7}"
                     )
                     toplam += r['toplam']
-            satirlar.append("-" * 58)
+            satirlar.append("-" * 52)
             ort = toplam / len(TAKIP_EDILENLER)
             satirlar.append(f"Ortalama getiri: {ort:.2f}%")
             satirlar.append(f"Optimize coin: {len(COIN_PARAMS)}/{len(TAKIP_EDILENLER)}")
@@ -606,14 +744,18 @@ async def optimize_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⏳ Zaten bir işlem çalışıyor.")
         return
     OPTIMIZE_CALISIYOR = True
-    await update.message.reply_text(f"🧠 *Optimizasyon başlatıldı!* {len(TAKIP_EDILENLER)} coin × 240 kombinasyon. 20-30 dk.", parse_mode='Markdown')
+    await update.message.reply_text(
+        f"🧠 *Optimizasyon başlatıldı!*\n"
+        f"{len(TAKIP_EDILENLER)} coin × 192 kombinasyon = 1152 test\n"
+        f"Tahmini süre: 20-30 dk.",
+        parse_mode='Markdown')
 
     def run():
         global OPTIMIZE_CALISIYOR, COIN_PARAMS
         try:
             telegram_mesaj_gonder("🔬 *Optimizasyon başladı...*")
             for c in TAKIP_EDILENLER:
-                en_iyi = optimize_coin(c, gun_sayisi=365)
+                en_iyi = optimize_coin(c, gun_sayisi=180)
                 if en_iyi is None:
                     telegram_mesaj_gonder(f"⚠️ `{c}` — yeterli sinyal yok.")
                     continue
@@ -622,8 +764,8 @@ async def optimize_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 p = en_iyi['params']
                 telegram_mesaj_gonder(
                     f"🏆 *{c}* — EN İYİ\n"
-                    f"STD: `{p['bollinger_std']}` | RSI: `{p['rsi_long']}/{p['rsi_short']}` | "
-                    f"ATR×`{p['atr_stop_mult']}` | R/R: `1:{p['risk_reward']}`\n"
+                    f"Eşik: `{p['puan_esigi']}` | TP: `%{p['tp_sabit_pct']*100}` | ATR×`{p['atr_stop_mult']}`\n"
+                    f"Ağırlık: Trend `{p['puan_trend']}` | RSI `{p['puan_rsi']}`\n"
                     f"📊 İŞL: `{en_iyi['islem']}` | WIN: `{en_iyi['win_rate']}%` | "
                     f"PF: `{en_iyi['pf']}` | TOT: `{en_iyi['toplam']}%`"
                 )
@@ -640,9 +782,12 @@ async def params_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not COIN_PARAMS:
         await update.message.reply_text("Henüz optimize yok.", parse_mode='Markdown')
         return
-    satirlar = ["🧠 *Optimize:*\n"]
+    satirlar = ["🧠 *Optimize Parametreleri:*\n"]
     for sym, p in COIN_PARAMS.items():
-        satirlar.append(f"`{sym[:12]}` STD:{p['bollinger_std']} RSI:{p['rsi_long']}/{p['rsi_short']} ATR×{p['atr_stop_mult']} R/R:1:{p['risk_reward']}")
+        satirlar.append(
+            f"`{sym[:12]}` Eşik:{p['puan_esigi']} TP:%{p['tp_sabit_pct']*100} "
+            f"ATR×{p['atr_stop_mult']} Trend:{p['puan_trend']} RSI:{p['puan_rsi']}"
+        )
     await update.message.reply_text("\n".join(satirlar), parse_mode='Markdown')
 
 async def temizle_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -655,7 +800,7 @@ async def temizle_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALITIK_HAFIZA
     mod = mod_al()
-    print(f"🎯 [BOT] Mod: {AKTIF_MOD} | Coin: {len(TAKIP_EDILENLER)} | Hybrid Stop: Aktif", flush=True)
+    print(f"🎯 [BOT] {mod['aciklama']}", flush=True)
     try:
         exchange.load_markets()
     except Exception:
@@ -666,6 +811,8 @@ def otomatik_arkaplan_tarayici():
         try:
             if not BOT_CALISIYOR_MU:
                 time.sleep(5); continue
+            if OPTIMIZE_CALISIYOR:
+                time.sleep(10); continue
             mod = mod_al()
             if gunluk_kayip_kontrol(mod):
                 telegram_mesaj_gonder(f"🛑 Günlük limit aşıldı!")
@@ -704,31 +851,31 @@ def otomatik_arkaplan_tarayici():
 
             su_an = time.time()
             sinyaller = []
-            mevcut_sektorler = aktif_sektorler()
             debug = []
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
                 if symbol in aktif_borsa: continue
                 if len(aktif_borsa) >= mod['maks_pozisyon']: break
                 if su_an < COIN_COOLDOWNLAR.get(symbol, 0): continue
-                if SEKTOR_MAP.get(symbol, 'DIGER') in mevcut_sektorler: continue
                 try:
                     params = coin_parametre_al(symbol)
-                    ohlcv = exchange.fetch_ohlcv(symbol, params['zaman_dilimi'], limit=120)
-                    df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
-                    sig, neden = sinyal_uret(df, params)
+                    ohlcv_1h = exchange.fetch_ohlcv(symbol, params['zaman_ana'], limit=50)
+                    ohlcv_15m = exchange.fetch_ohlcv(symbol, params['zaman_sinyal'], limit=120)
+                    df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp','open','high','low','close','volume'])
+                    df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp','open','high','low','close','volume'])
+                    sig, neden, puan = sinyal_uret_puanli(df_15m, df_1h, symbol, params)
                     if sig:
                         sinyaller.append({"symbol": symbol, **sig})
-                        debug.append(f"{symbol.split('/')[0]}:✅{sig['yon']}")
+                        debug.append(f"{symbol.split('/')[0]}:✅(p{puan})")
                     else:
-                        debug.append(f"{symbol.split('/')[0]}:{neden[:12]}")
+                        debug.append(f"{symbol.split('/')[0]}:p{puan}")
                 except Exception:
                     continue
 
             dongu_sayaci += 1
             if dongu_sayaci % 20 == 0:
                 ozet = " | ".join(debug[:6])
-                print(f"🔍 #{dongu_sayaci} [{AKTIF_MOD}] opt:{len(COIN_PARAMS)} | {ozet}", flush=True)
+                print(f"🔍 #{dongu_sayaci} | {ozet}", flush=True)
 
             for s in sinyaller:
                 if not BOT_CALISIYOR_MU: break
@@ -760,11 +907,9 @@ def otomatik_arkaplan_tarayici():
                         stop = giris * (1 + stop_pct); tp = giris * (1 - s["tp_pct"]); kapat_yon = 'buy'
                     stop = float(exchange.price_to_precision(symbol, stop))
                     tp = float(exchange.price_to_precision(symbol, tp))
-                    # TP limit emri (reduce-only)
                     try:
                         exchange.create_order(symbol, 'limit', kapat_yon, miktar, tp, {'reduceOnly': True})
                     except Exception: pass
-                    # SL stop-market emri
                     try:
                         exchange.create_order(symbol, 'stop', kapat_yon, miktar, stop,
                             {'stopPrice': stop, 'triggerPrice': stop, 'reduceOnly': True})
@@ -778,21 +923,21 @@ def otomatik_arkaplan_tarayici():
                         "yon": yon, "giris": giris, "stop": stop, "tp": tp, "miktar": miktar
                     }
                     hafizayi_kaydet()
-                    print(f"🎯 {symbol} | {yon} | {miktar} | TP:{tp} SL:{stop}", flush=True)
+                    print(f"🎯 {symbol} | {yon} | Puan:{s.get('puan')} | TP:{tp} SL:{stop}", flush=True)
                     telegram_mesaj_gonder(
-                        f"🎯 *İŞLEM AÇILDI* ({AKTIF_MOD})\n"
+                        f"🎯 *İŞLEM AÇILDI*\n"
                         f"📌 `{symbol}` | *{yon}*\n"
                         f"💰 Giriş: `{giris}`\n"
                         f"🎯 TP: `{tp}` | 🛑 SL: `{stop}`\n"
-                        f"📐 Stop: `%{stop_pct*100:.2f}` | R/R: `1:{mod['risk_reward']}`\n"
-                        f"📊 Risk: `{risk_usdt:.2f}` | RSI: `{s['rsi']:.1f}`"
+                        f"📊 Puan: `{s.get('puan', 0)}` | RSI: `{s['rsi']:.1f}` | ADX: `{s.get('adx', 0):.1f}`\n"
+                        f"📚 Derinlik: `{s.get('derinlik', '?')}`"
                     )
                     break
                 except Exception as e:
                     print(f"❌ İşlem hatası: {e}", flush=True)
         except Exception as e:
             print(f"⚠️ Döngü hatası: {e}", flush=True)
-        time.sleep(10)
+        time.sleep(15)
 
 def flask_web_server():
     port = int(os.environ.get("PORT", 5000))
@@ -805,10 +950,10 @@ if __name__ == '__main__':
 
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
+    app_tg.add_handler(CommandHandler("puan", puan_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
-    app_tg.add_handler(CommandHandler("mod", mod_komutu))
     app_tg.add_handler(CommandHandler("backtest", backtest_komutu))
     app_tg.add_handler(CommandHandler("optimize", optimize_komutu))
     app_tg.add_handler(CommandHandler("params", params_komutu))
