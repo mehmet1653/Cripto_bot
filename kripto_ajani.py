@@ -80,7 +80,6 @@ ASAMALAR = {
         "min_islem": 2,        # 5 → 2
         "min_pf": 1.2,         # 1.5 → 1.2
         "max_kurgu": 5,
-    },
 },
 }
 
