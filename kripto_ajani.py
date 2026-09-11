@@ -43,18 +43,18 @@ TUM_COINLER = [
 KOMISYON_ORANI = 0.001
 
 # Cross-Validation oranları
-CV_TRAIN = 0.50
-CV_VALIDATE = 0.25
-CV_TEST = 0.25
+CV_TRAIN = 0.60
+CV_VALIDATE = 0.20
+CV_TEST = 0.20
 
 # ==================== ARAŞTIRMA PARAMETRELERİ ====================
 ARASTIRMA = {
-    "zaman_dilimi": "1h",
-    "gun_sayisi": 180,  # 6 ay
-    "min_islem": 8,     # Her aşamada min işlem
-    "min_pf": 1.2,      # Min PF (3 aşamada da)
-    "min_win": 40,      # Min win rate
-    "max_dd": -30,      # Max drawdown (kabul edilebilir)
+    "zaman_dilimi": "4h",     # ← değişti
+    "gun_sayisi": 90,
+    "min_islem": 3,           # ← değişti
+    "min_pf": 0.9,            # ← değişti
+    "min_win": 30,            # ← değişti
+    "max_dd": -40,            # ← değişti
     "secilen_strateji_sayisi": 5,
 }
 
