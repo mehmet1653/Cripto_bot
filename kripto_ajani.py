@@ -31,15 +31,13 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-# BTC, ETH, AVAX hariç; düzgün trend takip eden 7 adet altcoin sepeti
+# 5 adet altcoin sepetine düşürüldü
 TAKIP_EDILENLER = [
     'SOL/USDT:USDT', 
     'XRP/USDT:USDT', 
     'DOGE/USDT:USDT', 
     'LTC/USDT:USDT', 
-    'LINK/USDT:USDT', 
-    'ADA/USDT:USDT', 
-    'UNI/USDT:USDT'
+    'LINK/USDT:USDT'
 ]
 
 COIN_ID_MAP = {
@@ -47,11 +45,8 @@ COIN_ID_MAP = {
     'XRP/USDT:USDT': 2,
     'DOGE/USDT:USDT': 3,
     'LTC/USDT:USDT': 4,
-    'LINK/USDT:USDT': 5,
-    'ADA/USDT:USDT': 6,
-    'UNI/USDT:USDT': 7
+    'LINK/USDT:USDT': 5
 }
-
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
@@ -227,6 +222,32 @@ def set_leverage_safely(symbol, leverage):
     except Exception as e:
         print(f"⚠️ Kaldıraç hatası ({symbol}): {e}", flush=True)
         return False
+
+def gateio_tp_sl_emirleri_kur(symbol, yon, miktar, giris_fiyati, kaldirac, hedef_roe=20.0, stop_roe=10.0):
+    try:
+        kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
+        hedef_fark_orani = (hedef_roe / 100.0) / kaldirac
+        stop_fark_orani = (stop_roe / 100.0) / kaldirac
+
+        if yon == 'LONG':
+            tp_fiyat = giris_fiyati * (1.0 + hedef_fark_orani)
+            sl_fiyat = giris_fiyati * (1.0 - stop_fark_orani)
+        else:
+            tp_fiyat = giris_fiyati * (1.0 - hedef_fark_orani)
+            sl_fiyat = giris_fiyati * (1.0 + stop_fark_orani)
+
+        tp_fiyat = float(exchange.price_to_precision(symbol, tp_fiyat))
+        sl_fiyat = float(exchange.price_to_precision(symbol, sl_fiyat))
+        miktar_str = exchange.amount_to_precision(symbol, miktar)
+
+        # Take Profit emri
+        exchange.create_order(symbol, 'limit', kapatma_yonu, float(miktar_str), tp_fiyat, {'reduceOnly': True})
+
+        # Stop Loss emri
+        exchange.create_order(symbol, 'market', kapatma_yonu, float(miktar_str), None, {'reduceOnly': True, 'stopPrice': sl_fiyat})
+        print(f"🎯 [BORSA TP/SL] {symbol} için TP: {tp_fiyat} | SL: {sl_fiyat} kuruldu.", flush=True)
+    except Exception as e:
+        print(f"⚠️ Borsa TP/SL kurma hatası ({symbol}): {e}", flush=True)
 
 def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=50, adx=25, ema_fark=0.0, atr_yuzde=1.5, basarili=True):
     kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
@@ -404,7 +425,7 @@ def otomatik_arkaplan_tarayici():
                         else:
                             ANALitik_HAFIZA["basarisiz_islem_sayisi"] = int(ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0)) + 1
                     hafizayi_kaydet()
-                    pozisyonu_garantili_kapat(symbol, yon, kontrat, f"🧠 *AKILLI ERKEN ÇIKIŞ*\n📌 `{symbol}` | Sinyal bozuldu. PnL: `{pnl:+.2f} USDT` (`%{roe:+.2f}`)", basarili=basarili_mi)
+                    pozisyonu_garantili_kapat(symbol, yon, kontrat, f"🧠 *AKILLI ERKEN ÇIKIŞ (RÜZGAR TERSİNE DÖNDÜ)*\n📌 `{symbol}` | Sinyal bozuldu. PnL: `{pnl:+.2f} USDT` (`%{roe:+.2f}`)", basarili=basarili_mi)
                     continue
 
                 if roe >= hedef_roe:
@@ -490,6 +511,14 @@ def otomatik_arkaplan_tarayici():
                     
                     exchange.create_order(sinyal["symbol"], 'market', 'buy' if sinyal["yon"] == 'LONG' else 'sell', miktar)
                     
+                    time.sleep(1)
+                    guncel_pozlar = exchange.fetch_positions()
+                    acilan_pos = next((p for p in guncel_pozlar if p['symbol'] == sinyal["symbol"] and float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0), None)
+                    
+                    gercek_giris = float(acilan_pos['entryPrice']) if acilan_pos and acilan_pos.get('entryPrice') else sinyal["fiyat"]
+                    
+                    gateio_tp_sl_emirleri_kur(sinyal["symbol"], sinyal["yon"], miktar, gercek_giris, kaldirac, hedef_roe=20.0, stop_roe=10.0)
+
                     with state_lock:
                         AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {
                             "giris_rsi": float(sinyal["rsi"]), 
@@ -502,7 +531,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     print(f"⚡ [İŞLEM AÇILDI] {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}` | Kaldıraç: `{kaldirac}x`")
+                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI & BORSA TP/SL KURULDU*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}` | Kaldıraç: `{kaldirac}x`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası: {e}", flush=True)
@@ -512,7 +541,6 @@ def otomatik_arkaplan_tarayici():
         time.sleep(10)
 
 if __name__ == '__main__':
-    # Arka plan tarayıcısını thread olarak başlatıyoruz
     t = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
     t.start()
     
