@@ -42,11 +42,11 @@ EMA_PERIYOT = 50
 
 MODLAR = {
     "trend_grid": {
-        "grid_sayisi": 3,          
+        "grid_sayisi": 2,          # Küçük bakiye için kademe sayısı 2'ye düşürüldü
         "grid_aralik_pct": 0.02,   
         "kaldirac": 2,              
-        "maks_aktif_grid": 3,      
-        "bakiye_orani": 0.50,      
+        "maks_aktif_grid": 2,      
+        "bakiye_orani": 0.80,      # Bakiyenin daha büyük kısmını kullanması sağlandı
     }
 }
 AKTIF_MOD = "trend_grid"
@@ -155,7 +155,9 @@ def grid_kur(symbol):
     try:
         bal = exchange.fetch_balance()
         kasa = float(bal['free'].get('USDT', 0))
-        if kasa < 1: 
+        
+        # Minimum bakiye sınırı 0.4 USDT olarak esnetildi
+        if kasa < 0.4: 
             print(f"❌ Yetersiz Serbest Bakiye: {kasa} USDT", flush=True)
             return False, "Bakiye yetersiz"
         
@@ -267,7 +269,7 @@ def otomatik_arkaplan_tarayici():
                         time.sleep(2)
         except Exception as e:
             print(f"Hata: {e}", flush=True)
-        time.sleep(30)
+        time.sleep(60) # Sürekli log basmaması için tarama aralığı 60 saniyeye çıkarıldı
 
 if __name__ == '__main__':
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
