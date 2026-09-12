@@ -15,7 +15,6 @@ from supabase import create_client, Client
 sys.stdout.reconfigure(line_buffering=True)
 app = Flask(__name__)
 
-# ==================== AYARLAR ====================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "6929517567")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
@@ -36,25 +35,25 @@ exchange.set_sandbox_mode(True)
 
 KOMISYON_ORANI = 0.001
 
-# ==================== GRID COİNLERİ (DÜŞÜK FİYATLI) ====================
+# ==================== GRID COİNLERİ ====================
 TAKIP_EDILENLER = [
     'XRP/USDT:USDT', 'DOGE/USDT:USDT'
 ]
 
-# ==================== GRID PARAMETRELERİ (SANDBOX İÇİN OPTİMİZE) ====================
+# ==================== SIKILAŞTIRILMIŞ GRID PARAMETRELERİ ====================
 GRID = {
-    "aciklama": "📊 Grid Bot (Düşük Fiyatlı Coin)",
-    "grid_aralik_pct": 0.02,       # ±%2
-    "grid_sayisi": 6,               # 10 → 6
-    "grid_kar_pct": 0.006,          # 0.5 → 0.6
+    "aciklama": "📊 Grid Bot v3 (Sıkı - Hızlı Tetiklenir)",
+    "grid_aralik_pct": 0.01,        # ±%2 → ±%1 (Sıkılaştırıldı)
+    "grid_sayisi": 8,                # 6 → 8 (Daha sık)
+    "grid_kar_pct": 0.006,           # %0.6
     "kaldirac": 3,
-    "toplam_yatirim_pct": 0.40,    # 20 → 40
-    "max_coin": 2,                  # 4 → 2
+    "toplam_yatirim_pct": 0.40,     # %40
+    "max_coin": 2,
     # Koruma
     "adx_dur_esik": 35,
-    "fiyat_disi_pct": 0.05,
+    "fiyat_disi_pct": 0.03,         # %5 → %3 (Sıkılaştırıldı)
     "gunluk_max_kayip_pct": 0.03,
-    "min_hacim_usdt": 10_000_000,   # $50M → $10M (daha esnek)
+    "min_hacim_usdt": 10_000_000,
     # Cooldown
     "grid_cooldown_dk": 30,
 }
@@ -243,46 +242,46 @@ def trend_kontrol(symbol):
 # ==================== GRID OLUŞTURMA ====================
 def grid_olustur(symbol):
     try:
-        # 1. Hacim filtresi
+        # Hacim filtresi
         uygun, hacim = hacim_uygun_mu(symbol)
         if not uygun:
             return None, f"hacim düşük (${hacim/1e6:.0f}M)"
         
-        # 2. ADX kontrolü
+        # ADX kontrolü
         adx_ok, adx_val = adx_kontrol(symbol)
         if not adx_ok:
             return None, f"ADX {adx_val:.1f} > {GRID['adx_dur_esik']}"
         
-        # 3. Mevcut fiyat
+        # Mevcut fiyat
         fiyat = exchange.fetch_ticker(symbol)['last']
         
-        # 4. Grid aralığı
+        # Grid aralığı (SIKI)
         alt = fiyat * (1 - GRID['grid_aralik_pct'])
         ust = fiyat * (1 + GRID['grid_aralik_pct'])
         adim = (ust - alt) / GRID['grid_sayisi']
         
-        # 5. Kasa
+        # Kasa
         bal = exchange.fetch_balance()
         kasa = float(bal['total'].get('USDT', 0))
         if kasa < 10:
             return None, "yetersiz kasa"
         
-        # 6. Toplam yatırım
+        # Toplam yatırım
         toplam_yatirim = kasa * GRID['toplam_yatirim_pct'] / GRID['max_coin']
         miktar_per_grid = (toplam_yatirim / GRID['grid_sayisi']) / fiyat
         
-        # 7. Kaldıraç
+        # Kaldıraç
         if not set_leverage_and_margin_safely(symbol, GRID['kaldirac']):
             return None, "kaldıraç hata"
         
-        # 8. Emirleri temizle
+        # Emirleri temizle
         tum_emirleri_iptal_et(symbol)
         
-        # 9. Market bilgisi (minimum kontrol)
+        # Market bilgisi
         market_info = exchange.market(symbol)
         min_amount = market_info.get('limits', {}).get('amount', {}).get('min', 0)
         
-        # 10. Alt yarıya AL emirleri
+        # Alt yarıya AL emirleri
         emirler = []
         for i in range(GRID['grid_sayisi']):
             seviye = alt + (adim * i)
@@ -291,7 +290,6 @@ def grid_olustur(symbol):
                     miktar = float(exchange.amount_to_precision(symbol, miktar_per_grid))
                     if miktar <= 0:
                         continue
-                    # Minimum kontrol
                     if min_amount and miktar < min_amount:
                         continue
                     emir = exchange.create_order(
@@ -307,7 +305,7 @@ def grid_olustur(symbol):
                     continue
         
         if len(emirler) == 0:
-            return None, "0 emir (miktar minimum altı)"
+            return None, "0 emir"
         
         AKTIF_GRIDLER[symbol] = {
             "ust": ust,
@@ -325,9 +323,9 @@ def grid_olustur(symbol):
             f"📊 *GRID KURULDU*\n"
             f"📌 `{symbol[:12]}`\n"
             f"💰 Fiyat: `{fiyat}`\n"
-            f"📐 Aralık: `{alt:.4f} - {ust:.4f}`\n"
+            f"📐 Aralık: `{alt:.4f} - {ust:.4f}` (±%{GRID['grid_aralik_pct']*100})\n"
             f"📈 {len(emirler)} AL emri | ADX: `{adx_val:.1f}`\n"
-            f"📊 Her emir: `{miktar_per_grid:.4f}`"
+            f"📊 Miktar: `{miktar_per_grid:.4f}`"
         )
         return True, "OK"
     except Exception as e:
@@ -388,6 +386,7 @@ def grid_takip(symbol):
                     emir['satis_id'] = satis_emir.get('id')
                     emir['satis_fiyat'] = satis_fiyat
                     print(f"📊 {symbol} | AL tetiklendi @ {emir['fiyat']} → SAT @ {satis_fiyat}", flush=True)
+                    telegram_mesaj_gonder(f"⚡ `{symbol[:12]}` AL tetiklendi @ `{emir['fiyat']}`")
                 except Exception as e:
                     print(f"⚠️ SAT emri hatası: {e}", flush=True)
         
@@ -410,7 +409,12 @@ def grid_takip(symbol):
                         )
                         emir['id'] = yeni_al.get('id')
                         print(f"💰 {symbol} | SAT tetiklendi → +{kar_usdt:.4f} USDT | Yeni AL @ {emir['fiyat']}", flush=True)
-                        telegram_mesaj_gonder(f"💰 `{symbol[:12]}` grid kâr: `+{kar_usdt:.4f}` USDT")
+                        telegram_mesaj_gonder(
+                            f"💰 *KÂR ALINDI*\n"
+                            f"📌 `{symbol[:12]}`\n"
+                            f"💵 +`{kar_usdt:.4f}` USDT\n"
+                            f"📊 Yeni AL @ `{emir['fiyat']:.4f}`"
+                        )
                     except Exception as e:
                         print(f"⚠️ Yeni AL hatası: {e}", flush=True)
         
@@ -421,7 +425,7 @@ def grid_takip(symbol):
 # ==================== FLASK ====================
 @app.route('/')
 def home():
-    return f"Grid Bot | Aktif: {len(AKTIF_GRIDLER)} | Kâr: {ANALITIK.get('toplam_kar', 0):.4f}"
+    return f"Grid Bot v3 | Aktif: {len(AKTIF_GRIDLER)} | Kâr: {ANALITIK.get('toplam_kar', 0):.4f}"
 
 # ==================== TELEGRAM ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -460,7 +464,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cooldown_detay += f"• `{s[:10]}` → {dk} dk\n"
         
         mesaj = (
-            f"📊 *GRID BOT*\n\n"
+            f"📊 *GRID BOT v3 (SIKI)*\n\n"
             f"💰 Toplam: `{total:.2f}` USDT (Serbest: `{free:.2f}`)\n"
             f"📈 Açık PnL: `{pnl:+.4f}` USDT\n"
             f"💵 Toplam Kâr: `{ANALITIK.get('toplam_kar', 0):+.4f}` USDT\n"
@@ -535,7 +539,7 @@ async def grid_detay_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         satirlar.append(f"Toplam Kâr: `{g.get('toplam_kar', 0):+.4f}` USDT")
         satirlar.append(f"Emir sayısı: `{len(g['emirler'])}`")
         
-        for e in g['emirler'][:6]:
+        for e in g['emirler']:
             if e['durum'] == 'acik':
                 satirlar.append(f"  • AL @ `{e['fiyat']:.4f}` x `{e['miktar']:.4f}`")
             else:
@@ -554,8 +558,8 @@ async def cooldown_komutu(update, context):
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALITIK
 
-    print(f"📊 [GRID BOT v2] Başladı", flush=True)
-    print(f"💰 {len(TAKIP_EDILENLER)} coin | Grid: {GRID['grid_sayisi']} | Aralık: ±%{GRID['grid_aralik_pct']*100} | ADX: {GRID['adx_dur_esik']} | Cooldown: {GRID['grid_cooldown_dk']} dk", flush=True)
+    print(f"📊 [GRID BOT v3 SIKI] Başladı", flush=True)
+    print(f"💰 {len(TAKIP_EDILENLER)} coin | Grid: {GRID['grid_sayisi']} | Aralık: ±%{GRID['grid_aralik_pct']*100}", flush=True)
 
     try:
         exchange.load_markets()
@@ -601,11 +605,11 @@ def otomatik_arkaplan_tarayici():
             dongu_sayaci += 1
             if dongu_sayaci % 20 == 0:
                 aktif_cd = len([s for s, t in GRID_COOLDOWNLAR.items() if t > su_an])
-                print(f"🔍 #{dongu_sayaci} | Grid: {len(AKTIF_GRIDLER)} | CD: {aktif_cd} | Kâr: {ANALITIK.get('toplam_kar', 0):+.4f}", flush=True)
+                print(f"🔍 #{dongu_sayaci} | Grid: {len(AKTIF_GRIDLER)} | CD: {aktif_cd} | Kâr: {ANALITIK.get('toplam_kar', 0):+.4f} | Tetik: {ANALITIK.get('toplam_grid_tetiklenme', 0)}", flush=True)
 
         except Exception as e:
             print(f"⚠️ Döngü: {e}", flush=True)
-        time.sleep(20)
+        time.sleep(15)
 
 def flask_web_server():
     port = int(os.environ.get("PORT", 5000))
