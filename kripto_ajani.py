@@ -47,9 +47,9 @@ MODLAR = {
     "trend_grid": {
         "grid_sayisi": 5,          
         "grid_aralik_pct": 0.02,   
-        "kaldirac": 5,
+        "kaldirac": 3,              # Kaldıracı biraz düşürerek teminat marjını rahatlatıyoruz
         "maks_aktif_grid": 5,      
-        "bakiye_orani": 0.25,      # Miktarlar kurtarsın diye bütçe oranı biraz artırıldı
+        "bakiye_orani": 0.10,      # Kasayı zorlamamak için oran %10'a çekildi
     }
 }
 AKTIF_MOD = "trend_grid"
@@ -158,26 +158,27 @@ def grid_kur(symbol):
 
     try:
         bal = exchange.fetch_balance()
-        kasa = float(bal['total'].get('USDT', 0))
-        if kasa < 10: return False, "Bakiye yetersiz"
+        kasa = float(bal['free'].get('USDT', 0)) # Serbest bakiye baz alınıyor
+        if kasa < 5: 
+            print(f"❌ Yetersiz Serbest Bakiye: {kasa} USDT", flush=True)
+            return False, "Bakiye yetersiz"
         
         if not set_leverage_safely(symbol, mod['kaldirac']):
             return False, "Kaldıraç hatası"
 
-        tahsis_usdt = kasa * mod['bakiye_orani'] * mod['kaldirac'] # Kaldıraçlı toplam işlem hacmi
+        tahsis_usdt = kasa * mod['bakiye_orani'] * mod['kaldirac']
         fiyat = float(df['close'].iloc[-1])
         grid_sayisi = mod['grid_sayisi']
         aralik = mod['grid_aralik_pct']
 
         tum_emirleri_iptal_et(symbol)
         
-        kademeler = []
         market_info = exchange.market(symbol)
-        
-        # Gate.io kontrat kurallarına göre minimum miktar kontrolü
         min_amount = float(market_info['limits']['amount']['min'] or 1.0)
         tekil_butce = tahsis_usdt / grid_sayisi
 
+        kademeler = []
+        
         if yon_tipi == "LONG_GRID":
             for i in range(grid_sayisi):
                 kademe_fiyat = fiyat * (1 - (i + 1) * aralik)
@@ -260,7 +261,7 @@ async def manuel_grid_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if kurulan > 0:
         await update.message.reply_text(f"✅ Toplam {kurulan} yeni grid başarıyla kuruldu!")
     else:
-        await update.message.reply_text("⚠️ Eklenebilecek boş slot kalmadı veya hata oluştu.")
+        await update.message.reply_text("⚠️ Eklenebilecek boş slot kalmadı veya bakiye/hata engeline takıldı.")
 
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
