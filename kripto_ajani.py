@@ -84,7 +84,7 @@ def hafizayi_yukle():
     try:
         supabase.table("bot_hafiza").upsert({"id": 1, **varsayilan}).execute()
     except Exception as e:
-        print(f"⚠️ Hafıza tablo oluşturma/ilk kayıt hatası (Tablo var mı?): {e}", flush=True)
+        print(f"⚠️ Hafıza tablo oluşturma/ilk kayıt hatası: {e}", flush=True)
     return varsayilan
 
 def hafizayi_kaydet():
@@ -237,6 +237,29 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"{pnl_ikon} Anlık PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n\n"
+        )
+
+        if borsa_poslari:
+            mesaj += "📋 *Açık Pozisyonlarca Detay:*\n"
+            for p in borsa_poslari:
+                sym = p.get('symbol')
+                yon = str(p.get('side', '')).upper()
+                merkez = float(p.get('entryPrice', 0))
+                kaldirac = int(p.get('leverage', 10))
+                pnl_val = float(p.get('unrealizedPnl', 0))
+                
+                try:
+                    guncel_fiyat = exchange.fetch_ticker(sym)['last']
+                    fark = (guncel_fiyat - merkez) / merkez if yon == "LONG" else (merkez - guncel_fiyat) / merkez
+                    roe = fark * 100 * kaldirac
+                except Exception:
+                    roe = 0.0
+
+                pos_ikon = "🟢" if pnl_val >= 0 else "🔴"
+                mesaj += f"{pos_ikon} `{sym}` | {yon} ({kaldirac}x)\n   └ PnL: `{pnl_val:+.2f} USDT` (`%{roe:+.2f}`)\n"
+            mesaj += "\n"
+
+        mesaj += (
             f"✅ Başarılı TP: `{basarili_s}` | ❌ Başarısız SL: `{basarisiz_s}`\n"
             f"📈 Başarı Oranı: `%{basari_o:.1f}`\n"
             f"🧠 AI Verisi: `{len(ANALitik_HAFIZA.get('egitim_verileri', []))}/20`"
