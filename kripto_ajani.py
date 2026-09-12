@@ -1,6 +1,7 @@
 import os
 import time
 import threading
+import sys
 import requests
 import ccxt
 import pandas as pd
@@ -10,6 +11,9 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
+
+# Çıktı tamponunu (buffer) tamamen kapatıyoruz ki loglar anında ekrana düşsün
+sys.stdout.reconfigure(line_buffering=True)
 
 # ==================== AYARLAR VE ANAHTARLAR ====================
 TELEGRAM_TOKEN = "8870934003:AAGOzmO_VwYnj0Wz2hehI176rKiOkEaV0b0"
@@ -23,7 +27,7 @@ exchange = ccxt.gate({
     'apiKey': '82cca880898a88d1a31e86d8eb474c57',
     'secret': '1ac479b9df5e6f2e89560b0d238a250694719b6fcae20da00ebc54ad6aeb8898',
     'enableRateLimit': True,
-    'timeout': 15000,
+    'timeout': 10000, # Bekleme süresini 10 saniyeye indirerek kilitlenmeleri önledik
     'options': {
         'defaultType': 'swap'
     }
@@ -31,7 +35,6 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-# 5 adet altcoin sepetine düşürüldü
 TAKIP_EDILENLER = [
     'SOL/USDT:USDT', 
     'XRP/USDT:USDT', 
@@ -178,7 +181,7 @@ def atr_ve_volatilite_hesapla(df, period=14):
 
 def emir_defteri_derinlik_analizi(symbol):
     try:
-        order_book = exchange.fetch_order_book(symbol, limit=20)
+        order_book = exchange.fetch_order_book(symbol, limit=10) # Limit düşürüldü
         bids, asks = order_book.get('bids', []), order_book.get('asks', [])
         toplam_bid = sum(b[1] for b in bids)
         toplam_ask = sum(a[1] for a in asks)
@@ -240,10 +243,7 @@ def gateio_tp_sl_emirleri_kur(symbol, yon, miktar, giris_fiyati, kaldirac, hedef
         sl_fiyat = float(exchange.price_to_precision(symbol, sl_fiyat))
         miktar_str = exchange.amount_to_precision(symbol, miktar)
 
-        # Take Profit emri
         exchange.create_order(symbol, 'limit', kapatma_yonu, float(miktar_str), tp_fiyat, {'reduceOnly': True})
-
-        # Stop Loss emri
         exchange.create_order(symbol, 'market', kapatma_yonu, float(miktar_str), None, {'reduceOnly': True, 'stopPrice': sl_fiyat})
         print(f"🎯 [BORSA TP/SL] {symbol} için TP: {tp_fiyat} | SL: {sl_fiyat} kuruldu.", flush=True)
     except Exception as e:
@@ -425,7 +425,7 @@ def otomatik_arkaplan_tarayici():
                         else:
                             ANALitik_HAFIZA["basarisiz_islem_sayisi"] = int(ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0)) + 1
                     hafizayi_kaydet()
-                    pozisyonu_garantili_kapat(symbol, yon, kontrat, f"🧠 *AKILLI ERKEN ÇIKIŞ (RÜZGAR TERSİNE DÖNDÜ)*\n📌 `{symbol}` | Sinyal bozuldu. PnL: `{pnl:+.2f} USDT` (`%{roe:+.2f}`)", basarili=basarili_mi)
+                    pozisyonu_garantili_kapat(symbol, yon, kontrat, f"🧠 *AKILLI ERKEN ÇIKIŞ (RÜZGAR TERSİne DÖNDÜ)*\n📌 `{symbol}` | Sinyal bozuldu. PnL: `{pnl:+.2f} USDT` (`%{roe:+.2f}`)", basarili=basarili_mi)
                     continue
 
                 if roe >= hedef_roe:
