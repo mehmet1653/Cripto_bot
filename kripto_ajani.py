@@ -6,9 +6,7 @@ import requests
 import ccxt
 import pandas as pd
 from datetime import datetime, timezone
-from flask import Flask
-from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
+from flask import Flask, request as flask_request
 from supabase import create_client, Client
 
 sys.stdout.reconfigure(line_buffering=True)
@@ -215,51 +213,41 @@ def grid_kur(symbol):
         print(f"❌ Emir Oluşturma Hatası ({symbol}): {e}", flush=True)
         return False, str(e)
 
-# ==================== FLASK & TELEGRAM ====================
+# ==================== FLASK WEB SERVER ====================
 @app.route('/')
 def home():
-    return f"Trend Grid Bot | Aktif Grid: {len(AKTIF_GRIDLER)}"
+    balance = {}
+    try:
+        balance = exchange.fetch_balance()
+    except Exception:
+        pass
+    total = float(balance.get('total', {}).get('USDT', 0))
+    free = float(balance.get('free', {}).get('USDT', 0))
+    return f"Trend Grid Bot Çalışıyor! | Kasa: {total:.2f} USDT (Serbest: {free:.2f}) | Aktif Grid: {len(AKTIF_GRIDLER)}"
 
-async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    balance = exchange.fetch_balance()
-    total = float(balance['total'].get('USDT', 0))
-    free = float(balance['free'].get('USDT', 0))
-    detay = ""
-    for sym, g in AKTIF_GRIDLER.items():
-        temiz = sym.replace('/USDT:USDT', '')
-        detay += f"- {temiz} : {g['yon']} | {len(g['kademeler'])} Emir\n"
-    await update.message.reply_text(f"🤖 BOT DURUMU\nKasa: {total:.2f} USDT (Serbest: {free:.2f})\nAktif: {len(AKTIF_GRIDLER)}/3\n{detay}")
-
-async def baslat_komutu(update, context):
+@app.route('/tetikle', methods=['GET'])
+def manuel_tetikle():
     global BOT_CALISIYOR_MU
-    BOT_CALISIYOR_MU = True
-    await update.message.reply_text("▶️ Bot Aktif!")
-
-async def durdur_komutu(update, context):
-    global BOT_CALISIYOR_MU
-    BOT_CALISIYOR_MU = False
-    await update.message.reply_text("⏸️ Bot Durduruldu.")
-
-async def kapat_komutu(update, context):
-    for sym in list(AKTIF_GRIDLER.keys()): tum_emirleri_iptal_et(sym)
-    AKTIF_GRIDLER.clear()
-    hafizayi_kaydet()
-    await update.message.reply_text("🛑 Tüm gridler temizlendi.")
-
-async def manuel_grid_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Taranıyor ve uygun coinlere grid kuruluyor...")
+    if not BOT_CALISIYOR_MU:
+        return "Bot durdurulmuş durumda.", 400
+    
     kurulan = 0
     for symbol in TAKIP_EDILENLER:
         if symbol in AKTIF_GRIDLER: continue
         if len(AKTIF_GRIDLER) >= MODLAR[AKTIF_MOD]['maks_aktif_grid']: break
-        basarili, sebep = grid_kur(symbol)
+        basarili, _ = grid_kur(symbol)
         if basarili:
             kurulan += 1
             time.sleep(1)
-    if kurulan > 0:
-        await update.message.reply_text(f"✅ Toplam {kurulan} yeni grid başarıyla kuruldu!")
-    else:
-        await update.message.reply_text("⚠️ Eklenebilecek boş slot kalmadı veya bakiye yetersiz.")
+    return f"Tarama tamamlandı. Kurulan yeni grid sayısı: {kurulan}"
+
+@app.route('/kapat', methods=['GET'])
+def tumunu_kapat():
+    for sym in list(AKTIF_GRIDLER.keys()): 
+        tum_emirleri_iptal_et(sym)
+    AKTIF_GRIDLER.clear()
+    hafizayi_kaydet()
+    return "Tüm aktif gridler kapatıldı ve emirler iptal edildi."
 
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
@@ -281,24 +269,6 @@ def otomatik_arkaplan_tarayici():
             print(f"Hata: {e}", flush=True)
         time.sleep(30)
 
-def flask_web_server():
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
-
 if __name__ == '__main__':
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    threading.Thread(target=flask_web_server, daemon=True).start()
-
-    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app_tg.add_handler(CommandHandler("durum", durum_komutu))
-    app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
-    app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
-    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
-    app_tg.add_handler(CommandHandler("grid_kur", manuel_grid_komutu))
-    
-    # Çakışma hatalarını (Conflict) yutarak botun çökmesini önleyen döngü
-    while True:
-        try:
-            app_tg.run_polling(drop_pending_updates=True)
-        except Exception as e:
-            print(f"⚠️ Telegram Polling Hatası: {e}", flush=True)
-            time.sleep(5)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
