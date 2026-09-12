@@ -53,7 +53,6 @@ SEKTOR_MAP = {
 ZAMAN_DILIMI = "1h"
 
 # ==================== TREND & GRID PARAMETRELERİ ====================
-# ADX Eşikleri esnetildi (Daha rahat grid açması için düşürüldü)
 ADX_ACIKLAMA_ESIK = 28.0  
 ADX_KAPATMA_ESIK = 35.0   
 
@@ -345,6 +344,21 @@ async def kapat_komutu(update, context):
     except Exception as e:
         await update.message.reply_text(f"⚠️ {e}")
 
+async def manuel_grid_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔄 Tüm coinler taranıp uygun olanlara grid kuruluyor...")
+    kurulan = 0
+    for symbol in TAKIP_EDILENLER:
+        if symbol in AKTIF_GRIDLER: continue
+        if len(AKTIF_GRIDLER) >= MODLAR[AKTIF_MOD]['maks_aktif_grid']: break
+        basarili, sebep = grid_kur(symbol)
+        if basarili:
+            kurulan += 1
+            break
+    if kurulan > 0:
+        await update.message.reply_text("✅ Manuel tarama tamamlandı, grid kuruldu!")
+    else:
+        await update.message.reply_text("⚠️ Uygun piyasa koşulu bulunamadı veya limit dolu.")
+
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
@@ -428,6 +442,7 @@ if __name__ == '__main__':
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
+    app_tg.add_handler(CommandHandler("grid_kur", manuel_grid_komutu))
 
     while True:
         try:
