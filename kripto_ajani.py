@@ -6,7 +6,7 @@ import requests
 import ccxt
 import pandas as pd
 from datetime import datetime, timezone
-from flask import Flask, request as flask_request
+from flask import Flask
 from supabase import create_client, Client
 
 sys.stdout.reconfigure(line_buffering=True)
@@ -19,7 +19,6 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 GATE_API_KEY = os.environ.get("GATE_API_KEY", "")
 GATE_SECRET = os.environ.get("GATE_SECRET", "")
-RAILWAY_STATIC_URL = os.environ.get("RAILWAY_STATIC_URL", "")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -58,16 +57,6 @@ COIN_COOLDOWNLAR = {}
 
 def mod_al():
     return MODLAR[AKTIF_MOD]
-
-# ==================== WEBHOOK OTOMATİK TANITMA ====================
-def webhook_ayarla():
-    if TELEGRAM_TOKEN and RAILWAY_STATIC_URL:
-        url = f"https://{RAILWAY_STATIC_URL}/telegram"
-        try:
-            r = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={url}", timeout=10)
-            print(f"🔗 Otomatik Webhook Sonucu: {r.text}", flush=True)
-        except Exception as e:
-            print(f"⚠️ Webhook ayarlanamadı: {e}", flush=True)
 
 # ==================== SUPABASE ====================
 def hafizayi_yukle():
@@ -229,7 +218,66 @@ def grid_kur(symbol):
         print(f"❌ Emir Oluşturma Hatası ({symbol}): {e}", flush=True)
         return False, str(e)
 
-# ==================== FLASK WEB SERVER & TELEGRAM WEBHOOK ====================
+# ==================== TELEGRAM LONG POLLING (DİNLEME) ====================
+def telegram_dinleyici():
+    offset = 0
+    print("🤖 Telegram Long Polling Dinleyicisi Başlatıldı...", flush=True)
+    while True:
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={offset}&timeout=30"
+            r = requests.get(url, timeout=35)
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("ok"):
+                    for result in data.get("result", []):
+                        offset = result["update_id"] + 1
+                        msg = result.get("message", {})
+                        text = msg.get("text", "").strip()
+                        chat_id = str(msg.get("chat", {}).get("id", ""))
+                        
+                        if chat_id == CHAT_ID:
+                            if text == '/durum':
+                                try:
+                                    balance = exchange.fetch_balance()
+                                    total = float(balance.get('total', {}).get('USDT', 0))
+                                    free = float(balance.get('free', {}).get('USDT', 0))
+                                except Exception:
+                                    total, free = 0, 0
+                                
+                                yanit = f"📊 BOT DURUMU:\nKasa: {total:.2f} USDT\nSerbest: {free:.2f} USDT\nAktif Grid Sayısı: {len(AKTIF_GRIDLER)}"
+                                if AKTIF_GRIDLER:
+                                    yanit += "\n\n🟢 Aktif İşlemler:"
+                                    for sym, d in AKTIF_GRIDLER.items():
+                                        yanit += f"\n• {sym} ({d['yon']})"
+                                else:
+                                    yanit += "\n\nHenüz aktif grid bulunmuyor."
+                                telegram_mesaj_gonder(yanit)
+                                
+                            elif text == '/grid_detay':
+                                if not AKTIF_GRIDLER:
+                                    telegram_mesaj_gonder("📋 Şu an aktif detaylı grid bulunmuyor.")
+                                else:
+                                    yanit = "📋 DETAYLI GRID RAPORU:"
+                                    for sym, d in AKTIF_GRIDLER.items():
+                                        yanit += f"\n\n🔸 Coin: {sym}\n- Yön: {d['yon']}\n- Kurulum Fiyatı: {d['ana_fiyat']}"
+                                        if 'kademeler' in d and d['kademeler']:
+                                            yanit += "\n- Kademeler:"
+                                            for k in d['kademeler']:
+                                                yanit += f"\n  * {k['tip'].upper()} @ {k['fiyat']} ({k['miktar']} adet)"
+                                    telegram_mesaj_gonder(yanit)
+                                
+                            elif text == '/kapat':
+                                for sym in list(AKTIF_GRIDLER.keys()):
+                                    tum_emirleri_iptal_et(sym)
+                                AKTIF_GRIDLER.clear()
+                                hafizayi_kaydet()
+                                telegram_mesaj_gonder("🛑 Tüm aktif gridler kapatıldı ve emirler iptal edildi!")
+        except Exception as e:
+            print(f"⚠️ Polling Hatası: {e}", flush=True)
+            time.sleep(5)
+        time.sleep(1)
+
+# ==================== FLASK WEB SERVER ====================
 @app.route('/')
 def home():
     balance = {}
@@ -245,7 +293,7 @@ def home():
         <head><title>Cripto Bot Durum Paneli</title></head>
         <body style="font-family: Arial; background: #121212; color: #fff; padding: 20px;">
             <h2>🚀 Cripto Bot Durum Paneli</h2>
-            <p><b>Bot Durumu:</b> Çalışıyor ✅</p>
+            <p><b>Bot Durumu:</b> Çalışıyor ✅ (Polling Aktif)</p>
             <p><b>Toplam Kasa:</b> {total:.2f} USDT</p>
             <p><b>Serbest Bakiye:</b> {free:.2f} USDT</p>
             <p><b>Aktif Grid Sayısı:</b> {len(AKTIF_GRIDLER)}</p>
@@ -260,92 +308,10 @@ def home():
         
     html += """
             </ul>
-            <br>
-            <a href="/tetikle" style="padding: 10px 20px; background: #4CAF50; color: white; text-decoration: none; border-radius: 5px;">Manuel Tetikle</a>
-            <a href="/kapat" style="padding: 10px 20px; background: #f44336; color: white; text-decoration: none; border-radius: 5px; margin-left: 10px;">Acil Tümünü Kapat</a>
         </body>
     </html>
     """
     return html
-
-@app.route('/telegram', methods=['POST'])
-def telegram_webhook():
-    try:
-        data = flask_request.get_json(force=True, silent=True)
-        print(f"📩 Gelen Telegram Webhook Verisi: {data}", flush=True)
-        
-        if data and 'message' in data:
-            msg = data['message']
-            text = msg.get('text', '').strip()
-            chat_id = str(msg.get('chat', {}).get('id', ''))
-            
-            print(f"💬 Gelen Mesaj: '{text}' | Chat ID: {chat_id} (Beklenen: {CHAT_ID})", flush=True)
-            
-            if chat_id == CHAT_ID:
-                if text == '/durum':
-                    try:
-                        balance = exchange.fetch_balance()
-                        total = float(balance.get('total', {}).get('USDT', 0))
-                        free = float(balance.get('free', {}).get('USDT', 0))
-                    except Exception:
-                        total, free = 0, 0
-                    
-                    yanit = f"📊 BOT DURUMU:\nKasa: {total:.2f} USDT\nSerbest: {free:.2f} USDT\nAktif Grid Sayısı: {len(AKTIF_GRIDLER)}"
-                    if AKTIF_GRIDLER:
-                        yanit += "\n\n🟢 Aktif İşlemler:"
-                        for sym, d in AKTIF_GRIDLER.items():
-                            yanit += f"\n• {sym} ({d['yon']})"
-                    else:
-                        yanit += "\n\nHenüz aktif grid bulunmuyor."
-                    telegram_mesaj_gonder(yanit)
-                    
-                elif text == '/grid_detay':
-                    if not AKTIF_GRIDLER:
-                        telegram_mesaj_gonder("📋 Şu an aktif detaylı grid bulunmuyor.")
-                    else:
-                        yanit = "📋 DETAYLI GRID RAPORU:"
-                        for sym, d in AKTIF_GRIDLER.items():
-                            yanit += f"\n\n🔸 Coin: {sym}\n- Yön: {d['yon']}\n- Kurulum Fiyatı: {d['ana_fiyat']}"
-                            if 'kademeler' in d and d['kademeler']:
-                                yanit += "\n- Kademeler:"
-                                for k in d['kademeler']:
-                                    yanit += f"\n  * {k['tip'].upper()} @ {k['fiyat']} ({k['miktar']} adet)"
-                        telegram_mesaj_gonder(yanit)
-                    
-                elif text == '/kapat':
-                    for sym in list(AKTIF_GRIDLER.keys()):
-                        tum_emirleri_iptal_et(sym)
-                    AKTIF_GRIDLER.clear()
-                    hafizayi_kaydet()
-                    telegram_mesaj_gonder("🛑 Tüm aktif gridler kapatıldı ve emirler iptal edildi!")
-    except Exception as e:
-        print(f"⚠️ Telegram Webhook İşleme Hatası: {e}", flush=True)
-        
-    return "OK", 200
-
-@app.route('/tetikle', methods=['GET'])
-def manuel_tetikle():
-    global BOT_CALISIYOR_MU
-    if not BOT_CALISIYOR_MU:
-        return "Bot durdurulmuş durumda.", 400
-    
-    kurulan = 0
-    for symbol in TAKIP_EDILENLER:
-        if symbol in AKTIF_GRIDLER: continue
-        if len(AKTIF_GRIDLER) >= MODLAR[AKTIF_MOD]['maks_aktif_grid']: break
-        basarili, _ = grid_kur(symbol)
-        if basarili:
-            kurulan += 1
-            time.sleep(1)
-    return f"Tarama tamamlandı. Kurulan yeni grid sayısı: {kurulan}. <a href='/'>Geri dön</a>"
-
-@app.route('/kapat', methods=['GET'])
-def tumunu_kapat():
-    for sym in list(AKTIF_GRIDLER.keys()): 
-        tum_emirleri_iptal_et(sym)
-    AKTIF_GRIDLER.clear()
-    hafizayi_kaydet()
-    return "Tüm aktif gridler kapatıldı ve emirler iptal edildi. <a href='/'>Geri dön</a>"
 
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
@@ -368,6 +334,6 @@ def otomatik_arkaplan_tarayici():
         time.sleep(60)
 
 if __name__ == '__main__':
-    threading.Thread(target=webhook_ayarla, daemon=True).start()
+    threading.Thread(target=telegram_dinleyici, daemon=True).start()
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
