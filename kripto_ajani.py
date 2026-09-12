@@ -33,19 +33,25 @@ exchange.set_sandbox_mode(True)
 
 # BTC, ETH, AVAX hariç; düzgün trend takip eden 7 adet altcoin sepeti
 TAKIP_EDILENLER = [
-    'SOL/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 
-    'SUI/USDT:USDT', 'NEAR/USDT:USDT', 'ARB/USDT:USDT', 'APT/USDT:USDT'
+    'SOL/USDT:USDT', 
+    'XRP/USDT:USDT', 
+    'DOGE/USDT:USDT', 
+    'LTC/USDT:USDT', 
+    'LINK/USDT:USDT', 
+    'ADA/USDT:USDT', 
+    'UNI/USDT:USDT'
 ]
 
 COIN_ID_MAP = {
     'SOL/USDT:USDT': 1,
     'XRP/USDT:USDT': 2,
     'DOGE/USDT:USDT': 3,
-    'SUI/USDT:USDT': 4,
-    'NEAR/USDT:USDT': 5,
-    'ARB/USDT:USDT': 6,
-    'APT/USDT:USDT': 7
+    'LTC/USDT:USDT': 4,
+    'LINK/USDT:USDT': 5,
+    'ADA/USDT:USDT': 6,
+    'UNI/USDT:USDT': 7
 }
+
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
