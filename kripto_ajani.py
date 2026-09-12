@@ -23,7 +23,6 @@ exchange = ccxt.gate({
     'apiKey': '82cca880898a88d1a31e86d8eb474c57',
     'secret': '1ac479b9df5e6f2e89560b0d238a250694719b6fcae20da00ebc54ad6aeb8898',
     'enableRateLimit': True,
-    'timeout': 10000,
     'options': {
         'defaultType': 'swap'
     }
