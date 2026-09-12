@@ -42,11 +42,11 @@ EMA_PERIYOT = 50
 
 MODLAR = {
     "trend_grid": {
-        "grid_sayisi": 2,          # Küçük bakiye için kademe sayısı 2'ye düşürüldü
+        "grid_sayisi": 2,          
         "grid_aralik_pct": 0.02,   
-        "kaldirac": 2,              
-        "maks_aktif_grid": 2,      
-        "bakiye_orani": 0.80,      # Bakiyenin daha büyük kısmını kullanması sağlandı
+        "kaldirac": 1,              # Marjin aşımını önlemek için kaldıraç 1x yapıldı
+        "maks_aktif_grid": 3,      
+        "bakiye_orani": 0.20,      # Her bir grid için serbest bakiyenin %20'si ayrıldı
     }
 }
 AKTIF_MOD = "trend_grid"
@@ -156,15 +156,15 @@ def grid_kur(symbol):
         bal = exchange.fetch_balance()
         kasa = float(bal['free'].get('USDT', 0))
         
-        # Minimum bakiye sınırı 0.4 USDT olarak esnetildi
-        if kasa < 0.4: 
+        if kasa < 1.0: 
             print(f"❌ Yetersiz Serbest Bakiye: {kasa} USDT", flush=True)
             return False, "Bakiye yetersiz"
         
         if not set_leverage_safely(symbol, mod['kaldirac']):
             return False, "Kaldıraç hatası"
 
-        tahsis_usdt = kasa * mod['bakiye_orani'] * mod['kaldirac']
+        # Bütçenin anlık serbest bakiyeyi aşması engellendi
+        tahsis_usdt = min(kasa * mod['bakiye_orani'], kasa * 0.9)
         fiyat = float(df['close'].iloc[-1])
         grid_sayisi = mod['grid_sayisi']
         aralik = mod['grid_aralik_pct']
@@ -269,7 +269,7 @@ def otomatik_arkaplan_tarayici():
                         time.sleep(2)
         except Exception as e:
             print(f"Hata: {e}", flush=True)
-        time.sleep(60) # Sürekli log basmaması için tarama aralığı 60 saniyeye çıkarıldı
+        time.sleep(60)
 
 if __name__ == '__main__':
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
