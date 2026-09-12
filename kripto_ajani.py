@@ -23,7 +23,7 @@ exchange = ccxt.gate({
     'apiKey': '82cca880898a88d1a31e86d8eb474c57',
     'secret': '1ac479b9df5e6f2e89560b0d238a250694719b6fcae20da00ebc54ad6aeb8898',
     'enableRateLimit': True,
-    'timeout': 15000,
+    'timeout': 10000,
     'options': {
         'defaultType': 'swap'
     }
@@ -355,10 +355,11 @@ def otomatik_arkaplan_tarayici():
     
     while True:
         try:
-            print("🔄 Döngü taraması yapılıyor...", flush=True)
             if not BOT_CALISIYOR_MU:
                 time.sleep(5)
                 continue
+
+            print("🔄 Döngü taraması yapılıyor...", flush=True)
 
             try:
                 raw_positions = exchange.fetch_positions()
@@ -375,7 +376,10 @@ def otomatik_arkaplan_tarayici():
 
             for symbol, pos in aktif_borsa_map.items():
                 try:
-                    guncel_fiyat = exchange.fetch_ticker(symbol)['last']
+                    ticker = exchange.fetch_ticker(symbol)
+                    guncel_fiyat = ticker.get('last')
+                    if not guncel_fiyat:
+                        continue
                 except Exception: continue
 
                 yon = str(pos.get('side', '')).upper()
@@ -429,8 +433,12 @@ def otomatik_arkaplan_tarayici():
                     continue
 
                 try:
-                    guncel_fiyat = exchange.fetch_ticker(symbol)['last']
+                    ticker = exchange.fetch_ticker(symbol)
+                    guncel_fiyat = ticker.get('last')
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
+                    if not guncel_fiyat or not ohlcv:
+                        continue
+                        
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     if not hacim_ve_likidite_kontrolu(df):
                         continue
@@ -480,13 +488,13 @@ def otomatik_arkaplan_tarayici():
                 kasa_orani = 0.25 if sinyal["altin_atis"] else 0.20
 
                 try:
-                    toplam_bakiye = float(exchange.fetch_balance()['total'].get('USDT', 0))
+                    balance = exchange.fetch_balance()
+                    toplam_bakiye = float(balance['total'].get('USDT', 0))
                     if not set_leverage_safely(sinyal["symbol"], kaldirac): continue
                     
                     market = exchange.market(sinyal["symbol"])
                     miktar = float(exchange.amount_to_precision(sinyal["symbol"], max((toplam_bakiye * kasa_orani * kaldirac) / sinyal["fiyat"] / float(market.get('contractSize', 1.0)), float(market['limits']['amount']['min'] or 1.0))))
                     
-                    # Hedef RoE oranlarına göre TP ve SL fiyatlarının hesaplanması (%20 TP, %10 SL)
                     giris_fiyati = sinyal["fiyat"]
                     islem_yonu = sinyal["yon"]
                     
@@ -497,7 +505,6 @@ def otomatik_arkaplan_tarayici():
                         tp_fiyat = giris_fiyati * (1 - (0.20 / kaldirac))
                         sl_fiyat = giris_fiyati * (1 + (0.10 / kaldirac))
 
-                    # Gate.io borsasına tetikleyici fiyatları içeren parametrelerle emir gönderimi
                     emir_parametreleri = {
                         'take_profit': float(exchange.price_to_precision(sinyal["symbol"], tp_fiyat)),
                         'stop_loss': float(exchange.price_to_precision(sinyal["symbol"], sl_fiyat))
