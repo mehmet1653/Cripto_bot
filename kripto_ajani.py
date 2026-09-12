@@ -1,4 +1,3 @@
-
 import os
 import time
 import threading
@@ -472,6 +471,12 @@ def otomatik_arkaplan_tarayici():
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
                 if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON: break
+                
+                # 🛑 Minimum Puan Filtresi (70 altı sinyaller elenir)
+                if sinyal["puan"] < 70:
+                    print(f"🚫 [DÜŞÜK PUAN] {sinyal['symbol']} puanı ({sinyal['puan']}) 70'in altında olduğu için elendi.", flush=True)
+                    continue
+
                 if sum(1 for p in aktif_borsa_map.values() if str(p.get('side', '')).upper() == sinyal["yon"]) >= MAKSIMUM_AYNI_YON_SAYISI: continue
 
                 kaldirac = 20 if sinyal["altin_atis"] else 10
