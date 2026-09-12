@@ -35,33 +35,35 @@ exchange.set_sandbox_mode(True)
 
 KOMISYON_ORANI = 0.001
 
-# ==================== 4 COİN ====================
+# ==================== DÜŞÜK FİYATLI 4 COİN ====================
 TAKIP_EDILENLER = [
-    'XRP/USDT:USDT', 'DOGE/USDT:USDT',
-    'AVAX/USDT:USDT', 'SOL/USDT:USDT'
+    'XRP/USDT:USDT',    # ~1.36 USDT
+    'DOGE/USDT:USDT',   # ~0.086 USDT
+    'ADA/USDT:USDT',    # ~0.5 USDT
+    'TRX/USDT:USDT'     # ~0.15 USDT
 ]
 
 # ==================== GRID PARAMETRELERİ ====================
 GRID = {
-    "aciklama": "📊 Grid Bot v5 (Sinyal Bazlı)",
+    "aciklama": "📊 Grid Bot v6 (Düşük Fiyatlı + Sinyal Bazlı)",
     "grid_aralik_pct": 0.01,
     "grid_sayisi": 8,
     "grid_kar_pct": 0.006,
     "kaldirac": 3,
-    "toplam_yatirim_pct": 0.50,
+    "toplam_yatirim_pct": 0.60,      # %50 → %60 (bütçe artırıldı)
     "max_coin": 4,
     # Koruma
-    "adx_dur_esik": 25,              # 40 → 25 (yatay piyasa için sıkı)
+    "adx_dur_esik": 25,
     "fiyat_disi_pct": 0.03,
     "gunluk_max_kayip_pct": 0.03,
     "min_hacim_usdt": 10_000_000,
     # Cooldown
     "grid_cooldown_dk": 15,
-    # ============ YATAY PİYASA FİLTRELERİ (YENİ) ============
-    "yatay_adx_max": 20,             # ADX < 20 (trend yok)
-    "yatay_bollinger_max": 2.0,      # Bollinger genişliği < %2
-    "yatay_20mum_max": 3.0,          # 20 mum aralığı < %3
-    "yatay_hacim_min": 0.5,          # Hacim > ortalama × 0.5
+    # YATAY PİYASA FİLTRELERİ
+    "yatay_adx_max": 22,             # 20 → 22 (biraz esnek)
+    "yatay_bollinger_max": 2.5,      # 2.0 → 2.5 (biraz esnek)
+    "yatay_20mum_max": 3.5,          # 3.0 → 3.5
+    "yatay_hacim_min": 0.4,          # 0.5 → 0.4
 }
 
 # ==================== DURUMLAR ====================
@@ -76,6 +78,7 @@ ANALITIK = {
     "grid_kurulum": 0,
     "trend_kapatma": 0,
     "yatay_red": 0,
+    "emir_hatasi": 0,
 }
 
 # ==================== SUPABASE ====================
@@ -86,7 +89,7 @@ def hafizayi_yukle():
         "analitik": ANALITIK.copy(),
     }
     try:
-        r = supabase.table("bot_hafiza").select("*").eq("id", 90).execute()
+        r = supabase.table("bot_hafiza").select("*").eq("id", 100).execute()
         if r.data:
             v = r.data[0]
             return {
@@ -97,7 +100,7 @@ def hafizayi_yukle():
     except Exception:
         pass
     try:
-        supabase.table("bot_hafiza").upsert({"id": 90, **varsayilan}).execute()
+        supabase.table("bot_hafiza").upsert({"id": 100, **varsayilan}).execute()
     except Exception:
         pass
     return varsayilan
@@ -105,7 +108,7 @@ def hafizayi_yukle():
 def hafizayi_kaydet():
     try:
         supabase.table("bot_hafiza").upsert({
-            "id": 90,
+            "id": 100,
             "aktif_gridler": AKTIF_GRIDLER,
             "grid_cooldownlar": GRID_COOLDOWNLAR,
             "analitik": ANALITIK,
@@ -207,12 +210,8 @@ def hacim_uygun_mu(symbol):
     except Exception:
         return True, 0
 
-# ==================== YATAY PİYASA KONTROLÜ (YENİ) ====================
+# ==================== YATAY PİYASA KONTROLÜ ====================
 def yatay_mi(symbol):
-    """
-    Piyasa yatay mı? Grid için uygun mu?
-    4 filtre: ADX, Bollinger, 20mum aralığı, hacim
-    """
     try:
         ohlcv = fetch_ohlcv_guvenli(symbol, '15m', limit=50)
         if ohlcv is None:
@@ -222,12 +221,12 @@ def yatay_mi(symbol):
         if len(df) < 30:
             return False, "yetersiz veri"
         
-        # ===== 1. ADX =====
+        # 1. ADX
         adx = adx_hesapla(df, 14)
         if adx > GRID['yatay_adx_max']:
             return False, f"ADX {adx:.1f} > {GRID['yatay_adx_max']}"
         
-        # ===== 2. Bollinger genişliği =====
+        # 2. Bollinger genişliği
         sma = df['close'].rolling(20).mean()
         std = df['close'].rolling(20).std()
         ust = sma + (std * 2)
@@ -236,7 +235,7 @@ def yatay_mi(symbol):
         if pd.isna(boll_gen) or boll_gen > GRID['yatay_bollinger_max']:
             return False, f"Bollinger %{boll_gen:.2f} > %{GRID['yatay_bollinger_max']}"
         
-        # ===== 3. Son 20 mum aralığı =====
+        # 3. Son 20 mum aralığı
         son_20 = df.tail(20)
         if len(son_20) < 20:
             return False, "yetersiz 20 mum"
@@ -244,13 +243,13 @@ def yatay_mi(symbol):
         if max_min > GRID['yatay_20mum_max']:
             return False, f"20mum %{max_min:.2f} > %{GRID['yatay_20mum_max']}"
         
-        # ===== 4. Hacim =====
+        # 4. Hacim
         hacim_ort = df['volume'].rolling(20).mean().iloc[-1]
         son_hacim = df['volume'].iloc[-1]
         if pd.isna(hacim_ort) or son_hacim < hacim_ort * GRID['yatay_hacim_min']:
             return False, "hacim düşük"
         
-        return True, f"YATAY OK (ADX {adx:.1f}, Boll %{boll_gen:.2f}, 20m %{max_min:.2f})"
+        return True, f"YATAY OK (ADX {adx:.1f}, Boll %{boll_gen:.2f})"
     except Exception as e:
         return False, f"hata: {str(e)[:30]}"
 
@@ -286,7 +285,7 @@ def grid_olustur(symbol):
         if not uygun:
             return None, f"hacim düşük"
         
-        # 2. YATAY PİYASA KONTROLÜ (YENİ)
+        # 2. Yatay piyasa kontrolü
         yatay, mesaj = yatay_mi(symbol)
         if not yatay:
             ANALITIK["yatay_red"] = ANALITIK.get("yatay_red", 0) + 1
@@ -311,8 +310,14 @@ def grid_olustur(symbol):
         
         tum_emirleri_iptal_et(symbol)
         
+        # Minimum miktar kontrolü
         market_info = exchange.market(symbol)
         min_amount = market_info.get('limits', {}).get('amount', {}).get('min', 0)
+        
+        # Miktar minimum altındaysa, minimuma çıkar
+        if min_amount and miktar_per_grid < min_amount:
+            miktar_per_grid = min_amount * 1.1  # %10 üstü
+            print(f"⚠️ {symbol} miktar min altıydı → {miktar_per_grid:.4f} yapıldı", flush=True)
         
         emirler = []
         for i in range(GRID['grid_sayisi']):
@@ -323,6 +328,7 @@ def grid_olustur(symbol):
                     if miktar <= 0:
                         continue
                     if min_amount and miktar < min_amount:
+                        print(f"⚠️ {symbol} emir #{i}: min altı, atlandı", flush=True)
                         continue
                     emir = exchange.create_order(
                         symbol, 'limit', 'buy', miktar,
@@ -332,11 +338,13 @@ def grid_olustur(symbol):
                         "tip": "AL", "fiyat": seviye, "miktar": miktar,
                         "id": emir.get('id'), "durum": "acik"
                     })
-                except Exception:
+                except Exception as e:
+                    print(f"⚠️ Emir hatası #{i}: {e}", flush=True)
+                    ANALITIK["emir_hatasi"] = ANALITIK.get("emir_hatasi", 0) + 1
                     continue
         
         if len(emirler) == 0:
-            return None, "0 emir"
+            return None, "0 emir (min miktar sorunu)"
         
         AKTIF_GRIDLER[symbol] = {
             "ust": ust, "alt": alt, "adim": adim,
@@ -352,7 +360,7 @@ def grid_olustur(symbol):
             f"📊 *GRID KURULDU*\n"
             f"📌 `{symbol[:12]}`\n"
             f"💰 `{fiyat}` | Aralık: `{alt:.4f}-{ust:.4f}`\n"
-            f"📈 {len(emirler)} AL emri\n"
+            f"📈 {len(emirler)} AL emri | Miktar: `{miktar_per_grid:.4f}`\n"
             f"🎯 {mesaj}"
         )
         return True, "OK"
@@ -440,7 +448,7 @@ def grid_takip(symbol):
 # ==================== FLASK ====================
 @app.route('/')
 def home():
-    return f"Grid v5 | Aktif: {len(AKTIF_GRIDLER)} | Kâr: {ANALITIK.get('toplam_kar', 0):.4f}"
+    return f"Grid v6 | Aktif: {len(AKTIF_GRIDLER)} | Kâr: {ANALITIK.get('toplam_kar', 0):.4f}"
 
 # ==================== TELEGRAM ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -479,13 +487,14 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cd_detay += f"• `{s[:10]}` → {dk} dk\n"
         
         mesaj = (
-            f"📊 *GRID BOT v5 (SİNYAL BAZLI)*\n\n"
+            f"📊 *GRID BOT v6*\n\n"
             f"💰 Toplam: `{total:.2f}` (Serbest: `{free:.2f}`)\n"
             f"📈 PnL: `{pnl:+.4f}`\n"
             f"💵 Kâr: `{ANALITIK.get('toplam_kar',0):+.4f}`\n"
             f"🎯 Tetik: `{ANALITIK.get('toplam_grid_tetiklenme',0)}`\n"
             f"🔥 Kapatma: `{ANALITIK.get('trend_kapatma',0)}`\n"
             f"🚫 Yatay Red: `{ANALITIK.get('yatay_red',0)}`\n"
+            f"⚠️ Emir Hata: `{ANALITIK.get('emir_hatasi',0)}`\n"
             f"📊 Grid: `{len(AKTIF_GRIDLER)}/{GRID['max_coin']}`\n"
             f"{grid_detay}"
             f"{cd_detay}"
@@ -538,12 +547,28 @@ async def temizle_komutu(update, context):
     await update.message.reply_text("🗑️ *Temizlendi.*", parse_mode='Markdown')
 
 async def test_komutu(update, context):
-    """Şu an hangi coin yatay? Test et."""
     satirlar = ["🎯 *YATAY PİYASA TESTİ*\n"]
     for symbol in TAKIP_EDILENLER:
         yatay, mesaj = yatay_mi(symbol)
         ikon = "✅" if yatay else "❌"
         satirlar.append(f"{ikon} `{symbol[:10]}`: {mesaj}")
+    await update.message.reply_text("\n".join(satirlar), parse_mode='Markdown')
+
+async def fiyat_komutu(update, context):
+    """Coin fiyatlarını ve min miktarları göster."""
+    satirlar = ["💰 *FİYATLAR + MİN MİKTAR*\n"]
+    for symbol in TAKIP_EDILENLER:
+        try:
+            ticker = exchange.fetch_ticker(symbol)
+            fiyat = ticker['last']
+            market = exchange.market(symbol)
+            min_amount = market.get('limits', {}).get('amount', {}).get('min', 0)
+            min_usdt = min_amount * fiyat if min_amount else 0
+            satirlar.append(
+                f"`{symbol[:10]}` | Fiyat: `{fiyat}` | Min: `{min_amount}` (~`{min_usdt:.2f}` USDT)"
+            )
+        except Exception:
+            satirlar.append(f"`{symbol[:10]}` HATA")
     await update.message.reply_text("\n".join(satirlar), parse_mode='Markdown')
 
 async def grid_detay_komutu(update, context):
@@ -556,6 +581,8 @@ async def grid_detay_komutu(update, context):
         satirlar.append(f"Aralık: `{g['alt']:.4f} - {g['ust']:.4f}`")
         satirlar.append(f"Kâr: `{g.get('toplam_kar',0):+.4f}` USDT")
         satirlar.append(f"Emir: `{len(g['emirler'])}`")
+        for e in g['emirler'][:3]:
+            satirlar.append(f"  • AL @ `{e['fiyat']:.4f}` x `{e['miktar']:.4f}`")
     await update.message.reply_text("\n".join(satirlar), parse_mode='Markdown')
 
 async def cooldown_komutu(update, context):
@@ -568,8 +595,7 @@ async def cooldown_komutu(update, context):
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALITIK
 
-    print(f"📊 [GRID v5 SİNYAL BAZLI] Başladı", flush=True)
-    print(f"💰 {len(TAKIP_EDILENLER)} coin | Yatay filtre: ADX<{GRID['yatay_adx_max']}, Boll<%{GRID['yatay_bollinger_max']}, 20m<%{GRID['yatay_20mum_max']}", flush=True)
+    print(f"📊 [GRID v6] Başladı | {len(TAKIP_EDILENLER)} coin", flush=True)
 
     try:
         exchange.load_markets()
@@ -612,7 +638,7 @@ def otomatik_arkaplan_tarayici():
 
             dongu_sayaci += 1
             if dongu_sayaci % 40 == 0:
-                print(f"🔍 #{dongu_sayaci} | Grid:{len(AKTIF_GRIDLER)} | Yatay Red:{ANALITIK.get('yatay_red',0)} | Kâr:{ANALITIK.get('toplam_kar',0):+.4f}", flush=True)
+                print(f"🔍 #{dongu_sayaci} | Grid:{len(AKTIF_GRIDLER)} | Kâr:{ANALITIK.get('toplam_kar',0):+.4f}", flush=True)
 
         except Exception as e:
             print(f"⚠️ {e}", flush=True)
@@ -646,6 +672,7 @@ if __name__ == '__main__':
     app_tg.add_handler(CommandHandler("grid_detay", grid_detay_komutu))
     app_tg.add_handler(CommandHandler("cooldown", cooldown_komutu))
     app_tg.add_handler(CommandHandler("test", test_komutu))
+    app_tg.add_handler(CommandHandler("fiyat", fiyat_komutu))
 
     while True:
         try:
