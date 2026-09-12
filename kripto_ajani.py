@@ -81,7 +81,10 @@ def hafizayi_yukle():
         },
         "cooldownlar": {}
     }
-    supabase.table("bot_hafiza").upsert({"id": 1, **varsayilan}).execute()
+    try:
+        supabase.table("bot_hafiza").upsert({"id": 1, **varsayilan}).execute()
+    except Exception as e:
+        print(f"⚠️ Hafıza tablo oluşturma/ilk kayıt hatası (Tablo var mı?): {e}", flush=True)
     return varsayilan
 
 def hafizayi_kaydet():
