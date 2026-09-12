@@ -34,34 +34,37 @@ exchange = ccxt.gate({
 })
 exchange.set_sandbox_mode(True)
 
-# ==================== 6 COİN & SEKTÖRLER ====================
+# ==================== 10 COİN & SEKTÖRLER ====================
 TAKIP_EDILENLER = [
     'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT',
-    'ADA/USDT:USDT', 'DOGE/USDT:USDT', 'AVAX/USDT:USDT'
+    'ADA/USDT:USDT', 'DOGE/USDT:USDT', 'AVAX/USDT:USDT',
+    'LINK/USDT:USDT', 'MATIC/USDT:USDT', 'NEAR/USDT:USDT', 'ATOM/USDT:USDT'
 ]
 
 SEKTOR_MAP = {
     'ETH/USDT:USDT': 'ETH',
-    'SOL/USDT:USDT': 'L1', 'ADA/USDT:USDT': 'L1', 'AVAX/USDT:USDT': 'L1',
+    'SOL/USDT:USDT': 'L1', 'ADA/USDT:USDT': 'L1', 'AVAX/USDT:USDT': 'L1', 'NEAR/USDT:USDT': 'L1', 'ATOM/USDT:USDT': 'L1',
     'XRP/USDT:USDT': 'PAYMENT',
-    'DOGE/USDT:USDT': 'MEME'
+    'DOGE/USDT:USDT': 'MEME',
+    'LINK/USDT:USDT': 'DEFI',
+    'MATIC/USDT:USDT': 'L2'
 }
 
 ZAMAN_DILIMI = "1h"
 
 # ==================== TREND & GRID PARAMETRELERİ ====================
-# ADX Histerezis (Testere döngüsünü engellemek için ölü bölge)
-ADX_ACIKLAMA_ESIK = 32.0  # Trend yoksa / yataydaysa grid açmak için maksimum sınır
-ADX_KAPATMA_ESIK = 35.0   # Güçlü trend başladığında acil grid kapatma sınırı
+# ADX Eşikleri esnetildi (40.0 yapıldı ki çok sıkı takılmasın)
+ADX_ACIKLAMA_ESIK = 40.0  
+ADX_KAPATMA_ESIK = 45.0   
 
 MODLAR = {
     "trend_grid": {
         "aciklama": "📊 Trend Filtreli Dinamik Grid Botu",
-        "grid_sayisi": 5,          # Her coin için kurulacak kademe sayısı
-        "grid_aralik_pct": 0.02,   # %2 aralıklarla kademeler
+        "grid_sayisi": 5,          
+        "grid_aralik_pct": 0.02,   
         "kaldirac": 5,
-        "maks_aktif_grid": 2,      # Aynı anda en fazla kaç coinde grid açık olsun
-        "bakiye_orani": 0.20,      # Her grid grubu için ayrılacak kasa payı
+        "maks_aktif_grid": 3,      
+        "bakiye_orani": 0.20,      
         "gunluk_max_kayip_pct": 0.05,
     }
 }
@@ -71,7 +74,7 @@ AKTIF_MOD = "trend_grid"
 BOT_CALISIYOR_MU = True
 GUN_BASI_KASA = None
 GUN_BASI_TARIH = None
-AKTIF_GRIDLER = {}  # {symbol: {"yon": "LONG/SHORT", "kademeler": [...], "ana_fiyat": ...}}
+AKTIF_GRIDLER = {} 
 COIN_COOLDOWNLAR = {}
 ANALITIK = {
     "grid_tetiklenme": 0,
@@ -184,7 +187,7 @@ def fetch_ohlcv_guvenli(symbol, timeframe, limit=100):
 
 # ==================== GÖSTERGELER & TREND ANALİZİ ====================
 def ema_hesapla(close, period=200):
-    return close.ema(period) if hasattr(close, 'ema') else close.ewm(span=period, adjust=False).mean()
+    return close.ewm(span=period, adjust=False).mean()
 
 def adx_hesapla(df, period=14):
     try:
@@ -205,47 +208,42 @@ def adx_hesapla(df, period=14):
         return pd.Series(0, index=df.index)
 
 def piyasa_analiz_et(df):
-    """
-    Piyasanın trendde mi yoksa yatayda (grid'e uygun) mu olduğunu inceler.
-    Döner: 'LONG_GRID', 'SHORT_GRID' veya 'TREND_VAR' (Grid açılamaz)
-    """
     close = df['close']
     son_fiyat = close.iloc[-1]
     
     ema200 = ema_hesapla(close, 200).iloc[-1]
-    adx = adx_hesapla(df, 14).iloc[-1]
+    adx_series = adx_hesapla(df, 14)
+    adx = adx_series.iloc[-1] if not adx_series.empty else 0.0
     
-    # Eğer ADX çok yüksekse güçlü trend vardır, grid açılmaz
     if not pd.isna(adx) and adx > ADX_ACIKLAMA_ESIK:
         return None, f"ADX yüksek ({adx:.1f} > {ADX_ACIKLAMA_ESIK})"
     
-    # Trend yönü filtresi (EMA200'e göre)
     if son_fiyat > ema200:
-        return "LONG_GRID", f"Yatay/Yükseliş eğilimli (ADX: {adx:.1f})"
+        return "LONG_GRID", f"Yatay/Yükseliş (ADX: {adx:.1f})"
     else:
-        return "SHORT_GRID", f"Yatay/Düşüş eğilimli (ADX: {adx:.1f})"
+        return "SHORT_GRID", f"Yatay/Düşüş (ADX: {adx:.1f})"
 
 # ==================== GRID YÖNETİMİ ====================
 def grid_kur(symbol):
     mod = mod_al()
     df_raw = fetch_ohlcv_guvenli(symbol, ZAMAN_DILIMI, limit=250)
     if df_raw is None or len(df_raw) < 200:
-        return False
+        return False, "Veri yetersiz"
     
     df = pd.DataFrame(df_raw, columns=['timestamp','open','high','low','close','volume'])
     yon_tipi, neden = piyasa_analiz_et(df)
     
     if not yon_tipi:
-        return False
+        return False, neden
 
     try:
         bal = exchange.fetch_balance()
         kasa = float(bal['total'].get('USDT', 0))
         if kasa < 20:
-            return False
+            return False, "Bakiye yetersiz"
         
         if not set_leverage_and_margin_safely(symbol, mod['kaldirac']):
-            return False
+            return False, "Kaldıraç hatası"
 
         tahsis_usdt = kasa * mod['bakiye_orani']
         fiyat = float(df['close'].iloc[-1])
@@ -261,7 +259,6 @@ def grid_kur(symbol):
         cs = float(market_info.get('contractSize', 1.0))
 
         if yon_tipi == "LONG_GRID":
-            # Fiyatın altında kademeli AL emirleri kuruyoruz (Düştükçe al, yükseldikçe sat mantığı)
             for i in range(grid_sayisi):
                 kademe_fiyat = fiyat * (1 - (i + 1) * aralik)
                 kademe_fiyat = float(exchange.price_to_precision(symbol, kademe_fiyat))
@@ -271,7 +268,6 @@ def grid_kur(symbol):
                 emir = exchange.create_order(symbol, 'limit', 'buy', miktar, kademe_fiyat)
                 kademeler.append({"id": emir['id'], "fiyat": kademe_fiyat, "miktar": miktar, "tip": "buy"})
         else:
-            # SHORT_GRID: Fiyatın üstünde kademeli SAT emirleri kuruyoruz
             for i in range(grid_sayisi):
                 kademe_fiyat = fiyat * (1 + (i + 1) * aralik)
                 kademe_fiyat = float(exchange.price_to_precision(symbol, kademe_fiyat))
@@ -294,10 +290,9 @@ def grid_kur(symbol):
             f"📌 `{symbol[:12]}` | Fiyat: `{fiyat}`\n"
             f"📐 Aralık: `±%{aralik*100}` | {grid_sayisi} Kademe Emri"
         )
-        return True
+        return True, "Başarılı"
     except Exception as e:
-        print(f"❌ Grid Kurma Hatası ({symbol}): {e}", flush=True)
-        return False
+        return False, str(e)
 
 # ==================== FLASK ====================
 @app.route('/')
@@ -318,7 +313,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 detay += f"• `{sym[:12]}` : {g['yon']} | {len(g['kademeler'])} Emir\n"
 
         mesaj = (
-            f"🤖 *TREND FİLTRELİ GRID BOTU*\n\n"
+            f"🤖 *TREND FİLTRELİ GRID BOTU (10 Coin)*\n\n"
             f"💰 Kasa: `{total:.2f}` USDT (Serbest: `{free:.2f}`)\n"
             f"📊 Aktif Grid Sayısı: `{len(AKTIF_GRIDLER)}/{MODLAR[AKTIF_MOD]['maks_aktif_grid']}`\n"
             f"{detay}"
@@ -338,7 +333,7 @@ async def durdur_komutu(update, context):
     await update.message.reply_text("⏸️ *Durduruldu.*", parse_mode='Markdown')
 
 async def kapat_komutu(update, context):
-    await update.message.reply_text("🛑 *Tüm gridler iptal ediliyor ve pozisyonlar kapatılıyor...*", parse_mode='Markdown')
+    await update.message.reply_text("🛑 *Tüm gridler iptal ediliyor...*", parse_mode='Markdown')
     try:
         for sym in list(AKTIF_GRIDLER.keys()):
             tum_emirleri_iptal_et(sym)
@@ -351,14 +346,14 @@ async def kapat_komutu(update, context):
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
-
-    print(f"🎯 [TREND GRID BOT] Başladı", flush=True)
+    print(f"🎯 [TREND GRID BOT] Başladı (10 Coin Taranıyor)", flush=True)
 
     try:
         exchange.load_markets()
     except Exception:
         pass
 
+    dongu_sayaci = 0
     while True:
         try:
             if not BOT_CALISIYOR_MU:
@@ -367,35 +362,41 @@ def otomatik_arkaplan_tarayici():
             mod = mod_al()
             gunluk = gunluk_kontrol()
             if gunluk is not None and gunluk <= -mod['gunluk_max_kayip_pct']:
-                telegram_mesaj_gonder(f"🛑 *Günlük zarar limiti aşıldı!* (%{gunluk*100:.1f}) Bot durduruldu.")
+                telegram_mesaj_gonder(f"🛑 *Günlük zarar limiti aşıldı!* (%{gunluk*100:.1f})")
                 BOT_CALISIYOR_MU = False
                 continue
 
-            # 1. Mevcut açık gridleri kontrol et (ADX patlamış mı veya trend tersine dönmüş mü?)
+            # 1. Mevcut açık gridleri kontrol et
             for symbol in list(AKTIF_GRIDLER.keys()):
                 df_raw = fetch_ohlcv_guvenli(symbol, ZAMAN_DILIMI, limit=100)
                 if df_raw is not None:
                     df = pd.DataFrame(df_raw, columns=['timestamp','open','high','low','close','volume'])
                     adx_deger = adx_hesapla(df, 14).iloc[-1]
                     
-                    # Eğer ADX acil kapatma eşiğini geçtiyse (Güçlü trend başladı, grid zarar yazabilir)
                     if not pd.isna(adx_deger) and adx_deger > ADX_KAPATMA_ESIK:
-                        telegram_mesaj_gonder(f"🚨 *GRID KAPATILDI* → `{symbol[:12]}`\nSebep: ADX {adx_deger:.1f} > {ADX_KAPATMA_ESIK} (Güçlü Trend)")
+                        telegram_mesaj_gonder(f"🚨 *GRID KAPATILDI* → `{symbol[:12]}`\nSebep: ADX {adx_deger:.1f} > {ADX_KAPATMA_ESIK}")
                         tum_emirleri_iptal_et(symbol)
                         AKTIF_GRIDLER.pop(symbol, None)
-                        COIN_COOLDOWNLAR[symbol] = time.time() + 1800  # 30 dk cooldown
+                        COIN_COOLDOWNLAR[symbol] = time.time() + 1800
                         hafizayi_kaydet()
 
-            # 2. Uygun coinlere yeni grid kur
+            # 2. 10 coini tara ve uygun olanlara grid kur
             if len(AKTIF_GRIDLER) < mod['maks_aktif_grid']:
                 su_an = time.time()
+                debug_loglar = []
                 for symbol in TAKIP_EDILENLER:
                     if symbol in AKTIF_GRIDLER: continue
                     if su_an < COIN_COOLDOWNLAR.get(symbol, 0): continue
                     if len(AKTIF_GRIDLER) >= mod['maks_aktif_grid']: break
                     
-                    if grid_kur(symbol):
+                    basarili, sebep = grid_kur(symbol)
+                    debug_loglar.append(f"{symbol.split('/')[0]}:{'OK' if basarili else sebep}")
+                    if basarili:
                         time.sleep(2)
+                
+                dongu_sayaci += 1
+                if dongu_sayaci % 10 == 0:
+                    print(f"🔍 Tarama #{dongu_sayaci} | {' | '.join(debug_loglar[:5])}", flush=True)
 
         except Exception as e:
             print(f"⚠️ Grid Döngü Hatası: {e}", flush=True)
