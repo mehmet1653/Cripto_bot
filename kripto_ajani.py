@@ -33,11 +33,10 @@ exchange = ccxt.gate({
 })
 exchange.set_sandbox_mode(True)
 
-# ==================== 10 COİN ====================
+# ==================== SORUNSUZ COİNLER ====================
 TAKIP_EDILENLER = [
     'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT',
-    'ADA/USDT:USDT', 'DOGE/USDT:USDT', 'AVAX/USDT:USDT',
-    'LINK/USDT:USDT', 'MATIC/USDT:USDT', 'NEAR/USDT:USDT', 'ATOM/USDT:USDT'
+    'ADA/USDT:USDT', 'DOGE/USDT:USDT', 'AVAX/USDT:USDT', 'LINK/USDT:USDT'
 ]
 
 ZAMAN_DILIMI = "1h"
@@ -45,11 +44,11 @@ EMA_PERIYOT = 50
 
 MODLAR = {
     "trend_grid": {
-        "grid_sayisi": 5,          
+        "grid_sayisi": 3,          # Kasanın küçük olması nedeniyle kademe sayısı düşürüldü
         "grid_aralik_pct": 0.02,   
-        "kaldirac": 3,              # Kaldıracı biraz düşürerek teminat marjını rahatlatıyoruz
-        "maks_aktif_grid": 5,      
-        "bakiye_orani": 0.10,      # Kasayı zorlamamak için oran %10'a çekildi
+        "kaldirac": 2,              
+        "maks_aktif_grid": 3,      
+        "bakiye_orani": 0.50,      # Mevcut 2.7 USDT bakiye ile işlem açabilmesi için oran artırıldı
     }
 }
 AKTIF_MOD = "trend_grid"
@@ -118,14 +117,13 @@ def set_leverage_safely(symbol, leverage):
         return False
 
 def fetch_ohlcv_guvenli(symbol, timeframe, limit=100):
-    for attempt in range(3):
+    for attempt in range(2):
         try:
             data = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
             if data and len(data) > 0:
                 return data
         except Exception as e:
-            print(f"⚠️ OHLCV Veri Çekme Hatası ({symbol}, Deneme {attempt+1}): {e}", flush=True)
-            if attempt == 2: return None
+            print(f"⚠️ OHLCV Hatası ({symbol}): {e}", flush=True)
             time.sleep(1)
     return None
 
@@ -158,8 +156,8 @@ def grid_kur(symbol):
 
     try:
         bal = exchange.fetch_balance()
-        kasa = float(bal['free'].get('USDT', 0)) # Serbest bakiye baz alınıyor
-        if kasa < 5: 
+        kasa = float(bal['free'].get('USDT', 0))
+        if kasa < 1: 
             print(f"❌ Yetersiz Serbest Bakiye: {kasa} USDT", flush=True)
             return False, "Bakiye yetersiz"
         
@@ -175,7 +173,7 @@ def grid_kur(symbol):
         
         market_info = exchange.market(symbol)
         min_amount = float(market_info['limits']['amount']['min'] or 1.0)
-        tekil_butce = tahsis_usdt / grid_sayisi
+        tekil_butce = max(tahsis_usdt / grid_sayisi, min_amount * fiyat / mod['kaldirac'])
 
         kademeler = []
         
@@ -230,7 +228,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for sym, g in AKTIF_GRIDLER.items():
         temiz = sym.replace('/USDT:USDT', '')
         detay += f"- {temiz} : {g['yon']} | {len(g['kademeler'])} Emir\n"
-    await update.message.reply_text(f"🤖 BOT DURUMU\nKasa: {total:.2f} USDT (Serbest: {free:.2f})\nAktif: {len(AKTIF_GRIDLER)}/5\n{detay}")
+    await update.message.reply_text(f"🤖 BOT DURUMU\nKasa: {total:.2f} USDT (Serbest: {free:.2f})\nAktif: {len(AKTIF_GRIDLER)}/3\n{detay}")
 
 async def baslat_komutu(update, context):
     global BOT_CALISIYOR_MU
@@ -261,7 +259,7 @@ async def manuel_grid_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if kurulan > 0:
         await update.message.reply_text(f"✅ Toplam {kurulan} yeni grid başarıyla kuruldu!")
     else:
-        await update.message.reply_text("⚠️ Eklenebilecek boş slot kalmadı veya bakiye/hata engeline takıldı.")
+        await update.message.reply_text("⚠️ Eklenebilecek boş slot kalmadı veya bakiye yetersiz.")
 
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
