@@ -10,7 +10,7 @@ import numpy as np
 from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
-from sklearn.ensembleਣ RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
 
 app = Flask(__name__)
@@ -398,13 +398,9 @@ def flask_thread():
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)), use_reloader=False)
 
 if __name__ == '__main__':
-    # Arka plan tarayıcısını ayrı bir thread'e alıyoruz
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    
-    # Flask sunucusunu ayrı bir thread'e alıyoruz ki ana thread'i bloke etmesin
     threading.Thread(target=flask_thread, daemon=True).start()
     
-    # python-telegram-bot'un orijinal run_polling() yapısı ana thread'de çalışıyor
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
