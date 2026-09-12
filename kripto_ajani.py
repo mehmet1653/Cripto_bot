@@ -16,6 +16,9 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = "8870934003:AAGIpiwdgpnQVW7nbJIRcR0dOLOzj-MOZsA"
 CHAT_ID = "6929517567"
 
+# Railway proje domain adresinizi buraya tırnak içinde yazın (Örn: https://criptobot-production.up.railway.app)
+RAILWAY_URL = "https://criptobot-production.up.railway.app" 
+
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://rllpcylzhptqwzmzehnv.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "Sb_secret_ln9y67Ep_zCtOQ9Q2NE8KQ_nf0gKkmO")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -198,7 +201,7 @@ def telegram_mesaj_gonder(mesaj):
 def home():
     return f"Hibrit Bot Aktif | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
 
-# Webhook veya komut tetikleyicileri için Flask endpoint'i (Conflict hatasını kesin çözer)
+# Webhook Endpoint (Telegram mesajları buraya düşer)
 @app.route('/webhook', methods=['POST'])
 def telegram_webhook():
     global BOT_CALISIYOR_MU
@@ -234,6 +237,15 @@ def telegram_webhook():
     except Exception as e:
         print(f"Webhook hata: {e}", flush=True)
     return "OK", 200
+
+def webhook_ayarla():
+    if RAILWAY_URL and "railway.app" in RAILWAY_URL:
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={RAILWAY_URL}/webhook"
+            res = requests.get(url, timeout=10)
+            print(f"🔗 Webhook Kayıt Sonucu: {res.text}", flush=True)
+        except Exception as e:
+            print(f"⚠️ Webhook ayarlama hatası: {e}", flush=True)
 
 def durum_mesaji_olustur_ve_gonder():
     try:
@@ -461,5 +473,8 @@ def otomatik_arkaplan_tarayici():
 if __name__ == '__main__':
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
-    print("🤖 Bot ve Web Sunucusu Başlatıldı...", flush=True)
+    # Bot başlarken webhook adresini otomatik Telegram'a bildiriyoruz
+    threading.Thread(target=webhook_ayarla, daemon=True).start()
+    
+    print("🤖 Bot ve Webhook Sunucusu Başlatıldı...", flush=True)
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)), use_reloader=False)
