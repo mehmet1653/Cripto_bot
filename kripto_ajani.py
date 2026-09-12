@@ -6,7 +6,7 @@ import ccxt
 import pandas as pd
 import ta
 import numpy as np
-from flask import Flask
+from flask import Flask, request as flask_request
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
 
@@ -198,6 +198,92 @@ def telegram_mesaj_gonder(mesaj):
 def home():
     return f"Hibrit Bot Aktif | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
 
+# Webhook veya komut tetikleyicileri için Flask endpoint'i (Conflict hatasını kesin çözer)
+@app.route('/webhook', methods=['POST'])
+def telegram_webhook():
+    global BOT_CALISIYOR_MU
+    try:
+        data = flask_request.get_json()
+        if not data or 'message' not in data:
+            return "OK", 200
+        
+        message = data['message']
+        text = message.get('text', '')
+        chat_id = str(message.get('chat', {}).get('id', ''))
+        
+        if chat_id != CHAT_ID:
+            return "OK", 200
+            
+        if text.startswith('/durum'):
+            durum_mesaji_olustur_ve_gonder()
+        elif text.startswith('/baslat'):
+            BOT_CALISIYOR_MU = True
+            telegram_mesaj_gonder("🟢 *Bot Aktif Edildi!*")
+        elif text.startswith('/durdur'):
+            BOT_CALISIYOR_MU = False
+            telegram_mesaj_gonder("⏸️ *Bot durduruldu.*")
+        elif text.startswith('/kapat'):
+            telegram_mesaj_gonder("🔄 Tüm pozisyonlar kapatılıyor...")
+            for pos in exchange.fetch_positions():
+                kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
+                if kontrat > 0:
+                    pozisyonu_garantili_kapat(pos['symbol'], str(pos.get('side', '')).upper(), kontrat, f"🛑 *MANUEL KAPATMA* - `{pos['symbol']}`", basarili=False)
+            AKTIF_GRID_SISTEMLERI.clear()
+            hafizayi_kaydet()
+            telegram_mesaj_gonder("✅ Tüm pozisyonlar kapatıldı.")
+    except Exception as e:
+        print(f"Webhook hata: {e}", flush=True)
+    return "OK", 200
+
+def durum_mesaji_olustur_ve_gonder():
+    try:
+        balance = exchange.fetch_balance()
+        total = float(balance['total'].get('USDT', 0))
+        borsa_poslari = [p for p in exchange.fetch_positions() if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
+        toplam_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in borsa_poslari)
+        
+        basarili_s = ANALitik_HAFIZA.get("basarili_islem_sayisi", 0)
+        basarisiz_s = ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0)
+        toplam_i = basarili_s + basarisiz_s
+        basari_o = (basarili_s / toplam_i * 100) if toplam_i > 0 else 0.0
+
+        pnl_ikon = "🟢" if toplam_pnl >= 0 else "🔴"
+        mesaj = (
+            f"📊 *HİBRİT BOT DURUMU*\n\n"
+            f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
+            f"{pnl_ikon} Anlık PnL: `{toplam_pnl:+.2f} USDT`\n"
+            f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n\n"
+        )
+
+        if borsa_poslari:
+            mesaj += "📋 *Açık Pozisyonlar Detay:*\n"
+            for p in borsa_poslari:
+                sym = p.get('symbol')
+                yon = str(p.get('side', '')).upper()
+                merkez = float(p.get('entryPrice', 0))
+                kaldirac = int(p.get('leverage', 10))
+                pnl_val = float(p.get('unrealizedPnl', 0))
+                
+                try:
+                    guncel_fiyat = exchange.fetch_ticker(sym)['last']
+                    fark = (guncel_fiyat - merkez) / merkez if yon == "LONG" else (merkez - guncel_fiyat) / merkez
+                    roe = fark * 100 * kaldirac
+                except Exception:
+                    roe = 0.0
+
+                pos_ikon = "🟢" if pnl_val >= 0 else "🔴"
+                mesaj += f"{pos_ikon} `{sym}` | {yon} ({kaldirac}x)\n   └ PnL: `{pnl_val:+.2f} USDT` (`%{roe:+.2f}`)\n"
+            mesaj += "\n"
+
+        mesaj += (
+            f"✅ Başarılı TP: `{basarili_s}` | ❌ Başarısız SL: `{basarisiz_s}`\n"
+            f"📈 Başarı Oranı: `%{basari_o:.1f}`\n"
+            f"🧠 AI Verisi: `{len(ANALitik_HAFIZA.get('egitim_verileri', []))}/20`"
+        )
+        telegram_mesaj_gonder(mesaj)
+    except Exception as e:
+        telegram_mesaj_gonder(f"⚠️ Durum hatası: {e}")
+
 def set_leverage_safely(symbol, leverage):
     try:
         exchange.set_leverage(leverage, symbol)
@@ -373,9 +459,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(5)
 
 if __name__ == '__main__':
-    # Sadece arka plan tarayıcısını ve Flask sunucusunu başlatıyoruz.
-    # Telegram polling kütüphanesi tamamen kaldırıldığı için Conflict hatası kesinlikle yaşanmaz.
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     
-    print("🤖 Bot ve Web Sunucusu Başlatıldı (Conflict Hatası Çözüldü)...", flush=True)
+    print("🤖 Bot ve Web Sunucusu Başlatıldı...", flush=True)
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)), use_reloader=False)
