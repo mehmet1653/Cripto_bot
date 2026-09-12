@@ -1,12 +1,15 @@
 import os
 import time
 import threading
+import asyncio
 import requests
 import ccxt
 import pandas as pd
 import ta
 import numpy as np
-from flask import Flask, request as flask_request
+from flask import Flask
+from telegram import Update
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
 
@@ -170,6 +173,9 @@ def hacim_ve_likidite_kontrolu(df):
         return True
 
 def sinyal_hala_gecerli_mi(symbol, yon):
+    """
+    Botun anlık karar mekanizması: Açık pozisyondaki rüzgarın (EMA ve RSI) ters dönüp dönmediğini denetler.
+    """
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=30)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -178,9 +184,11 @@ def sinyal_hala_gecerli_mi(symbol, yon):
         rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
 
         if yon == 'LONG':
+            # Long pozisyondayken trend aşağı döner ve RSI 45 altına sarkarsa rüzgar bozulmuştur
             if ema7 < ema21 and rsi < 45:
                 return False
         elif yon == 'SHORT':
+            # Short pozisyondayken trend yukarı döner ve RSI 55 üstüne çıkarsa rüzgar bozulmuştur
             if ema7 > ema21 and rsi > 55:
                 return False
     except Exception:
@@ -198,58 +206,43 @@ def telegram_mesaj_gonder(mesaj):
 def home():
     return f"Hibrit Bot Aktif | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
 
-@app.route('/webhook', methods=['POST'])
-def telegram_webhook():
-    global BOT_CALISIYOR_MU
+def set_leverage_safely(symbol, leverage):
     try:
-        data = flask_request.get_json()
-        if not data or 'message' not in data:
-            return "OK", 200
-        
-        message = data['message']
-        text = message.get('text', '')
-        chat_id = str(message.get('chat', {}).get('id', ''))
-        
-        if chat_id != CHAT_ID:
-            return "OK", 200
-            
-        if text.startswith('/durum'):
-            durum_mesaji_olustur_ve_gonder()
-        elif text.startswith('/baslat'):
-            BOT_CALISIYOR_MU = True
-            telegram_mesaj_gonder("🟢 *Bot Aktif Edildi!*")
-        elif text.startswith('/durdur'):
-            BOT_CALISIYOR_MU = False
-            telegram_mesaj_gonder("⏸️ *Bot durduruldu.*")
-        elif text.startswith('/kapat'):
-            telegram_mesaj_gonder("🔄 Tüm pozisyonlar kapatılıyor...")
-            for pos in exchange.fetch_positions():
-                kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
-                if kontrat > 0:
-                    pozisyonu_garantili_kapat(pos['symbol'], str(pos.get('side', '')).upper(), kontrat, f"🛑 *MANUEL KAPATMA* - `{pos['symbol']}`", basarili=False)
-            AKTIF_GRID_SISTEMLERI.clear()
-            hafizayi_kaydet()
-            telegram_mesaj_gonder("✅ Tüm pozisyonlar kapatıldı.")
+        exchange.set_leverage(leverage, symbol)
+        return True
     except Exception as e:
-        print(f"Webhook hata: {e}", flush=True)
-    return "OK", 200
+        print(f"⚠️ Kaldıraç hatası ({symbol}): {e}", flush=True)
+        return False
 
-def webhook_otomatik_ayarla():
-    # Railway'in kendi otomatik domain değişkenini yakalar veya manuel eklediğiniz domain'i okur
-    domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN") or os.environ.get("RAILWAY_STATIC_URL")
-    if domain:
-        if not domain.startswith("http"):
-            domain = f"https://{domain}"
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={domain}/webhook"
-        try:
-            res = requests.get(url, timeout=10)
-            print(f"🔗 Otomatik Webhook Bağlantısı: {res.text}", flush=True)
-        except Exception as e:
-            print(f"⚠️ Webhook otomatik ayarlama hatası: {e}", flush=True)
-    else:
-        print("ℹ️ Railway domain değişkeni bulunamadı, webhook manuel tetiklenebilir.", flush=True)
+def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=50, adx=25, ema_fark=0.0, atr_yuzde=1.5, basarili=True):
+    kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
+    try:
+        for ord_item in exchange.fetch_open_orders(symbol):
+            exchange.cancel_order(ord_item['id'], symbol)
+    except Exception: pass
 
-def durum_mesaji_olustur_ve_gonder():
+    try:
+        market_info = exchange.market(symbol)
+        min_amount = float(market_info['limits']['amount']['min'] or 1.0)
+        if miktar < min_amount: miktar = min_amount
+        miktar = float(exchange.amount_to_precision(symbol, miktar))
+        exchange.create_order(symbol, 'market', kapatma_yonu, miktar, None, {'reduce_only': True})
+    except Exception as e:
+        print(f"⚠️ Kapatma API hatası: {e}", flush=True)
+
+    COIN_COOLDOWNLAR[symbol] = time.time() + COOLDOWN_SURESI_SANIYE
+    ANALitik_HAFIZA["egitim_verileri"].append([rsi, adx, ema_fark, (1 if yon == 'LONG' else -1), atr_yuzde, COIN_ID_MAP.get(symbol, 0), (1 if basarili else 0)])
+    if len(ANALitik_HAFIZA["egitim_verileri"]) > 150: ANALitik_HAFIZA["egitim_verileri"].pop(0)
+    yapay_zekayi_egit_ve_guncelle()
+
+    if symbol in AKTIF_GRID_SISTEMLERI:
+        del AKTIF_GRID_SISTEMLERI[symbol]
+        hafizayi_kaydet()
+
+    if sebep_mesaji: telegram_mesaj_gonder(sebep_mesaji)
+
+# ==================== TELEGRAM KOMUTLARI ====================
+async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         balance = exchange.fetch_balance()
         total = float(balance['total'].get('USDT', 0))
@@ -294,44 +287,32 @@ def durum_mesaji_olustur_ve_gonder():
             f"📈 Başarı Oranı: `%{basari_o:.1f}`\n"
             f"🧠 AI Verisi: `{len(ANALitik_HAFIZA.get('egitim_verileri', []))}/20`"
         )
-        telegram_mesaj_gonder(mesaj)
+        await update.message.reply_text(mesaj, parse_mode='Markdown')
     except Exception as e:
-        telegram_mesaj_gonder(f"⚠️ Durum hatası: {e}")
+        await update.message.reply_text(f"⚠️ Durum hatası: {e}")
 
-def set_leverage_safely(symbol, leverage):
+async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global BOT_CALISIYOR_MU
+    BOT_CALISIYOR_MU = True
+    await update.message.reply_text("🟢 *Bot Aktif Edildi!*", parse_mode='Markdown')
+
+async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global BOT_CALISIYOR_MU
+    BOT_CALISIYOR_MU = False
+    await update.message.reply_text("⏸️ *Bot durduruldu.*", parse_mode='Markdown')
+
+async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔄 Tüm pozisyonlar kapatılıyor...", parse_mode='Markdown')
     try:
-        exchange.set_leverage(leverage, symbol)
-        return True
-    except Exception as e:
-        print(f"⚠️ Kaldıraç hatası ({symbol}): {e}", flush=True)
-        return False
-
-def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=50, adx=25, ema_fark=0.0, atr_yuzde=1.5, basarili=True):
-    kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
-    try:
-        for ord_item in exchange.fetch_open_orders(symbol):
-            exchange.cancel_order(ord_item['id'], symbol)
-    except Exception: pass
-
-    try:
-        market_info = exchange.market(symbol)
-        min_amount = float(market_info['limits']['amount']['min'] or 1.0)
-        if miktar < min_amount: miktar = min_amount
-        miktar = float(exchange.amount_to_precision(symbol, miktar))
-        exchange.create_order(symbol, 'market', kapatma_yonu, miktar, None, {'reduce_only': True})
-    except Exception as e:
-        print(f"⚠️ Kapatma API hatası: {e}", flush=True)
-
-    COIN_COOLDOWNLAR[symbol] = time.time() + COOLDOWN_SURESI_SANIYE
-    ANALitik_HAFIZA["egitim_verileri"].append([rsi, adx, ema_fark, (1 if yon == 'LONG' else -1), atr_yuzde, COIN_ID_MAP.get(symbol, 0), (1 if basarili else 0)])
-    if len(ANALitik_HAFIZA["egitim_verileri"]) > 150: ANALitik_HAFIZA["egitim_verileri"].pop(0)
-    yapay_zekayi_egit_ve_guncelle()
-
-    if symbol in AKTIF_GRID_SISTEMLERI:
-        del AKTIF_GRID_SISTEMLERI[symbol]
+        for pos in exchange.fetch_positions():
+            kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
+            if kontrat > 0:
+                pozisyonu_garantili_kapat(pos['symbol'], str(pos.get('side', '')).upper(), kontrat, f"🛑 *MANUEL KAPATMA* - `{pos['symbol']}`", basarili=False)
+        AKTIF_GRID_SISTEMLERI.clear()
         hafizayi_kaydet()
-
-    if sebep_mesaji: telegram_mesaj_gonder(sebep_mesaji)
+        await update.message.reply_text("✅ Tüm pozisyonlar kapatıldı.", parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Kapatma hatası: {e}")
 
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
@@ -377,6 +358,7 @@ def otomatik_arkaplan_tarayici():
                 hedef_roe = kayitli.get("hedef_roe", 20.0)
                 stop_roe = kayitli.get("stop_roe", 10.0)
 
+                # 1. Anlık Karar: Sinyal kalitesi / rüzgar ters döndü mü?
                 if not sinyal_hala_gecerli_mi(symbol, yon):
                     basarili_mi = pnl > 0
                     if basarili_mi:
@@ -387,11 +369,19 @@ def otomatik_arkaplan_tarayici():
                     pozisyonu_garantili_kapat(symbol, yon, kontrat, f"🧠 *AKILLI ERKEN ÇIKIŞ (RÜZGAR DÖNDÜ)*\n📌 `{symbol}` | Sinyal bozulduğu için çıkıldı. PnL: `{pnl:+.2f} USDT` (`%{roe:+.2f}`)", basarili=basarili_mi)
                     continue
 
+                # 2. Breakeven Güvencesi
+                if not kayitli.get("breakeven_yapildi", False) and roe >= 10.0:
+                    kayitli["breakeven_yapildi"] = True
+                    kayitli["stop_roe"] = 0.0
+                    hafizayi_kaydet()
+                    telegram_mesaj_gonder(f"🛡️ *Breakeven Devrede*\n📌 `{symbol}` stopu giriş fiyatına sabitlendi!")
+
+                # 3. Klasik Hedef (TP) ve Stop (SL) Kontrolleri
                 if roe >= hedef_roe:
                     ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
                     hafizayi_kaydet()
                     pozisyonu_garantili_kapat(symbol, yon, kontrat, f"🎯 *KÂR ALINDI (TP)*\n📌 `{symbol}` | Kâr: `+{pnl:.2f} USDT` (`%{roe:.2f}`)", basarili=True)
-                elif roe <= -stop_roe:
+                elif roe <= -kayitli.get("stop_roe", stop_roe):
                     ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
                     hafizayi_kaydet()
                     pozisyonu_garantili_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT` (`%{roe:.2f}`)", basarili=False)
@@ -459,9 +449,10 @@ def otomatik_arkaplan_tarayici():
                         "ema_fark": sinyal["ema_fark"], 
                         "atr_yuzde": sinyal["atr"], 
                         "hedef_roe": 20.0, 
-                        "stop_roe": 10.0
+                        "stop_roe": 10.0, 
+                        "breakeven_yapildi": False
                     }
-                    hafizayi_kaydet()
+.hafizayi_kaydet()
                     
                     telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}` | Kaldıraç: `{kaldirac}x`")
                     break
@@ -472,9 +463,18 @@ def otomatik_arkaplan_tarayici():
             print(f"⚠️ Tarayıcı hatası: {e}", flush=True)
         time.sleep(5)
 
+def flask_thread():
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)), use_reloader=False)
+
 if __name__ == '__main__':
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    threading.Thread(target=webhook_otomatik_ayarla, daemon=True).start()
+    threading.Thread(target=flask_thread, daemon=True).start()
     
-    print("🤖 Bot ve Webhook Sunucusu Başlatıldı...", flush=True)
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)), use_reloader=False)
+    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app_tg.add_handler(CommandHandler("durum", durum_komutu))
+    app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
+    app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
+    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
+    
+    print("🤖 Telegram Bot (python-telegram-bot) Asenkron Polling Modunda Başlatıldı...", flush=True)
+    app_tg.run_polling()
