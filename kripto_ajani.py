@@ -46,7 +46,7 @@ MODLAR = {
         "grid_aralik_pct": 0.02,   
         "kaldirac": 1,              
         "maks_aktif_grid": 3,      
-        "bakiye_orani": 0.30,      
+        "bakiye_orani": 0.20,      
     }
 }
 AKTIF_MOD = "trend_grid"
@@ -146,7 +146,7 @@ def grid_kur(symbol):
     try:
         bal = exchange.fetch_balance()
         kasa = float(bal['free'].get('USDT', 0))
-        if kasa < 0.1: 
+        if kasa < 1.0: 
             print(f"❌ İşlem İptal: Serbest Bakiye Çok Düşük ({kasa:.4f} USDT)", flush=True)
             return False, "Bakiye yetersiz"
     except Exception as e:
@@ -166,7 +166,7 @@ def grid_kur(symbol):
         if not set_leverage_safely(symbol, mod['kaldirac']):
             return False, "Kaldıraç hatası"
 
-        tahsis_usdt = max(kasa * mod['bakiye_orani'], kasa * 0.95)
+        tahsis_usdt = kasa * mod['bakiye_orani']
         fiyat = float(df['close'].iloc[-1])
         grid_sayisi = mod['grid_sayisi']
         aralik = mod['grid_aralik_pct']
@@ -177,8 +177,6 @@ def grid_kur(symbol):
         min_amount = float(market_info['limits']['amount']['min'] or 1.0)
         
         tekil_butce = max(tahsis_usdt / grid_sayisi, min_amount * fiyat / mod['kaldirac'])
-        if tekil_butce * grid_sayisi > kasa * 0.95:
-            tekil_butce = (kasa * 0.95) / grid_sayisi
 
         kademeler = []
         
@@ -267,6 +265,7 @@ def telegram_webhook():
         text = msg.get('text', '').strip()
         chat_id = str(msg.get('chat', {}).get('id', ''))
         
+        # Sadece senin CHAT_ID'nden gelen komutları işleme al
         if chat_id == CHAT_ID:
             if text == '/durum':
                 try:
