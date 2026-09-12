@@ -220,7 +220,7 @@ def grid_kur(symbol):
         print(f"❌ Emir Oluşturma Hatası ({symbol}): {e}", flush=True)
         return False, str(e)
 
-# ==================== FLASK WEB SERVER ====================
+# ==================== FLASK WEB SERVER & TELEGRAM WEBHOOK ====================
 @app.route('/')
 def home():
     balance = {}
@@ -258,6 +258,38 @@ def home():
     </html>
     """
     return html
+
+@app.route('/telegram', methods=['POST'])
+def telegram_webhook():
+    data = flask_request.get_json()
+    if data and 'message' in data:
+        msg = data['message']
+        text = msg.get('text', '').strip()
+        chat_id = str(msg.get('chat', {}).get('id', ''))
+        
+        if chat_id == CHAT_ID:
+            if text == '/durum':
+                try:
+                    balance = exchange.fetch_balance()
+                    total = float(balance.get('total', {}).get('USDT', 0))
+                    free = float(balance.get('free', {}).get('USDT', 0))
+                except Exception:
+                    total, free = 0, 0
+                
+                yanit = f"📊 BOT DURUMU:\nKasa: {total:.2f} USDT\nSerbest: {free:.2f} USDT\nAktif Grid: {len(AKTIF_GRIDLER)}"
+                if AKTIF_GRIDLER:
+                    for sym, d in AKTIF_GRIDLER.items():
+                        yanit += f"\n- {sym} ({d['yon']})"
+                telegram_mesaj_gonder(yanit)
+                
+            elif text == '/kapat':
+                for sym in list(AKTIF_GRIDLER.keys()):
+                    tum_emirleri_iptal_et(sym)
+                AKTIF_GRIDLER.clear()
+                hafizayi_kaydet()
+                telegram_mesaj_gonder("🛑 Tüm aktif gridler kapatıldı ve emirler iptal edildi!")
+                
+    return "OK", 200
 
 @app.route('/tetikle', methods=['GET'])
 def manuel_tetikle():
