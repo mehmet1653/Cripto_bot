@@ -1,15 +1,12 @@
 import os
 import time
 import threading
-import asyncio
 import requests
 import ccxt
 import pandas as pd
 import ta
 import numpy as np
 from flask import Flask
-from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
 
@@ -236,79 +233,6 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=50, adx=25,
 
     if sebep_mesaji: telegram_mesaj_gonder(sebep_mesaji)
 
-# ==================== TELEGRAM KOMUTLARI ====================
-async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        balance = exchange.fetch_balance()
-        total = float(balance['total'].get('USDT', 0))
-        borsa_poslari = [p for p in exchange.fetch_positions() if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        toplam_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in borsa_poslari)
-        
-        basarili_s = ANALitik_HAFIZA.get("basarili_islem_sayisi", 0)
-        basarisiz_s = ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0)
-        toplam_i = basarili_s + basarisiz_s
-        basari_o = (basarili_s / toplam_i * 100) if toplam_i > 0 else 0.0
-
-        pnl_ikon = "🟢" if toplam_pnl >= 0 else "🔴"
-        mesaj = (
-            f"📊 *HİBRİT BOT DURUMU*\n\n"
-            f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
-            f"{pnl_ikon} Anlık PnL: `{toplam_pnl:+.2f} USDT`\n"
-            f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n\n"
-        )
-
-        if borsa_poslari:
-            mesaj += "📋 *Açık Pozisyonlar Detay:*\n"
-            for p in borsa_poslari:
-                sym = p.get('symbol')
-                yon = str(p.get('side', '')).upper()
-                merkez = float(p.get('entryPrice', 0))
-                kaldirac = int(p.get('leverage', 10))
-                pnl_val = float(p.get('unrealizedPnl', 0))
-                
-                try:
-                    guncel_fiyat = exchange.fetch_ticker(sym)['last']
-                    fark = (guncel_fiyat - merkez) / merkez if yon == "LONG" else (merkez - guncel_fiyat) / merkez
-                    roe = fark * 100 * kaldirac
-                except Exception:
-                    roe = 0.0
-
-                pos_ikon = "🟢" if pnl_val >= 0 else "🔴"
-                mesaj += f"{pos_ikon} `{sym}` | {yon} ({kaldirac}x)\n   └ PnL: `{pnl_val:+.2f} USDT` (`%{roe:+.2f}`)\n"
-            mesaj += "\n"
-
-        mesaj += (
-            f"✅ Başarılı TP: `{basarili_s}` | ❌ Başarısız SL: `{basarisiz_s}`\n"
-            f"📈 Başarı Oranı: `%{basari_o:.1f}`\n"
-            f"🧠 AI Verisi: `{len(ANALitik_HAFIZA.get('egitim_verileri', []))}/20`"
-        )
-        await update.message.reply_text(mesaj, parse_mode='Markdown')
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ Durum hatası: {e}")
-
-async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global BOT_CALISIYOR_MU
-    BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 *Bot Aktif Edildi!*", parse_mode='Markdown')
-
-async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global BOT_CALISIYOR_MU
-    BOT_CALISIYOR_MU = False
-    await update.message.reply_text("⏸️ *Bot durduruldu.*", parse_mode='Markdown')
-
-async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Tüm pozisyonlar kapatılıyor...", parse_mode='Markdown')
-    try:
-        for pos in exchange.fetch_positions():
-            kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
-            if kontrat > 0:
-                pozisyonu_garantili_kapat(pos['symbol'], str(pos.get('side', '')).upper(), kontrat, f"🛑 *MANUEL KAPATMA* - `{pos['symbol']}`", basarili=False)
-        AKTIF_GRID_SISTEMLERI.clear()
-        hafizayi_kaydet()
-        await update.message.reply_text("✅ Tüm pozisyonlar kapatıldı.", parse_mode='Markdown')
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ Kapatma hatası: {e}")
-
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
@@ -353,7 +277,6 @@ def otomatik_arkaplan_tarayici():
                 hedef_roe = kayitli.get("hedef_roe", 20.0)
                 stop_roe = kayitli.get("stop_roe", 10.0)
 
-                # 1. Anlık Karar: Sinyal kalitesi / rüzgar ters döndü mü?
                 if not sinyal_hala_gecerli_mi(symbol, yon):
                     basarili_mi = pnl > 0
                     if basarili_mi:
@@ -364,7 +287,6 @@ def otomatik_arkaplan_tarayici():
                     pozisyonu_garantili_kapat(symbol, yon, kontrat, f"🧠 *AKILLI ERKEN ÇIKIŞ (RÜZGAR DÖNDÜ)*\n📌 `{symbol}` | Sinyal bozulduğu için çıkıldı. PnL: `{pnl:+.2f} USDT` (`%{roe:+.2f}`)", basarili=basarili_mi)
                     continue
 
-                # 2. Klasik Hedef (TP) ve Stop (SL) Kontrolleri
                 if roe >= hedef_roe:
                     ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
                     hafizayi_kaydet()
@@ -450,18 +372,10 @@ def otomatik_arkaplan_tarayici():
             print(f"⚠️ Tarayıcı hatası: {e}", flush=True)
         time.sleep(5)
 
-def flask_thread():
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)), use_reloader=False)
-
 if __name__ == '__main__':
+    # Sadece arka plan tarayıcısını ve Flask sunucusunu başlatıyoruz.
+    # Telegram polling kütüphanesi tamamen kaldırıldığı için Conflict hatası kesinlikle yaşanmaz.
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    threading.Thread(target=flask_thread, daemon=True).start()
     
-    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app_tg.add_handler(CommandHandler("durum", durum_komutu))
-    app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
-    app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
-    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
-    
-    print("🤖 Telegram Bot Asenkron Polling Modunda Başlatıldı...", flush=True)
-    app_tg.run_polling(drop_pending_updates=True)
+    print("🤖 Bot ve Web Sunucusu Başlatıldı (Conflict Hatası Çözüldü)...", flush=True)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)), use_reloader=False)
