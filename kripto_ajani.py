@@ -46,7 +46,7 @@ MODLAR = {
         "grid_aralik_pct": 0.02,   
         "kaldirac": 1,              
         "maks_aktif_grid": 3,      
-        "bakiye_orani": 0.30,      # Kasayı güvenli bölmek için her seferinde mevcut serbest bakiyenin %30'u baz alınır
+        "bakiye_orani": 0.30,      
     }
 }
 AKTIF_MOD = "trend_grid"
@@ -143,6 +143,16 @@ def piyasa_analiz_et(df):
 # ==================== GRID KURULUMU ====================
 def grid_kur(symbol):
     mod = mod_al()
+    try:
+        bal = exchange.fetch_balance()
+        kasa = float(bal['free'].get('USDT', 0))
+        if kasa < 0.1: 
+            print(f"❌ İşlem İptal: Serbest Bakiye Çok Düşük ({kasa:.4f} USDT)", flush=True)
+            return False, "Bakiye yetersiz"
+    except Exception as e:
+        print(f"❌ Bakiye Okunamadı: {e}", flush=True)
+        return False, "Bakiye hatası"
+
     print(f"🔍 {symbol} taranıyor...", flush=True)
     df_raw = fetch_ohlcv_guvenli(symbol, ZAMAN_DILIMI, limit=100)
     if df_raw is None or len(df_raw) < EMA_PERIYOT:
@@ -153,18 +163,10 @@ def grid_kur(symbol):
     yon_tipi, neden = piyasa_analiz_et(df)
 
     try:
-        bal = exchange.fetch_balance()
-        kasa = float(bal['free'].get('USDT', 0))
-        
-        if kasa < 0.5: 
-            print(f"❌ Yetersiz Serbest Bakiye: {kasa} USDT", flush=True)
-            return False, "Bakiye yetersiz"
-        
         if not set_leverage_safely(symbol, mod['kaldirac']):
             return False, "Kaldıraç hatası"
 
-        # Bakiyeyi tam orana böl ve exchange limitlerini dikkate alarak güvenli bütçe hesapla
-        tahsis_usdt = kasa * mod['bakiye_orani']
+        tahsis_usdt = max(kasa * mod['bakiye_orani'], kasa * 0.95)
         fiyat = float(df['close'].iloc[-1])
         grid_sayisi = mod['grid_sayisi']
         aralik = mod['grid_aralik_pct']
@@ -174,7 +176,6 @@ def grid_kur(symbol):
         market_info = exchange.market(symbol)
         min_amount = float(market_info['limits']['amount']['min'] or 1.0)
         
-        # Her bir grid kademesine düşen bütçeyi kesinlikle anlık serbest bakiyeyi aşmayacak şekilde sınırla
         tekil_butce = max(tahsis_usdt / grid_sayisi, min_amount * fiyat / mod['kaldirac'])
         if tekil_butce * grid_sayisi > kasa * 0.95:
             tekil_butce = (kasa * 0.95) / grid_sayisi
@@ -229,7 +230,34 @@ def home():
         pass
     total = float(balance.get('total', {}).get('USDT', 0))
     free = float(balance.get('free', {}).get('USDT', 0))
-    return f"Trend Grid Bot Çalışıyor! | Kasa: {total:.2f} USDT (Serbest: {free:.2f}) | Aktif Grid: {len(AKTIF_GRIDLER)}"
+    
+    html = f"""
+    <html>
+        <head><title>Cripto Bot Durum Paneli</title></head>
+        <body style="font-family: Arial; background: #121212; color: #fff; padding: 20px;">
+            <h2>🚀 Cripto Bot Durum Paneli</h2>
+            <p><b>Bot Durumu:</b> Çalışıyor ✅</p>
+            <p><b>Toplam Kasa:</b> {total:.2f} USDT</p>
+            <p><b>Serbest Bakiye:</b> {free:.2f} USDT</p>
+            <p><b>Aktif Grid Sayısı:</b> {len(AKTIF_GRIDLER)}</p>
+            <h3>Aktif Gridler:</h3>
+            <ul>
+    """
+    if AKTIF_GRIDLER:
+        for sym, data in AKTIF_GRIDLER.items():
+            html += f"<li><b>{sym}</b> - Yön: {data['yon']}</li>"
+    else:
+        html += "<li>Henüz aktif grid bulunmuyor.</li>"
+        
+    html += """
+            </ul>
+            <br>
+            <a href="/tetikle" style="padding: 10px 20px; background: #4CAF50; color: white; text-decoration: none; border-radius: 5px;">Manuel Tetikle</a>
+            <a href="/kapat" style="padding: 10px 20px; background: #f44336; color: white; text-decoration: none; border-radius: 5px; margin-left: 10px;">Acil Tümünü Kapat</a>
+        </body>
+    </html>
+    """
+    return html
 
 @app.route('/tetikle', methods=['GET'])
 def manuel_tetikle():
@@ -245,7 +273,7 @@ def manuel_tetikle():
         if basarili:
             kurulan += 1
             time.sleep(1)
-    return f"Tarama tamamlandı. Kurulan yeni grid sayısı: {kurulan}"
+    return f"Tarama tamamlandı. Kurulan yeni grid sayısı: {kurulan}. <a href='/'>Geri dön</a>"
 
 @app.route('/kapat', methods=['GET'])
 def tumunu_kapat():
@@ -253,7 +281,7 @@ def tumunu_kapat():
         tum_emirleri_iptal_et(sym)
     AKTIF_GRIDLER.clear()
     hafizayi_kaydet()
-    return "Tüm aktif gridler kapatıldı ve emirler iptal edildi."
+    return "Tüm aktif gridler kapatıldı ve emirler iptal edildi. <a href='/'>Geri dön</a>"
 
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
