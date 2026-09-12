@@ -44,9 +44,9 @@ MODLAR = {
     "trend_grid": {
         "grid_sayisi": 2,          
         "grid_aralik_pct": 0.02,   
-        "kaldirac": 1,              # Marjin aşımını önlemek için kaldıraç 1x yapıldı
+        "kaldirac": 1,              
         "maks_aktif_grid": 3,      
-        "bakiye_orani": 0.20,      # Her bir grid için serbest bakiyenin %20'si ayrıldı
+        "bakiye_orani": 0.30,      # Kasayı güvenli bölmek için her seferinde mevcut serbest bakiyenin %30'u baz alınır
     }
 }
 AKTIF_MOD = "trend_grid"
@@ -156,15 +156,15 @@ def grid_kur(symbol):
         bal = exchange.fetch_balance()
         kasa = float(bal['free'].get('USDT', 0))
         
-        if kasa < 1.0: 
+        if kasa < 0.5: 
             print(f"❌ Yetersiz Serbest Bakiye: {kasa} USDT", flush=True)
             return False, "Bakiye yetersiz"
         
         if not set_leverage_safely(symbol, mod['kaldirac']):
             return False, "Kaldıraç hatası"
 
-        # Bütçenin anlık serbest bakiyeyi aşması engellendi
-        tahsis_usdt = min(kasa * mod['bakiye_orani'], kasa * 0.9)
+        # Bakiyeyi tam orana böl ve exchange limitlerini dikkate alarak güvenli bütçe hesapla
+        tahsis_usdt = kasa * mod['bakiye_orani']
         fiyat = float(df['close'].iloc[-1])
         grid_sayisi = mod['grid_sayisi']
         aralik = mod['grid_aralik_pct']
@@ -173,7 +173,11 @@ def grid_kur(symbol):
         
         market_info = exchange.market(symbol)
         min_amount = float(market_info['limits']['amount']['min'] or 1.0)
+        
+        # Her bir grid kademesine düşen bütçeyi kesinlikle anlık serbest bakiyeyi aşmayacak şekilde sınırla
         tekil_butce = max(tahsis_usdt / grid_sayisi, min_amount * fiyat / mod['kaldirac'])
+        if tekil_butce * grid_sayisi > kasa * 0.95:
+            tekil_butce = (kasa * 0.95) / grid_sayisi
 
         kademeler = []
         
