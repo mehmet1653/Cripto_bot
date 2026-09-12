@@ -47,8 +47,8 @@ MODLAR = {
         "grid_sayisi": 5,          
         "grid_aralik_pct": 0.02,   
         "kaldirac": 5,
-        "maks_aktif_grid": 5,      # 3'ten 5'e çıkarıldı ki daha fazla coine girebilsin
-        "bakiye_orani": 0.15,      # %20'den %15'e düşürüldü, bakiye rahatlasın
+        "maks_aktif_grid": 5,      
+        "bakiye_orani": 0.15,      
     }
 }
 AKTIF_MOD = "trend_grid"
@@ -112,14 +112,18 @@ def set_leverage_safely(symbol, leverage):
         try: exchange.set_margin_mode('isolated', symbol)
         except Exception: pass
         return True
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ Kaldıraç Hatası ({symbol}): {e}", flush=True)
         return False
 
 def fetch_ohlcv_guvenli(symbol, timeframe, limit=100):
     for attempt in range(3):
         try:
-            return exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-        except Exception:
+            data = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            if data and len(data) > 0:
+                return data
+        except Exception as e:
+            print(f"⚠️ OHLCV Veri Çekme Hatası ({symbol}, Deneme {attempt+1}): {e}", flush=True)
             if attempt == 2: return None
             time.sleep(1)
     return None
@@ -133,6 +137,7 @@ def piyasa_analiz_et(df):
     son_fiyat = close.iloc[-1]
     ema200 = ema_hesapla(close, 200).iloc[-1]
     
+    print(f"📊 Analiz -> Fiyat: {son_fiyat} | EMA200: {ema200:.2f}", flush=True)
     if son_fiyat >= ema200:
         return "LONG_GRID", f"Fiyat ({son_fiyat}) >= EMA200 ({ema200:.2f})"
     else:
@@ -141,8 +146,10 @@ def piyasa_analiz_et(df):
 # ==================== GRID KURULUMU ====================
 def grid_kur(symbol):
     mod = mod_al()
+    print(f"🔍 {symbol} taranıyor...", flush=True)
     df_raw = fetch_ohlcv_guvenli(symbol, ZAMAN_DILIMI, limit=250)
     if df_raw is None or len(df_raw) < 200:
+        print(f"❌ {symbol} için veri yetersiz (Uzunluk: {len(df_raw) if df_raw else 0})", flush=True)
         return False, "Veri yetersiz"
     
     df = pd.DataFrame(df_raw, columns=['timestamp','open','high','low','close','volume'])
@@ -151,7 +158,9 @@ def grid_kur(symbol):
     try:
         bal = exchange.fetch_balance()
         kasa = float(bal['total'].get('USDT', 0))
-        if kasa < 10: return False, "Bakiye yetersiz"
+        if kasa < 10: 
+            print(f"❌ Bakiye yetersiz: {kasa}", flush=True)
+            return False, "Bakiye yetersiz"
         
         if not set_leverage_safely(symbol, mod['kaldirac']):
             return False, "Kaldıraç hatası"
@@ -191,9 +200,11 @@ def grid_kur(symbol):
         }
         hafizayi_kaydet()
 
+        print(f"✅ BAŞARILI: {symbol} -> {yon_tipi} kuruldu.", flush=True)
         telegram_mesaj_gonder(f"🟢 GRID KURULDU ({yon_tipi})\nSembol: {symbol}\nSebep: {neden}")
         return True, "Başarılı"
     except Exception as e:
+        print(f"❌ Emir Oluşturma Hatası ({symbol}): {e}", flush=True)
         return False, str(e)
 
 # ==================== FLASK & TELEGRAM ====================
@@ -240,7 +251,7 @@ async def manuel_grid_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if kurulan > 0:
         await update.message.reply_text(f"✅ Toplam {kurulan} yeni grid başarıyla kuruldu!")
     else:
-        await update.message.reply_text("⚠️ Eklenebilecek boş slot kalmadı veya limit dolu.")
+        await update.message.reply_text("⚠️ Eklenebilecek boş slot kalmadı veya hata oluştu.")
 
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
