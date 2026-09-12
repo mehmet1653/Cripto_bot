@@ -19,6 +19,7 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 GATE_API_KEY = os.environ.get("GATE_API_KEY", "")
 GATE_SECRET = os.environ.get("GATE_SECRET", "")
+RAILWAY_STATIC_URL = os.environ.get("RAILWAY_STATIC_URL", "")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -57,6 +58,16 @@ COIN_COOLDOWNLAR = {}
 
 def mod_al():
     return MODLAR[AKTIF_MOD]
+
+# ==================== WEBHOOK OTOMATİK TANITMA ====================
+def webhook_ayarla():
+    if TELEGRAM_TOKEN and RAILWAY_STATIC_URL:
+        url = f"https://{RAILWAY_STATIC_URL}/telegram"
+        try:
+            r = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={url}", timeout=10)
+            print(f"🔗 Otomatik Webhook Sonucu: {r.text}", flush=True)
+        except Exception as e:
+            print(f"⚠️ Webhook ayarlanamadı: {e}", flush=True)
 
 # ==================== SUPABASE ====================
 def hafizayi_yukle():
@@ -265,7 +276,6 @@ def telegram_webhook():
         text = msg.get('text', '').strip()
         chat_id = str(msg.get('chat', {}).get('id', ''))
         
-        # Sadece senin CHAT_ID'nden gelen komutları işleme al
         if chat_id == CHAT_ID:
             if text == '/durum':
                 try:
@@ -335,5 +345,6 @@ def otomatik_arkaplan_tarayici():
         time.sleep(60)
 
 if __name__ == '__main__':
+    threading.Thread(target=webhook_ayarla, daemon=True).start()
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
