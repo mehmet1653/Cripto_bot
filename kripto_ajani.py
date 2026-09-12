@@ -1,4 +1,4 @@
-import os
+İmport os
 import time
 import threading
 import requests
@@ -51,6 +51,7 @@ COIN_ID_MAP = {
     'ADA/USDT:USDT': 6,
     'UNI/USDT:USDT': 7
 }
+
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
@@ -227,57 +228,8 @@ def set_leverage_safely(symbol, leverage):
         print(f"⚠️ Kaldıraç hatası ({symbol}): {e}", flush=True)
         return False
 
-def gateio_tp_sl_emirleri_kur(symbol, yon, miktar, giris_fiyati, kaldirac, hedef_roe=20.0, stop_roe=10.0):
-    """Gate.io borsasına gerçek TP ve SL emirleri gönderir."""
-    try:
-        kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
-        
-        # RoE yüzdesini fiyat farkına dönüştürme formülü: Fiyat Farkı Yüzdesi = RoE / Kaldirac
-        hedef_fark_orani = (hedef_roe / 100.0) / kaldirac
-        stop_fark_orani = (stop_roe / 100.0) / kaldirac
-
-        if yon == 'LONG':
-            tp_fiyat = giris_fiyati * (1.0 + hedef_fark_orani)
-            sl_fiyat = giris_fiyati * (1.0 - stop_fark_orani)
-        else:
-            tp_fiyat = giris_fiyati * (1.0 - hedef_fark_orani)
-            sl_fiyat = giris_fiyati * (1.0 + stop_fark_orani)
-
-        tp_fiyat = float(exchange.price_to_precision(symbol, tp_fiyat))
-        sl_fiyat = float(exchange.price_to_precision(symbol, sl_fiyat))
-        miktar_str = exchange.amount_to_precision(symbol, miktar)
-
-        # 1. Take Profit (Kâr Al) Emri
-        exchange.create_order(
-            symbol=symbol,
-            type='limit',
-            side=kapatma_yonu,
-            amount=float(miktar_str),
-            price=tp_fiyat,
-            params={'reduceOnly': True}
-        )
-
-        # 2. Stop Loss (Zarar Kes) Tetiklemeli Emir
-        sl_params = {
-            'reduceOnly': True,
-            'stopPrice': sl_fiyat
-        }
-        exchange.create_order(
-            symbol=symbol,
-            type='market',
-            side=kapatma_yonu,
-            amount=float(miktar_str),
-            price=None,
-            params=sl_params
-        )
-        print(f"🎯 [BORSA TP/SL] {symbol} için TP: {tp_fiyat} | SL: {sl_fiyat} başarıyla kuruldu.", flush=True)
-    except Exception as e:
-        print(f"⚠️ Borsa TP/SL emirleri kurulurken hata oluştu ({symbol}): {e}", flush=True)
-
 def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=50, adx=25, ema_fark=0.0, atr_yuzde=1.5, basarili=True):
     kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
-    
-    # Pozisyon kapatılırken borsada bekleyen tüm açık (TP/SL) emirleri iptal edilir
     try:
         for ord_item in exchange.fetch_open_orders(symbol):
             exchange.cancel_order(ord_item['id'], symbol)
@@ -444,7 +396,6 @@ def otomatik_arkaplan_tarayici():
 
                 print(f"🔍 [POZİSYON] {symbol} | Yön: {yon} | RoE: %{roe:+.2f} | PnL: {pnl:+.2f} USDT", flush=True)
 
-                # Rüzgar tersine dönerse (Sinyal bozulması durumu) bot pozisyonu acilen piyasadan kapatır
                 if not sinyal_hala_gecerli_mi(symbol, yon):
                     basarili_mi = pnl > 0
                     with state_lock:
@@ -453,7 +404,7 @@ def otomatik_arkaplan_tarayici():
                         else:
                             ANALitik_HAFIZA["basarisiz_islem_sayisi"] = int(ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0)) + 1
                     hafizayi_kaydet()
-                    pozisyonu_garantili_kapat(symbol, yon, kontrat, f"🧠 *AKILLI ERKEN ÇIKIŞ (RÜZGAR TERSİNE DÖNDÜ)*\n📌 `{symbol}` | Sinyal bozuldu. PnL: `{pnl:+.2f} USDT` (`%{roe:+.2f}`)", basarili=basarili_mi)
+                    pozisyonu_garantili_kapat(symbol, yon, kontrat, f"🧠 *AKILLI ERKEN ÇIKIŞ*\n📌 `{symbol}` | Sinyal bozuldu. PnL: `{pnl:+.2f} USDT` (`%{roe:+.2f}`)", basarili=basarili_mi)
                     continue
 
                 if roe >= hedef_roe:
@@ -537,19 +488,8 @@ def otomatik_arkaplan_tarayici():
                     market = exchange.market(sinyal["symbol"])
                     miktar = float(exchange.amount_to_precision(sinyal["symbol"], max((toplam_bakiye * kasa_orani * kaldirac) / sinyal["fiyat"] / float(market.get('contractSize', 1.0)), float(market['limits']['amount']['min'] or 1.0))))
                     
-                    # Piyasa emri ile pozisyon açılır
                     exchange.create_order(sinyal["symbol"], 'market', 'buy' if sinyal["yon"] == 'LONG' else 'sell', miktar)
                     
-                    # Pozisyon açıldıktan hemen sonra güncel giriş fiyatını öğrenip Gate.io borsasına TP/SL emirleri yollanır
-                    time.sleep(1) # Emir eşitlemesi için kısa bekleme
-                    guncel_pozlar = exchange.fetch_positions()
-                    acilan_pos = next((p for p in guncel_pozlar if p['symbol'] == sinyal["symbol"] and float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0), None)
-                    
-                    gercek_giris = float(acilan_pos['entryPrice']) if acilan_pos and acilan_pos.get('entryPrice') else sinyal["fiyat"]
-                    
-                    # Gate.io'da TP/SL emirlerini aktif et
-                    gateio_tp_sl_emirleri_kur(sinyal["symbol"], sinyal["yon"], miktar, gercek_giris, kaldirac, hedef_roe=20.0, stop_roe=10.0)
-
                     with state_lock:
                         AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {
                             "giris_rsi": float(sinyal["rsi"]), 
@@ -562,7 +502,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     print(f"⚡ [İŞLEM AÇILDI] {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI & BORESA TP/SL KURULDU*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}` | Kaldıraç: `{kaldirac}x`")
+                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}` | Kaldıraç: `{kaldirac}x`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası: {e}", flush=True)
