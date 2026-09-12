@@ -364,7 +364,7 @@ def otomatik_arkaplan_tarayici():
                     pozisyonu_garantili_kapat(symbol, yon, kontrat, f"🧠 *AKILLI ERKEN ÇIKIŞ (RÜZGAR DÖNDÜ)*\n📌 `{symbol}` | Sinyal bozulduğu için çıkıldı. PnL: `{pnl:+.2f} USDT` (`%{roe:+.2f}`)", basarili=basarili_mi)
                     continue
 
-                # 2. Klasik Hedef (TP) ve Stop (SL) Kontrolleri (Breakeven kaldırıldı, orijinal stop geçerli)
+                # 2. Klasik Hedef (TP) ve Stop (SL) Kontrolleri
                 if roe >= hedef_roe:
                     ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
                     hafizayi_kaydet()
@@ -463,5 +463,5 @@ if __name__ == '__main__':
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
-    print("🤖 Telegram Bot (python-telegram-bot) Asenkron Polling Modunda Başlatıldı...", flush=True)
-    app_tg.run_polling()
+    print("🤖 Telegram Bot Asenkron Polling Modunda Başlatıldı...", flush=True)
+    app_tg.run_polling(drop_pending_updates=True)
