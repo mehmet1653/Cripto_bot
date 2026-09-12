@@ -53,8 +53,9 @@ SEKTOR_MAP = {
 ZAMAN_DILIMI = "1h"
 
 # ==================== TREND & GRID PARAMETRELERİ ====================
-ADX_ACIKLAMA_ESIK = 40.0  
-ADX_KAPATMA_ESIK = 45.0   
+# ADX Eşikleri esnetildi (Daha rahat grid açması için düşürüldü)
+ADX_ACIKLAMA_ESIK = 28.0  
+ADX_KAPATMA_ESIK = 35.0   
 
 MODLAR = {
     "trend_grid": {
