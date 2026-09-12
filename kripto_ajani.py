@@ -46,7 +46,6 @@ MOD = {
     "aciklama": "🎯 Puanlı Sistem v2 (1h+15m, TP %2.5)",
     "zaman_ana": "1h",
     "zaman_sinyal": "15m",
-    # Puanlama
     "puan_esigi": 82,
     "puan_baslangic": 50,
     "puan_trend": 20,
@@ -54,32 +53,27 @@ MOD = {
     "puan_adx": 15,
     "puan_derinlik": 10,
     "puan_mum": 5,
-    # RSI aralığı
     "rsi_min": 40, "rsi_max": 60,
-    # ADX eşiği
     "adx_esik": 25,
-    # TP/Stop
-    "tp_sabit_pct": 0.025,      # %2.5 sabit TP
+    "tp_sabit_pct": 0.025,
     "atr_stop_mult": 1.5,
     "min_stop_pct": 0.008,
     "max_stop_pct": 0.030,
-    # Risk
-    "islem_riski_pct": 0.02,    # %2
-    "kaldirac": 7,              # 7x
+    "islem_riski_pct": 0.02,
+    "kaldirac": 7,
     "maks_pozisyon": 3,
-    "cooldown_dk": 30,          # stop sonrası 30 dk
-    "ardisik_stop_limit": 2,    # 2 üst üste stop → cooldown
-    "ardisik_stop_cooldown_dk": 60,  # 1 saat
-    "gunluk_max_kayip_pct": 0.05,    # %5
+    "cooldown_dk": 30,
+    "ardisik_stop_limit": 2,
+    "ardisik_stop_cooldown_dk": 60,
+    "gunluk_max_kayip_pct": 0.05,
 }
 
-# ==================== DURUMLAR ====================
 BOT_CALISIYOR_MU = True
 GUN_BASI_KASA = None
 GUN_BASI_TARIH = None
 AKTIF_POZISYONLAR = {}
 COIN_COOLDOWNLAR = {}
-GENEL_COOLDOWN = 0  # Ardışık stop sonrası genel cooldown
+GENEL_COOLDOWN = 0
 ARDISIK_STOP_SAYACI = 0
 ANALITIK = {
     "basarili_islem_sayisi": 0,
@@ -234,14 +228,6 @@ def adx_hesapla(df, period=14):
     except Exception:
         return 0.0
 
-def hacim_orani(df, period=20):
-    try:
-        ort = df['volume'].rolling(period).mean().iloc[-1]
-        son = df['volume'].iloc[-1]
-        return float(son / ort) if ort > 0 else 1.0
-    except Exception:
-        return 1.0
-
 # ==================== EMİR DEFTERİ ====================
 def emir_defteri_derinlik_analizi(symbol):
     try:
@@ -263,11 +249,9 @@ def emir_defteri_derinlik_analizi(symbol):
 
 # ==================== PUANLI SİNYAL ====================
 def sinyal_uret(df_15m, df_1h, symbol):
-    """5 faktörlü puanlama."""
     if len(df_15m) < 50 or len(df_1h) < 30:
         return None, "veri yetersiz", 0
     
-    # 1. 1h TREND
     ema7 = ema_hesapla(df_1h['close'], 7).iloc[-1]
     ema21 = ema_hesapla(df_1h['close'], 21).iloc[-1]
     if pd.isna(ema7) or pd.isna(ema21):
@@ -275,15 +259,12 @@ def sinyal_uret(df_15m, df_1h, symbol):
     trend_boga = ema7 > ema21
     grid_yonu = "LONG" if trend_boga else "SHORT"
     
-    # 2. 15m RSI
     rsi = rsi_hesapla(df_15m['close'], 14).iloc[-1]
     if pd.isna(rsi):
         return None, "RSI NaN", 0
     
-    # 3. 15m ADX
     adx_val = adx_hesapla(df_15m, 14)
     
-    # 4. ATR
     atr = atr_hesapla(df_15m, 14).iloc[-1]
     fiyat = df_15m['close'].iloc[-1]
     if pd.isna(atr) or atr == 0:
@@ -292,46 +273,35 @@ def sinyal_uret(df_15m, df_1h, symbol):
     if not (0.3 <= atr_pct <= 5.0):
         return None, f"ATR %{atr_pct:.2f} dışı", 0
     
-    # 5. Emir defteri
-    derinlik = emir_defteri_derinlik_analizi(symbol)
+    derinlik = emir_defteri_derinlik_analizi(symbol) if symbol else "DENGELI"
     
-    # 6. Mum yapısı
     govde = abs(df_15m['close'].iloc[-1] - df_15m['open'].iloc[-1])
     fitil = df_15m['high'].iloc[-1] - df_15m['low'].iloc[-1]
     mum_guclu = (fitil > 0 and govde / fitil > 0.6)
     
-    # ============ PUANLAMA ============
     puan = MOD['puan_baslangic']
-    
-    # Trend (+20)
     puan += MOD['puan_trend']
     
-    # RSI nötr (+15)
     if MOD['rsi_min'] <= rsi <= MOD['rsi_max']:
         puan += MOD['puan_rsi']
     
-    # ADX trend gücü (+15)
     if adx_val > MOD['adx_esik']:
         puan += MOD['puan_adx']
     
-    # Emir defteri (+10)
     if derinlik == "ALICI_BASKIN" and grid_yonu == "LONG":
         puan += MOD['puan_derinlik']
     elif derinlik == "SATICI_BASKIN" and grid_yonu == "SHORT":
         puan += MOD['puan_derinlik']
     
-    # Mum yapısı (+5)
     if mum_guclu:
         puan += MOD['puan_mum']
     
-    # Eşik kontrolü
     if puan < MOD['puan_esigi']:
         return None, f"puan {puan}<{MOD['puan_esigi']}", puan
     
-    # ============ STOP / TP ============
     stop_pct = max(MOD['min_stop_pct'], min(MOD['max_stop_pct'],
                    (atr_pct * MOD['atr_stop_mult']) / 100.0))
-    tp_pct = MOD['tp_sabit_pct']  # SABİT %2.5
+    tp_pct = MOD['tp_sabit_pct']
     
     son_fiyat = df_15m['close'].iloc[-1]
     
@@ -372,25 +342,22 @@ def backtest_coin(symbol):
             bar = df_15m.iloc[i]
             high = bar['high']; low = bar['low']
             
-            # Pozisyon yönetimi
             if poz is not None:
                 if poz['yon'] == 'LONG':
                     if low <= poz['stop']:
-                        trades.append({**poz, 'cikis': poz['stop'], 'sebep': 'SL'}); poz = None
+                        trades.append({**poz, 'cikis': poz['stop']}); poz = None
                     elif high >= poz['tp']:
-                        trades.append({**poz, 'cikis': poz['tp'], 'sebep': 'TP'}); poz = None
+                        trades.append({**poz, 'cikis': poz['tp']}); poz = None
                 else:
                     if high >= poz['stop']:
-                        trades.append({**poz, 'cikis': poz['stop'], 'sebep': 'SL'}); poz = None
+                        trades.append({**poz, 'cikis': poz['stop']}); poz = None
                     elif low <= poz['tp']:
-                        trades.append({**poz, 'cikis': poz['tp'], 'sebep': 'TP'}); poz = None
+                        trades.append({**poz, 'cikis': poz['tp']}); poz = None
                 continue
             
-            # Yeni sinyal
             df_15m_slice = df_15m.iloc[max(0, i-100):i+1].reset_index(drop=True)
             df_1h_slice = df_1h_s.reset_index(drop=True)
             
-            # Backtest'te emir defteri yok, DENGELI varsayalım
             try:
                 sig, neden, puan = sinyal_uret(df_15m_slice, df_1h_slice, None)
             except Exception:
@@ -435,7 +402,7 @@ def backtest_coin(symbol):
             "max_dd": round(max_dd, 2),
             "toplam": round((equity[-1] - 1) * 100, 2) if len(equity) else 0
         }
-    except Exception as e:
+    except Exception:
         return None
 
 # ==================== POZİSYON AÇMA ====================
@@ -534,11 +501,10 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tot = bs + bz
         oran = (bs / tot * 100) if tot else 0
         
-        # Cooldown durumu
         su_an = time.time()
         if GENEL_COOLDOWN > su_an:
             cd_dk = int((GENEL_COOLDOWN - su_an) / 60)
-            cd_durum = f"⏸️ Genel Cooldown: {cd_dk} dk"
+            cd_durum = f"⏸️ Cooldown: {cd_dk} dk"
         else:
             cd_durum = "▶️ Aktif"
         
@@ -632,7 +598,6 @@ async def backtest_komutu(update, context):
     threading.Thread(target=run, daemon=True).start()
 
 async def test_komutu(update, context):
-    """Şu anki piyasada puanları göster."""
     satirlar = ["🎯 *PUAN TESTİ*\n"]
     for symbol in TAKIP_EDILENLER:
         try:
@@ -669,14 +634,12 @@ def otomatik_arkaplan_tarayici():
             if not BOT_CALISIYOR_MU:
                 time.sleep(5); continue
 
-            # Günlük limit
             gunluk = gunluk_kontrol()
             if gunluk is not None and gunluk <= -MOD['gunluk_max_kayip_pct']:
                 telegram_mesaj_gonder(f"🛑 *Günlük zarar limiti!* (%{gunluk*100:.1f})")
                 BOT_CALISIYOR_MU = False
                 continue
 
-            # Genel cooldown kontrolü (ardışık stop sonrası)
             su_an = time.time()
             if GENEL_COOLDOWN > su_an:
                 time.sleep(30)
@@ -689,7 +652,6 @@ def otomatik_arkaplan_tarayici():
             except Exception:
                 aktif_borsa = {}
 
-            # Kapanan pozisyonları işle
             for sym in list(AKTIF_POZISYONLAR.keys()):
                 if sym not in aktif_borsa:
                     AKTIF_POZISYONLAR.pop(sym, None)
@@ -707,7 +669,7 @@ def otomatik_arkaplan_tarayici():
                     
                     if basarili:
                         ANALITIK["basarili_islem_sayisi"] = ANALITIK.get("basarili_islem_sayisi", 0) + 1
-                        ARDISIK_STOP_SAYACI = 0  # Kâr → ardışık sayacı sıfırla
+                        ARDISIK_STOP_SAYACI = 0
                         telegram_mesaj_gonder(f"🎉 *Kâr* → `{sym[:12]}` 🟢")
                     else:
                         ANALITIK["basarisiz_islem_sayisi"] = ANALITIK.get("basarisiz_islem_sayisi", 0) + 1
@@ -715,19 +677,16 @@ def otomatik_arkaplan_tarayici():
                         COIN_COOLDOWNLAR[sym] = time.time() + MOD['cooldown_dk'] * 60
                         telegram_mesaj_gonder(f"❌ *Stop* → `{sym[:12]}` 🔴 (Ardışık: {ARDISIK_STOP_SAYACI})")
                         
-                        # Ardışık stop limiti kontrolü
                         if ARDISIK_STOP_SAYACI >= MOD['ardisik_stop_limit']:
                             GENEL_COOLDOWN = time.time() + MOD['ardisik_stop_cooldown_dk'] * 60
                             telegram_mesaj_gonder(
                                 f"🛑 *{MOD['ardisik_stop_limit']} ARDIŞIK STOP!*\n"
-                                f"Bot {MOD['ardisik_stop_cooldown_dk']} dk durduruluyor.\n"
-                                f"Sonra otomatik devam edecek."
+                                f"Bot {MOD['ardisik_stop_cooldown_dk']} dk durduruluyor."
                             )
                             ARDISIK_STOP_SAYACI = 0
                     
                     hafizayi_kaydet()
 
-            # Yeni sinyal tarama
             sinyaller = []
             debug = []
             for symbol in TAKIP_EDILENLER:
@@ -752,7 +711,6 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     continue
 
-            # İşlem aç
             for s in sinyaller:
                 if not BOT_CALISIYOR_MU: break
                 if len(aktif_borsa) >= MOD['maks_pozisyon']: break
@@ -777,7 +735,16 @@ if __name__ == '__main__':
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
     threading.Thread(target=flask_web_server, daemon=True).start()
 
-    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app_tg = (
+        ApplicationBuilder()
+        .token(TELEGRAM_TOKEN)
+        .read_timeout(30)
+        .write_timeout(30)
+        .connect_timeout(30)
+        .pool_timeout(30)
+        .build()
+    )
+    
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
@@ -788,14 +755,7 @@ if __name__ == '__main__':
 
     while True:
         try:
-            app_tg.run_polling(
-                drop_pending_updates=True,
-                allowed_updates=Update.ALL_TYPES,
-                read_timeout=30,
-                write_timeout=30,
-                connect_timeout=30,
-                pool_timeout=30,
-            )
+            app_tg.run_polling(drop_pending_updates=True)
         except Exception as e:
-            print(f"⚠️ Telegram hatası: {e} — 5 sn sonra tekrar başlatılıyor...", flush=True)
+            print(f"⚠️ Telegram hatası: {e} — 5 sn sonra yeniden...", flush=True)
             time.sleep(5)
