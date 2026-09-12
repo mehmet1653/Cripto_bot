@@ -173,9 +173,6 @@ def hacim_ve_likidite_kontrolu(df):
         return True
 
 def sinyal_hala_gecerli_mi(symbol, yon):
-    """
-    Botun anlık karar mekanizması: Açık pozisyondaki rüzgarın (EMA ve RSI) ters dönüp dönmediğini denetler.
-    """
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=30)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -184,11 +181,9 @@ def sinyal_hala_gecerli_mi(symbol, yon):
         rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
 
         if yon == 'LONG':
-            # Long pozisyondayken trend aşağı döner ve RSI 45 altına sarkarsa rüzgar bozulmuştur
             if ema7 < ema21 and rsi < 45:
                 return False
         elif yon == 'SHORT':
-            # Short pozisyondayken trend yukarı döner ve RSI 55 üstüne çıkarsa rüzgar bozulmuştur
             if ema7 > ema21 and rsi > 55:
                 return False
     except Exception:
@@ -369,19 +364,12 @@ def otomatik_arkaplan_tarayici():
                     pozisyonu_garantili_kapat(symbol, yon, kontrat, f"🧠 *AKILLI ERKEN ÇIKIŞ (RÜZGAR DÖNDÜ)*\n📌 `{symbol}` | Sinyal bozulduğu için çıkıldı. PnL: `{pnl:+.2f} USDT` (`%{roe:+.2f}`)", basarili=basarili_mi)
                     continue
 
-                # 2. Breakeven Güvencesi
-                if not kayitli.get("breakeven_yapildi", False) and roe >= 10.0:
-                    kayitli["breakeven_yapildi"] = True
-                    kayitli["stop_roe"] = 0.0
-                    hafizayi_kaydet()
-                    telegram_mesaj_gonder(f"🛡️ *Breakeven Devrede*\n📌 `{symbol}` stopu giriş fiyatına sabitlendi!")
-
-                # 3. Klasik Hedef (TP) ve Stop (SL) Kontrolleri
+                # 2. Klasik Hedef (TP) ve Stop (SL) Kontrolleri (Breakeven kaldırıldı, orijinal stop geçerli)
                 if roe >= hedef_roe:
                     ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
                     hafizayi_kaydet()
                     pozisyonu_garantili_kapat(symbol, yon, kontrat, f"🎯 *KÂR ALINDI (TP)*\n📌 `{symbol}` | Kâr: `+{pnl:.2f} USDT` (`%{roe:.2f}`)", basarili=True)
-                elif roe <= -kayitli.get("stop_roe", stop_roe):
+                elif roe <= -stop_roe:
                     ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
                     hafizayi_kaydet()
                     pozisyonu_garantili_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT` (`%{roe:.2f}`)", basarili=False)
@@ -449,10 +437,9 @@ def otomatik_arkaplan_tarayici():
                         "ema_fark": sinyal["ema_fark"], 
                         "atr_yuzde": sinyal["atr"], 
                         "hedef_roe": 20.0, 
-                        "stop_roe": 10.0, 
-                        "breakeven_yapildi": False
+                        "stop_roe": 10.0
                     }
-.hafizayi_kaydet()
+                    hafizayi_kaydet()
                     
                     telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}` | Kaldıraç: `{kaldirac}x`")
                     break
