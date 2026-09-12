@@ -172,6 +172,24 @@ def hacim_ve_likidite_kontrolu(df):
     except Exception:
         return True
 
+def sinyal_hala_gecerli_mi(symbol, yon):
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=30)
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        ema7 = ta.trend.ema_indicator(df['close'], window=7).iloc[-1]
+        ema21 = ta.trend.ema_indicator(df['close'], window=21).iloc[-1]
+        rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
+
+        if yon == 'LONG':
+            if ema7 < ema21 and rsi < 45:
+                return False
+        elif yon == 'SHORT':
+            if ema7 > ema21 and rsi > 55:
+                return False
+    except Exception:
+        pass
+    return True
+
 def telegram_mesaj_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID: return
     try:
@@ -218,7 +236,7 @@ def pozisyonu_garantili_kapat(symbol, yon, miktar, sebep_mesaji, rsi=50, adx=25,
 
     if sebep_mesaji: telegram_mesaj_gonder(sebep_mesaji)
 
-# ==================== TELEGRAM KOMUTLARI (python-telegram-bot) ====================
+# ==================== TELEGRAM KOMUTLARI ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         balance = exchange.fetch_balance()
@@ -240,7 +258,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         if borsa_poslari:
-            mesaj += "📋 *Açık Pozisyonlarca Detay:*\n"
+            mesaj += "📋 *Açık Pozisyonlar Detay:*\n"
             for p in borsa_poslari:
                 sym = p.get('symbol')
                 yon = str(p.get('side', '')).upper()
@@ -335,27 +353,32 @@ def otomatik_arkaplan_tarayici():
                 hedef_roe = kayitli.get("hedef_roe", 20.0)
                 stop_roe = kayitli.get("stop_roe", 10.0)
 
-                if not kayitli.get("breakeven_yapildi", False) and roe >= 10.0:
-                    kayitli["breakeven_yapildi"] = True
-                    kayitli["stop_roe"] = 0.0
+                # 1. Anlık Karar: Sinyal kalitesi / rüzgar ters döndü mü?
+                if not sinyal_hala_gecerli_mi(symbol, yon):
+                    basarili_mi = pnl > 0
+                    if basarili_mi:
+                        ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
+                    else:
+                        ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
                     hafizayi_kaydet()
-                    telegram_mesaj_gonder(f"🛡️ *Breakeven Devrede*\n📌 `{symbol}` stopu giriş fiyatına sabitlendi!")
+                    pozisyonu_garantili_kapat(symbol, yon, kontrat, f"🧠 *AKILLI ERKEN ÇIKIŞ (RÜZGAR DÖNDÜ)*\n📌 `{symbol}` | Sinyal bozulduğu için çıkıldı. PnL: `{pnl:+.2f} USDT` (`%{roe:+.2f}`)", basarili=basarili_mi)
+                    continue
 
+                # 2. Klasik Hedef (TP) ve Stop (SL) Kontrolleri (Breakeven kaldırıldı, orijinal stop geçerli)
                 if roe >= hedef_roe:
                     ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
                     hafizayi_kaydet()
                     pozisyonu_garantili_kapat(symbol, yon, kontrat, f"🎯 *KÂR ALINDI (TP)*\n📌 `{symbol}` | Kâr: `+{pnl:.2f} USDT` (`%{roe:.2f}`)", basarili=True)
-                elif roe <= -kayitli.get("stop_roe", stop_roe):
+                elif roe <= -stop_roe:
                     ANALitik_HAFIZA["basarisiz_islem_sayisi"] += 1
                     hafizayi_kaydet()
                     pozisyonu_garantili_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT` (`%{roe:.2f}`)", basarili=False)
 
             taranan_sinyaller = []
-            su_anki_zaman = time.time()
 
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
-                if symbol in aktif_borsa_map or su_anki_zaman < COIN_COOLDOWNLAR.get(symbol, 0): continue
+                if symbol in aktif_borsa_map or time.time() < COIN_COOLDOWNLAR.get(symbol, 0): continue
 
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
@@ -408,7 +431,14 @@ def otomatik_arkaplan_tarayici():
                     miktar = float(exchange.amount_to_precision(sinyal["symbol"], max((toplam_bakiye * kasa_orani * kaldirac) / sinyal["fiyat"] / float(market.get('contractSize', 1.0)), float(market['limits']['amount']['min'] or 1.0))))
                     
                     exchange.create_order(sinyal["symbol"], 'market', 'buy' if sinyal["yon"] == 'LONG' else 'sell', miktar)
-                    AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {"giris_rsi": sinyal["rsi"], "giris_adx": sinyal["adx"], "ema_fark": sinyal["ema_fark"], "atr_yuzde": sinyal["atr"], "hedef_roe": 20.0, "stop_roe": 10.0, "breakeven_yapildi": False}
+                    AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {
+                        "giris_rsi": sinyal["rsi"], 
+                        "giris_adx": sinyal["adx"], 
+                        "ema_fark": sinyal["ema_fark"], 
+                        "atr_yuzde": sinyal["atr"], 
+                        "hedef_roe": 20.0, 
+                        "stop_roe": 10.0
+                    }
                     hafizayi_kaydet()
                     
                     telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}` | Kaldıraç: `{kaldirac}x`")
