@@ -47,8 +47,8 @@ MODLAR = {
         "grid_sayisi": 5,          
         "grid_aralik_pct": 0.02,   
         "kaldirac": 5,
-        "maks_aktif_grid": 3,      
-        "bakiye_orani": 0.20,      
+        "maks_aktif_grid": 5,      # 3'ten 5'e çıkarıldı ki daha fazla coine girebilsin
+        "bakiye_orani": 0.15,      # %20'den %15'e düşürüldü, bakiye rahatlasın
     }
 }
 AKTIF_MOD = "trend_grid"
@@ -133,7 +133,6 @@ def piyasa_analiz_et(df):
     son_fiyat = close.iloc[-1]
     ema200 = ema_hesapla(close, 200).iloc[-1]
     
-    # Sadece EMA yönüne göre karar veriyoruz
     if son_fiyat >= ema200:
         return "LONG_GRID", f"Fiyat ({son_fiyat}) >= EMA200 ({ema200:.2f})"
     else:
@@ -210,7 +209,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for sym, g in AKTIF_GRIDLER.items():
         temiz = sym.replace('/USDT:USDT', '')
         detay += f"- {temiz} : {g['yon']} | {len(g['kademeler'])} Emir\n"
-    await update.message.reply_text(f"🤖 BOT DURUMU\nKasa: {total:.2f} USDT (Serbest: {free:.2f})\nAktif: {len(AKTIF_GRIDLER)}/3\n{detay}")
+    await update.message.reply_text(f"🤖 BOT DURUMU\nKasa: {total:.2f} USDT (Serbest: {free:.2f})\nAktif: {len(AKTIF_GRIDLER)}/5\n{detay}")
 
 async def baslat_komutu(update, context):
     global BOT_CALISIYOR_MU
@@ -229,7 +228,7 @@ async def kapat_komutu(update, context):
     await update.message.reply_text("🛑 Tüm gridler temizlendi.")
 
 async def manuel_grid_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Taranıyor ve grid kuruluyor...")
+    await update.message.reply_text("🔄 Taranıyor ve uygun coinlere grid kuruluyor...")
     kurulan = 0
     for symbol in TAKIP_EDILENLER:
         if symbol in AKTIF_GRIDLER: continue
@@ -237,11 +236,11 @@ async def manuel_grid_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE)
         basarili, sebep = grid_kur(symbol)
         if basarili:
             kurulan += 1
-            break
+            time.sleep(1)
     if kurulan > 0:
-        await update.message.reply_text("✅ Grid başarıyla kuruldu!")
+        await update.message.reply_text(f"✅ Toplam {kurulan} yeni grid başarıyla kuruldu!")
     else:
-        await update.message.reply_text("⚠️ Limit dolu veya hata oluştu.")
+        await update.message.reply_text("⚠️ Eklenebilecek boş slot kalmadı veya limit dolu.")
 
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
