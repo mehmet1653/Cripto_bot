@@ -12,7 +12,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
 
-# Çıktı tamponunu (buffer) tamamen kapatıyoruz ki loglar anında ekrana düşsün
+# Çıktı tamponunu tamamen kapatıyoruz ki loglar anında ekrana düşsün
 sys.stdout.reconfigure(line_buffering=True)
 
 # ==================== AYARLAR VE ANAHTARLAR ====================
@@ -27,7 +27,7 @@ exchange = ccxt.gate({
     'apiKey': '82cca880898a88d1a31e86d8eb474c57',
     'secret': '1ac479b9df5e6f2e89560b0d238a250694719b6fcae20da00ebc54ad6aeb8898',
     'enableRateLimit': True,
-    'timeout': 10000, # Bekleme süresini 10 saniyeye indirerek kilitlenmeleri önledik
+    'timeout': 5000, # Bekleme süresini 5 saniyeye indirerek askıda kalmayı engelledik
     'options': {
         'defaultType': 'swap'
     }
@@ -181,7 +181,7 @@ def atr_ve_volatilite_hesapla(df, period=14):
 
 def emir_defteri_derinlik_analizi(symbol):
     try:
-        order_book = exchange.fetch_order_book(symbol, limit=10) # Limit düşürüldü
+        order_book = exchange.fetch_order_book(symbol, limit=10)
         bids, asks = order_book.get('bids', []), order_book.get('asks', [])
         toplam_bid = sum(b[1] for b in bids)
         toplam_ask = sum(a[1] for a in asks)
@@ -384,10 +384,12 @@ def otomatik_arkaplan_tarayici():
                 continue
 
             try:
+                print("DEBUG: Pozisyonlar çekiliyor...", flush=True)
                 raw_positions = exchange.fetch_positions()
                 aktif_borsa_map = {p['symbol']: p for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0}
+                print(f"DEBUG: Pozisyonlar çekildi. Açık pos: {len(aktif_borsa_map)}", flush=True)
             except Exception as e:
-                print(f"⚠️ Pozisyonlar çekilemedi: {e}", flush=True)
+                print(f"⚠️ Pozisyonlar çekilemedi (Timeout/Hata): {e}", flush=True)
                 aktif_borsa_map = {}
 
             with state_lock:
@@ -452,6 +454,7 @@ def otomatik_arkaplan_tarayici():
                     continue
 
                 try:
+                    print(f"DEBUG: {symbol} verileri çekiliyor...", flush=True)
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
