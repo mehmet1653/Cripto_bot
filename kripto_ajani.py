@@ -270,50 +270,57 @@ def home():
 
 @app.route('/telegram', methods=['POST'])
 def telegram_webhook():
-    data = flask_request.get_json()
-    if data and 'message' in data:
-        msg = data['message']
-        text = msg.get('text', '').strip()
-        chat_id = str(msg.get('chat', {}).get('id', ''))
+    try:
+        data = flask_request.get_json(force=True, silent=True)
+        print(f"📩 Gelen Telegram Webhook Verisi: {data}", flush=True)
         
-        if chat_id == CHAT_ID:
-            if text == '/durum':
-                try:
-                    balance = exchange.fetch_balance()
-                    total = float(balance.get('total', {}).get('USDT', 0))
-                    free = float(balance.get('free', {}).get('USDT', 0))
-                except Exception:
-                    total, free = 0, 0
-                
-                yanit = f"📊 BOT DURUMU:\nKasa: {total:.2f} USDT\nSerbest: {free:.2f} USDT\nAktif Grid Sayısı: {len(AKTIF_GRIDLER)}"
-                if AKTIF_GRIDLER:
-                    yanit += "\n\n🟢 Aktif İşlemler:"
-                    for sym, d in AKTIF_GRIDLER.items():
-                        yanit += f"\n• {sym} ({d['yon']})"
-                else:
-                    yanit += "\n\nHenüz aktif grid bulunmuyor."
-                telegram_mesaj_gonder(yanit)
-                
-            elif text == '/grid_detay':
-                if not AKTIF_GRIDLER:
-                    telegram_mesaj_gonder("📋 Şu an aktif detaylı grid bulunmuyor.")
-                else:
-                    yanit = "📋 DETAYLI GRID RAPORU:"
-                    for sym, d in AKTIF_GRIDLER.items():
-                        yanit += f"\n\n🔸 Coin: {sym}\n- Yön: {d['yon']}\n- Kurulum Fiyatı: {d['ana_fiyat']}"
-                        if 'kademeler' in d and d['kademeler']:
-                            yanit += "\n- Kademeler:"
-                            for k in d['kademeler']:
-                                yanit += f"\n  * {k['tip'].upper()} @ {k['fiyat']} ({k['miktar']} adet)"
+        if data and 'message' in data:
+            msg = data['message']
+            text = msg.get('text', '').strip()
+            chat_id = str(msg.get('chat', {}).get('id', ''))
+            
+            print(f"💬 Gelen Mesaj: '{text}' | Chat ID: {chat_id} (Beklenen: {CHAT_ID})", flush=True)
+            
+            if chat_id == CHAT_ID:
+                if text == '/durum':
+                    try:
+                        balance = exchange.fetch_balance()
+                        total = float(balance.get('total', {}).get('USDT', 0))
+                        free = float(balance.get('free', {}).get('USDT', 0))
+                    except Exception:
+                        total, free = 0, 0
+                    
+                    yanit = f"📊 BOT DURUMU:\nKasa: {total:.2f} USDT\nSerbest: {free:.2f} USDT\nAktif Grid Sayısı: {len(AKTIF_GRIDLER)}"
+                    if AKTIF_GRIDLER:
+                        yanit += "\n\n🟢 Aktif İşlemler:"
+                        for sym, d in AKTIF_GRIDLER.items():
+                            yanit += f"\n• {sym} ({d['yon']})"
+                    else:
+                        yanit += "\n\nHenüz aktif grid bulunmuyor."
                     telegram_mesaj_gonder(yanit)
-                
-            elif text == '/kapat':
-                for sym in list(AKTIF_GRIDLER.keys()):
-                    tum_emirleri_iptal_et(sym)
-                AKTIF_GRIDLER.clear()
-                hafizayi_kaydet()
-                telegram_mesaj_gonder("🛑 Tüm aktif gridler kapatıldı ve emirler iptal edildi!")
-                
+                    
+                elif text == '/grid_detay':
+                    if not AKTIF_GRIDLER:
+                        telegram_mesaj_gonder("📋 Şu an aktif detaylı grid bulunmuyor.")
+                    else:
+                        yanit = "📋 DETAYLI GRID RAPORU:"
+                        for sym, d in AKTIF_GRIDLER.items():
+                            yanit += f"\n\n🔸 Coin: {sym}\n- Yön: {d['yon']}\n- Kurulum Fiyatı: {d['ana_fiyat']}"
+                            if 'kademeler' in d and d['kademeler']:
+                                yanit += "\n- Kademeler:"
+                                for k in d['kademeler']:
+                                    yanit += f"\n  * {k['tip'].upper()} @ {k['fiyat']} ({k['miktar']} adet)"
+                        telegram_mesaj_gonder(yanit)
+                    
+                elif text == '/kapat':
+                    for sym in list(AKTIF_GRIDLER.keys()):
+                        tum_emirleri_iptal_et(sym)
+                    AKTIF_GRIDLER.clear()
+                    hafizayi_kaydet()
+                    telegram_mesaj_gonder("🛑 Tüm aktif gridler kapatıldı ve emirler iptal edildi!")
+    except Exception as e:
+        print(f"⚠️ Telegram Webhook İşleme Hatası: {e}", flush=True)
+        
     return "OK", 200
 
 @app.route('/tetikle', methods=['GET'])
