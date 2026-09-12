@@ -41,6 +41,7 @@ TAKIP_EDILENLER = [
 ]
 
 ZAMAN_DILIMI = "1h"
+EMA_PERIYOT = 50  # Testnet veri kısıtı nedeniyle 50'ye düşürüldü
 
 MODLAR = {
     "trend_grid": {
@@ -129,26 +130,26 @@ def fetch_ohlcv_guvenli(symbol, timeframe, limit=100):
     return None
 
 # ==================== TREND VE SİNYAL ====================
-def ema_hesapla(close, period=200):
+def ema_hesapla(close, period=50):
     return close.ewm(span=period, adjust=False).mean()
 
 def piyasa_analiz_et(df):
     close = df['close']
     son_fiyat = close.iloc[-1]
-    ema200 = ema_hesapla(close, 200).iloc[-1]
+    ema_val = ema_hesapla(close, EMA_PERIYOT).iloc[-1]
     
-    print(f"📊 Analiz -> Fiyat: {son_fiyat} | EMA200: {ema200:.2f}", flush=True)
-    if son_fiyat >= ema200:
-        return "LONG_GRID", f"Fiyat ({son_fiyat}) >= EMA200 ({ema200:.2f})"
+    print(f"📊 Analiz -> Fiyat: {son_fiyat} | EMA{EMA_PERIYOT}: {ema_val:.2f}", flush=True)
+    if son_fiyat >= ema_val:
+        return "LONG_GRID", f"Fiyat ({son_fiyat}) >= EMA{EMA_PERIYOT} ({ema_val:.2f})"
     else:
-        return "SHORT_GRID", f"Fiyat ({son_fiyat}) < EMA200 ({ema200:.2f})"
+        return "SHORT_GRID", f"Fiyat ({son_fiyat}) < EMA{EMA_PERIYOT} ({ema_val:.2f})"
 
 # ==================== GRID KURULUMU ====================
 def grid_kur(symbol):
     mod = mod_al()
     print(f"🔍 {symbol} taranıyor...", flush=True)
-    df_raw = fetch_ohlcv_guvenli(symbol, ZAMAN_DILIMI, limit=250)
-    if df_raw is None or len(df_raw) < 200:
+    df_raw = fetch_ohlcv_guvenli(symbol, ZAMAN_DILIMI, limit=100)
+    if df_raw is None or len(df_raw) < EMA_PERIYOT:
         print(f"❌ {symbol} için veri yetersiz (Uzunluk: {len(df_raw) if df_raw else 0})", flush=True)
         return False, "Veri yetersiz"
     
