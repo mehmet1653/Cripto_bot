@@ -41,7 +41,7 @@ TAKIP_EDILENLER = [
 ]
 
 ZAMAN_DILIMI = "1h"
-EMA_PERIYOT = 50  # Testnet veri kısıtı nedeniyle 50'ye düşürüldü
+EMA_PERIYOT = 50
 
 MODLAR = {
     "trend_grid": {
@@ -49,7 +49,7 @@ MODLAR = {
         "grid_aralik_pct": 0.02,   
         "kaldirac": 5,
         "maks_aktif_grid": 5,      
-        "bakiye_orani": 0.15,      
+        "bakiye_orani": 0.25,      # Miktarlar kurtarsın diye bütçe oranı biraz artırıldı
     }
 }
 AKTIF_MOD = "trend_grid"
@@ -150,7 +150,7 @@ def grid_kur(symbol):
     print(f"🔍 {symbol} taranıyor...", flush=True)
     df_raw = fetch_ohlcv_guvenli(symbol, ZAMAN_DILIMI, limit=100)
     if df_raw is None or len(df_raw) < EMA_PERIYOT:
-        print(f"❌ {symbol} için veri yetersiz (Uzunluk: {len(df_raw) if df_raw else 0})", flush=True)
+        print(f"❌ {symbol} için veri yetersiz", flush=True)
         return False, "Veri yetersiz"
     
     df = pd.DataFrame(df_raw, columns=['timestamp','open','high','low','close','volume'])
@@ -159,14 +159,12 @@ def grid_kur(symbol):
     try:
         bal = exchange.fetch_balance()
         kasa = float(bal['total'].get('USDT', 0))
-        if kasa < 10: 
-            print(f"❌ Bakiye yetersiz: {kasa}", flush=True)
-            return False, "Bakiye yetersiz"
+        if kasa < 10: return False, "Bakiye yetersiz"
         
         if not set_leverage_safely(symbol, mod['kaldirac']):
             return False, "Kaldıraç hatası"
 
-        tahsis_usdt = kasa * mod['bakiye_orani']
+        tahsis_usdt = kasa * mod['bakiye_orani'] * mod['kaldirac'] # Kaldıraçlı toplam işlem hacmi
         fiyat = float(df['close'].iloc[-1])
         grid_sayisi = mod['grid_sayisi']
         aralik = mod['grid_aralik_pct']
@@ -175,21 +173,31 @@ def grid_kur(symbol):
         
         kademeler = []
         market_info = exchange.market(symbol)
-        cs = float(market_info.get('contractSize', 1.0))
+        
+        # Gate.io kontrat kurallarına göre minimum miktar kontrolü
+        min_amount = float(market_info['limits']['amount']['min'] or 1.0)
         tekil_butce = tahsis_usdt / grid_sayisi
 
         if yon_tipi == "LONG_GRID":
             for i in range(grid_sayisi):
                 kademe_fiyat = fiyat * (1 - (i + 1) * aralik)
                 kademe_fiyat = float(exchange.price_to_precision(symbol, kademe_fiyat))
-                miktar = float(exchange.amount_to_precision(symbol, max(tekil_butce / (kademe_fiyat * cs), 0.001)))
+                
+                ham_miktar = tekil_butce / kademe_fiyat
+                miktar = max(ham_miktar, min_amount)
+                miktar = float(exchange.amount_to_precision(symbol, miktar))
+                
                 emir = exchange.create_order(symbol, 'limit', 'buy', miktar, kademe_fiyat)
                 kademeler.append({"id": emir['id'], "fiyat": kademe_fiyat, "miktar": miktar, "tip": "buy"})
         else:
             for i in range(grid_sayisi):
                 kademe_fiyat = fiyat * (1 + (i + 1) * aralik)
                 kademe_fiyat = float(exchange.price_to_precision(symbol, kademe_fiyat))
-                miktar = float(exchange.amount_to_precision(symbol, max(tekil_butce / (kademe_fiyat * cs), 0.001)))
+                
+                ham_miktar = tekil_butce / kademe_fiyat
+                miktar = max(ham_miktar, min_amount)
+                miktar = float(exchange.amount_to_precision(symbol, miktar))
+                
                 emir = exchange.create_order(symbol, 'limit', 'sell', miktar, kademe_fiyat)
                 kademeler.append({"id": emir['id'], "fiyat": kademe_fiyat, "miktar": miktar, "tip": "sell"})
 
