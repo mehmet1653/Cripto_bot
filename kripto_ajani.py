@@ -31,7 +31,6 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-# BTC, ETH, AVAX hariç; düzgün trend takip eden 7 adet altcoin sepeti
 TAKIP_EDILENLER = [
     'SOL/USDT:USDT', 
     'XRP/USDT:USDT', 
@@ -51,7 +50,6 @@ COIN_ID_MAP = {
     'ADA/USDT:USDT': 6,
     'UNI/USDT:USDT': 7
 }
-
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
@@ -488,7 +486,31 @@ def otomatik_arkaplan_tarayici():
                     market = exchange.market(sinyal["symbol"])
                     miktar = float(exchange.amount_to_precision(sinyal["symbol"], max((toplam_bakiye * kasa_orani * kaldirac) / sinyal["fiyat"] / float(market.get('contractSize', 1.0)), float(market['limits']['amount']['min'] or 1.0))))
                     
-                    exchange.create_order(sinyal["symbol"], 'market', 'buy' if sinyal["yon"] == 'LONG' else 'sell', miktar)
+                    # Hedef RoE oranlarına göre TP ve SL fiyatlarının hesaplanması (%20 TP, %10 SL)
+                    giris_fiyati = sinyal["fiyat"]
+                    islem_yonu = sinyal["yon"]
+                    
+                    if islem_yonu == 'LONG':
+                        tp_fiyat = giris_fiyati * (1 + (0.20 / kaldirac))
+                        sl_fiyat = giris_fiyati * (1 - (0.10 / kaldirac))
+                    else:
+                        tp_fiyat = giris_fiyati * (1 - (0.20 / kaldirac))
+                        sl_fiyat = giris_fiyati * (1 + (0.10 / kaldirac))
+
+                    # Gate.io borsasına tetikleyici fiyatları içeren parametrelerle emir gönderimi
+                    emir_parametreleri = {
+                        'take_profit': float(exchange.price_to_precision(sinyal["symbol"], tp_fiyat)),
+                        'stop_loss': float(exchange.price_to_precision(sinyal["symbol"], sl_fiyat))
+                    }
+
+                    exchange.create_order(
+                        sinyal["symbol"], 
+                        'market', 
+                        'buy' if islem_yonu == 'LONG' else 'sell', 
+                        miktar, 
+                        None, 
+                        emir_parametreleri
+                    )
                     
                     with state_lock:
                         AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {
@@ -501,8 +523,8 @@ def otomatik_arkaplan_tarayici():
                         }
                     hafizayi_kaydet()
                     
-                    print(f"⚡ [İŞLEM AÇILDI] {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}` | Kaldıraç: `{kaldirac}x`")
+                    print(f"⚡ [İŞLEM AÇILDI] {sinyal['symbol']} | Yön: {islem_yonu} | Puan: {sinyal['puan']} | TP: {tp_fiyat:.4f} | SL: {sl_fiyat:.4f}", flush=True)
+                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI*\n📌 `{sinyal['symbol']}` | Yön: `{islem_yonu}` | Puan: `{sinyal['puan']}` | Kaldıraç: `{kaldirac}x`\n🎯 TP: `{tp_fiyat:.4f}` | 🛑 SL: `{sl_fiyat:.4f}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası: {e}", flush=True)
@@ -512,7 +534,6 @@ def otomatik_arkaplan_tarayici():
         time.sleep(10)
 
 if __name__ == '__main__':
-    # Arka plan tarayıcısını thread olarak başlatıyoruz
     t = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
     t.start()
     
