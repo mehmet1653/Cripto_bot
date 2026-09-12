@@ -44,11 +44,11 @@ EMA_PERIYOT = 50
 
 MODLAR = {
     "trend_grid": {
-        "grid_sayisi": 3,          # Kasanın küçük olması nedeniyle kademe sayısı düşürüldü
+        "grid_sayisi": 3,          
         "grid_aralik_pct": 0.02,   
         "kaldirac": 2,              
         "maks_aktif_grid": 3,      
-        "bakiye_orani": 0.50,      # Mevcut 2.7 USDT bakiye ile işlem açabilmesi için oran artırıldı
+        "bakiye_orani": 0.50,      
     }
 }
 AKTIF_MOD = "trend_grid"
@@ -294,4 +294,11 @@ if __name__ == '__main__':
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     app_tg.add_handler(CommandHandler("grid_kur", manuel_grid_komutu))
-    app_tg.run_polling()
+    
+    # Çakışma hatalarını (Conflict) yutarak botun çökmesini önleyen döngü
+    while True:
+        try:
+            app_tg.run_polling(drop_pending_updates=True)
+        except Exception as e:
+            print(f"⚠️ Telegram Polling Hatası: {e}", flush=True)
+            time.sleep(5)
