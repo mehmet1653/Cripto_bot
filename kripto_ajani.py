@@ -285,11 +285,27 @@ def telegram_webhook():
                 except Exception:
                     total, free = 0, 0
                 
-                yanit = f"📊 BOT DURUMU:\nKasa: {total:.2f} USDT\nSerbest: {free:.2f} USDT\nAktif Grid: {len(AKTIF_GRIDLER)}"
+                yanit = f"📊 BOT DURUMU:\nKasa: {total:.2f} USDT\nSerbest: {free:.2f} USDT\nAktif Grid Sayısı: {len(AKTIF_GRIDLER)}"
                 if AKTIF_GRIDLER:
+                    yanit += "\n\n🟢 Aktif İşlemler:"
                     for sym, d in AKTIF_GRIDLER.items():
-                        yanit += f"\n- {sym} ({d['yon']})"
+                        yanit += f"\n• {sym} ({d['yon']})"
+                else:
+                    yanit += "\n\nHenüz aktif grid bulunmuyor."
                 telegram_mesaj_gonder(yanit)
+                
+            elif text == '/grid_detay':
+                if not AKTIF_GRIDLER:
+                    telegram_mesaj_gonder("📋 Şu an aktif detaylı grid bulunmuyor.")
+                else:
+                    yanit = "📋 DETAYLI GRID RAPORU:"
+                    for sym, d in AKTIF_GRIDLER.items():
+                        yanit += f"\n\n🔸 Coin: {sym}\n- Yön: {d['yon']}\n- Kurulum Fiyatı: {d['ana_fiyat']}"
+                        if 'kademeler' in d and d['kademeler']:
+                            yanit += "\n- Kademeler:"
+                            for k in d['kademeler']:
+                                yanit += f"\n  * {k['tip'].upper()} @ {k['fiyat']} ({k['miktar']} adet)"
+                    telegram_mesaj_gonder(yanit)
                 
             elif text == '/kapat':
                 for sym in list(AKTIF_GRIDLER.keys()):
