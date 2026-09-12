@@ -53,7 +53,6 @@ SEKTOR_MAP = {
 ZAMAN_DILIMI = "1h"
 
 # ==================== TREND & GRID PARAMETRELERİ ====================
-# ADX Eşikleri esnetildi (40.0 yapıldı ki çok sıkı takılmasın)
 ADX_ACIKLAMA_ESIK = 40.0  
 ADX_KAPATMA_ESIK = 45.0   
 
@@ -132,7 +131,7 @@ def telegram_mesaj_gonder(mesaj):
     try:
         requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"},
+            json={"chat_id": CHAT_ID, "text": mesaj},
             timeout=10
         )
     except Exception:
@@ -286,9 +285,10 @@ def grid_kur(symbol):
         hafizayi_kaydet()
 
         telegram_mesaj_gonder(
-            f"📊 *GRID KURULDU* ({yon_tipi})\n"
-            f"📌 `{symbol[:12]}` | Fiyat: `{fiyat}`\n"
-            f"📐 Aralık: `±%{aralik*100}` | {grid_sayisi} Kademe Emri"
+            f"GRID KURULDU ({yon_tipi})\n"
+            f"Sembol: {symbol}\n"
+            f"Fiyat: {fiyat}\n"
+            f"Aralik: %{aralik*100} | {grid_sayisi} Kademe Emri"
         )
         return True, "Başarılı"
     except Exception as e:
@@ -308,40 +308,41 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         detay = ""
         if AKTIF_GRIDLER:
-            detay = "\n📈 *Aktif Gridler:*\n"
+            detay = "\nAktif Gridler:\n"
             for sym, g in AKTIF_GRIDLER.items():
-                detay += f"• `{sym[:12]}` : {g['yon']} | {len(g['kademeler'])} Emir\n"
+                temiz_sym = sym.replace('/USDT:USDT', '').replace(':USDT', '')
+                detay += f"- {temiz_sym} : {g['yon']} | {len(g['kademeler'])} Emir\n"
 
         mesaj = (
-            f"🤖 *TREND FİLTRELİ GRID BOTU (10 Coin)*\n\n"
-            f"💰 Kasa: `{total:.2f}` USDT (Serbest: `{free:.2f}`)\n"
-            f"📊 Aktif Grid Sayısı: `{len(AKTIF_GRIDLER)}/{MODLAR[AKTIF_MOD]['maks_aktif_grid']}`\n"
+            f"🤖 TREND FİLTRELİ GRID BOTU (10 Coin)\n\n"
+            f"💰 Kasa: {total:.2f} USDT (Serbest: {free:.2f})\n"
+            f"📊 Aktif Grid Sayısı: {len(AKTIF_GRIDLER)}/{MODLAR[AKTIF_MOD]['maks_aktif_grid']}\n"
             f"{detay}"
         )
-        await update.message.reply_text(mesaj, parse_mode='Markdown')
+        await update.message.reply_text(mesaj)
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
 
 async def baslat_komutu(update, context):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("▶️ *Grid Bot Aktif!*", parse_mode='Markdown')
+    await update.message.reply_text("▶️ Grid Bot Aktif!")
 
 async def durdur_komutu(update, context):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = False
-    await update.message.reply_text("⏸️ *Durduruldu.*", parse_mode='Markdown')
+    await update.message.reply_text("⏸️ Durduruldu.")
 
 async def kapat_komutu(update, context):
-    await update.message.reply_text("🛑 *Tüm gridler iptal ediliyor...*", parse_mode='Markdown')
+    await update.message.reply_text("🛑 Tüm gridler iptal ediliyor...")
     try:
         for sym in list(AKTIF_GRIDLER.keys()):
             tum_emirleri_iptal_et(sym)
         AKTIF_GRIDLER.clear()
         hafizayi_kaydet()
-        await update.message.reply_text("✅ *Her şey temizlendi.*", parse_mode='Markdown')
+        await update.message.reply_text("✅ Her şey temizlendi.")
     except Exception as e:
-        await update.message.reply_text(f"⚠️ {e}", parse_mode='Markdown')
+        await update.message.reply_text(f"⚠️ {e}")
 
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
@@ -362,7 +363,7 @@ def otomatik_arkaplan_tarayici():
             mod = mod_al()
             gunluk = gunluk_kontrol()
             if gunluk is not None and gunluk <= -mod['gunluk_max_kayip_pct']:
-                telegram_mesaj_gonder(f"🛑 *Günlük zarar limiti aşıldı!* (%{gunluk*100:.1f})")
+                telegram_mesaj_gonder(f"🛑 Günlük zarar limiti aşıldı! (%{gunluk*100:.1f})")
                 BOT_CALISIYOR_MU = False
                 continue
 
@@ -374,7 +375,7 @@ def otomatik_arkaplan_tarayici():
                     adx_deger = adx_hesapla(df, 14).iloc[-1]
                     
                     if not pd.isna(adx_deger) and adx_deger > ADX_KAPATMA_ESIK:
-                        telegram_mesaj_gonder(f"🚨 *GRID KAPATILDI* → `{symbol[:12]}`\nSebep: ADX {adx_deger:.1f} > {ADX_KAPATMA_ESIK}")
+                        telegram_mesaj_gonder(f"🚨 GRID KAPATILDI → {symbol}\nSebep: ADX {adx_deger:.1f} > {ADX_KAPATMA_ESIK}")
                         tum_emirleri_iptal_et(symbol)
                         AKTIF_GRIDLER.pop(symbol, None)
                         COIN_COOLDOWNLAR[symbol] = time.time() + 1800
