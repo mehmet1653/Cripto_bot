@@ -1,19 +1,15 @@
 import os
 import time
 import threading
-import asyncio
 import requests
 import ccxt
 import pandas as pd
 import ta
 import numpy as np
-from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
-
-app = Flask(__name__)
 
 # ==================== AYARLAR VE ANAHTARLAR ====================
 TELEGRAM_TOKEN = "8870934003:AAGIpiwdgpnQVW7nbJIRcR0dOLOzj-MOZsA"
@@ -197,10 +193,6 @@ def telegram_mesaj_gonder(mesaj):
     except Exception as e:
         print(f"⚠️ Telegram Gönderme Hatası: {e}", flush=True)
 
-@app.route('/')
-def home():
-    return f"Hibrit Bot Aktif | Aktif Pozisyon: {len(AKTIF_GRID_SISTEMLERI)}"
-
 def set_leverage_safely(symbol, leverage):
     try:
         exchange.set_leverage(leverage, symbol)
@@ -312,7 +304,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, ANALitik_HAFIZA
-    print("🚀 Gelişmiş Hibrit Tarayıcı Devrede.", flush=True)
+    print("🚀 Gelişmiş Hibrit Tarayıcı Devrede ve Loglama Aktif.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -353,7 +345,8 @@ def otomatik_arkaplan_tarayici():
                 hedef_roe = kayitli.get("hedef_roe", 20.0)
                 stop_roe = kayitli.get("stop_roe", 10.0)
 
-                # 1. Anlık Karar: Sinyal kalitesi / rüzgar ters döndü mü?
+                print(f"🔍 [POZİSYON KONTROL] {symbol} | Yön: {yon} | RoE: %{roe:+.2f} | PnL: {pnl:+.2f} USDT", flush=True)
+
                 if not sinyal_hala_gecerli_mi(symbol, yon):
                     basarili_mi = pnl > 0
                     if basarili_mi:
@@ -364,7 +357,6 @@ def otomatik_arkaplan_tarayici():
                     pozisyonu_garantili_kapat(symbol, yon, kontrat, f"🧠 *AKILLI ERKEN ÇIKIŞ (RÜZGAR DÖNDÜ)*\n📌 `{symbol}` | Sinyal bozulduğu için çıkıldı. PnL: `{pnl:+.2f} USDT` (`%{roe:+.2f}`)", basarili=basarili_mi)
                     continue
 
-                # 2. Klasik Hedef (TP) ve Stop (SL) Kontrolleri (Breakeven kaldırıldı, orijinal stop geçerli)
                 if roe >= hedef_roe:
                     ANALitik_HAFIZA["basarili_islem_sayisi"] += 1
                     hafizayi_kaydet()
@@ -378,13 +370,21 @@ def otomatik_arkaplan_tarayici():
 
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
-                if symbol in aktif_borsa_map or time.time() < COIN_COOLDOWNLAR.get(symbol, 0): continue
+                if symbol in aktif_borsa_map:
+                    print(f"⏭️ [ATLANDI] {symbol} zaten açık pozisyonda.", flush=True)
+                    continue
+                if time.time() < COIN_COOLDOWNLAR.get(symbol, 0):
+                    kalan_saniye = int(COIN_COOLDOWNLAR[symbol] - time.time())
+                    print(f"⏳ [COOLDOWN] {symbol} için {kalan_saniye} saniye bekleme süresi var.", flush=True)
+                    continue
 
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    if not hacim_ve_likidite_kontrolu(df): continue
+                    if not hacim_ve_likidite_kontrolu(df):
+                        print(f"💧 [LİKİDİTE YETERSİZ] {symbol} hacim eşiğinin altında.", flush=True)
+                        continue
 
                     ema7 = ta.trend.ema_indicator(df['close'], window=7).iloc[-1]
                     ema21 = ta.trend.ema_indicator(df['close'], window=21).iloc[-1]
@@ -395,7 +395,9 @@ def otomatik_arkaplan_tarayici():
                     degisim = ((guncel_fiyat - df['close'].iloc[-10]) / df['close'].iloc[-10]) * 100
                     derinlik = emir_defteri_derinlik_analizi(symbol)
                     atr = atr_ve_volatilite_hesapla(df)
-                except Exception: continue
+                except Exception as e:
+                    print(f"⚠️ Veri çekme hatası ({symbol}): {e}", flush=True)
+                    continue
 
                 sinyal_puani, grid_yonu = 50, "LONG"
                 if degisim >= 2.5 and rsi > 62 and derinlik in ["SATICI_BASKIN", "DENGELI"]:
@@ -408,7 +410,10 @@ def otomatik_arkaplan_tarayici():
                 else:
                     grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
 
+                print(f"📊 [TARAMA] {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
+
                 if not yapay_zeka_islem_onayi(rsi, adx_val, float(ema7 - ema21), (1 if grid_yonu == 'LONG' else -1), atr, COIN_ID_MAP.get(symbol, 0), symbol):
+                    print(f"🤖 [YAPAY ZEKA REDDETTİ] {symbol} için işlem onayı çıkmadı.", flush=True)
                     continue
 
                 taranan_sinyaller.append({"symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, "rsi": rsi, "adx": adx_val, "ema_fark": float(ema7 - ema21), "fiyat": guncel_fiyat, "atr": atr, "altin_atis": sinyal_puani >= 85})
@@ -441,6 +446,7 @@ def otomatik_arkaplan_tarayici():
                     }
                     hafizayi_kaydet()
                     
+                    print(f"⚡ [İŞLEM AÇILDI] {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']} | Kaldıraç: {kaldirac}x", flush=True)
                     telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}` | Kaldıraç: `{kaldirac}x`")
                     break
                 except Exception as e:
@@ -450,12 +456,8 @@ def otomatik_arkaplan_tarayici():
             print(f"⚠️ Tarayıcı hatası: {e}", flush=True)
         time.sleep(5)
 
-def flask_thread():
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)), use_reloader=False)
-
 if __name__ == '__main__':
     threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True).start()
-    threading.Thread(target=flask_thread, daemon=True).start()
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
@@ -463,5 +465,5 @@ if __name__ == '__main__':
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
-    print("🤖 Telegram Bot (python-telegram-bot) Asenkron Polling Modunda Başlatıldı...", flush=True)
+    print("🤖 Telegram Bot (Saf Polling Modu) Başlatıldı...", flush=True)
     app_tg.run_polling()
