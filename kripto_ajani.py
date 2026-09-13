@@ -206,11 +206,20 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         basari_orani = (basarili / toplam_islem * 100) if toplam_islem > 0 else 0.0
         egitim_veri_sayisi = len(ANALitik_HAFIZA.get("egitim_verileri", []))
 
+        pos_detaylari = ""
+        for p in borsa_poslari:
+            sym = p['symbol']
+            yon = str(p.get('side', '')).upper()
+            pnl_val = float(p.get('unrealizedPnl', 0))
+            giris = float(p.get('entryPrice', 0))
+            pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}` | PnL: `{pnl_val:+.2f} USDT`"
+
         mesaj = (
             "📊 **HİBRİT BOT DURUMU**\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"🟢 Anlık PnL: `{toplam_pnl:+.2f} USDT`\n"
-            f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n\n"
+            f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
+            f"{pos_detaylari}\n\n"
             f"✅ Başarili TP: `{basarili}` | ❌ Başarısız SL: `{basarisiz}`\n"
             f"📈 Başarı Oranı: `%{basari_orani:.1f}`\n"
             f"🧠 Al Verisi: `{egitim_veri_sayisi}/20`"
@@ -301,22 +310,19 @@ def otomatik_arkaplan_tarayici():
                     adx_val = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx().iloc[-1]
                     atr = atr_ve_volatilite_hesapla(df)
 
-                    # MUM FORMASYONU TEYİDİ (Örn: Tepe/Dip ve Kapanmış Son 2 Mum Teyidi)
+                    # MUM FORMASYONU TEYİDİ (Kapanmış son 2 mum analizi)
                     son_kapanan_close = df['close'].iloc[-2]
                     son_kapanan_open = df['open'].iloc[-2]
                     onceki_kapanan_close = df['close'].iloc[-3]
                     onceki_kapanan_open = df['open'].iloc[-3]
 
-                    # İki ardışık kırmızı mum ve tepe kırılım teyidi
-                    short_formasyon_onayi = (onceki_kapanan_close > onceki_kapanan_open) and (son_kapanan_close < son_kapanan_open) and (df['close'].iloc[-2] < df['open'].iloc[-2])
-                    # İki ardışık yeşil mum ve dip dönüş teyidi
+                    short_formasyon_onayi = (onceki_kapanan_close > onceki_kapanan_open) and (son_kapanan_close < son_kapanan_open)
                     long_formasyon_onayi = (onceki_kapanan_close < onceki_kapanan_open) and (son_kapanan_close > son_kapanan_open)
 
                 except Exception as e:
                     print(f"⚠️ Veri çekme hatası ({symbol}): {e}", flush=True)
                     continue
 
-                # Puan ve Yön Belirleme (ADX + EMA + Formasyon uyumu)
                 if adx_val >= 25:
                     temel_puan = 75
                 else:
