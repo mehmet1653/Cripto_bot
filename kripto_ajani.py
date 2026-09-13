@@ -127,7 +127,7 @@ def yapay_zekayi_egit_ve_guncelle():
     global ai_model, ai_model_egitildi
     with state_lock:
         veriler = list(ANALitik_HAFIZA.get("egitim_verileri", []))
-    if len(veriler) < 5:  # Test için düşük tutuldu, 5 veri olunca eğitir
+    if len(veriler) < 5:
         ai_model_egitildi = False
         return
     try:
@@ -175,7 +175,6 @@ def pozisyon_kapandi_olarak_isaretle(symbol, yon, kar_zarar=0.0, sebep_mesaji=""
         ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
         ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
 
-        # Yapay zeka eğitim verisi ekle (RSI, ADX, EMA_Fark, Yon_Kod, ATR, Coin_ID, Sonuc(1 veya 0))
         if egitim_ekle:
             aktif_bilgi = AKTIF_GRID_SISTEMLERI.get(symbol, {})
             r = float(aktif_bilgi.get("giris_rsi", 50.0))
@@ -335,8 +334,8 @@ def otomatik_arkaplan_tarayici():
 
             onceki_aktif_semboller = guncel_aktif_semboller.copy()
 
-            # Rüzgar tersine dönme kontrolü
-            for symbol, pos in guncel_borsa_poslari.items():
+            # Rüzgar tersine dönme kontrolü (Döngü hatası almamak için list() içine alındı)
+            for symbol, pos in list(guncel_borsa_poslari.items()):
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
                 except Exception: continue
@@ -381,7 +380,7 @@ def otomatik_arkaplan_tarayici():
                             pass
                         
                         # Rüzgar değişiminde cooldown YOK, hemen zıt yöne aç
-                        pozisyon_kapandi_olarak_isaretle(symbol, yon, kar_zarar=pnl, sebep_mesaji=f"🔄 *RÜZGAR TERSİne DÖNDÜ*\n📌 `{symbol}` | PnL: `{pnl:+.2f} USDT` ile kapatılıp hemen zıt yöne dönülüyor.", cooldown_uygula=False, egitim_ekle=True)
+                        pozisyon_kapandi_olarak_isaretle(symbol, yon, kar_zarar=pnl, sebep_mesaji=f"🔄 *RÜZGAR TERSİNE DÖNDÜ*\n📌 `{symbol}` | PnL: `{pnl:+.2f} USDT` ile kapatılıp hemen zıt yöne dönülüyor.", cooldown_uygula=False, egitim_ekle=True)
                         
                         try:
                             toplam_bakiye = float(exchange.fetch_balance()['total'].get('USDT', 0))
