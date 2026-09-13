@@ -264,7 +264,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for pos in exchange.fetch_positions():
             kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
             if kontrat > 0:
-                sym = pos['symbol']amo
+                sym = pos['symbol']
                 yon = str(pos.get('side', '')).upper()
                 pnl = float(pos.get('unrealizedPnl', 0))
                 kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
