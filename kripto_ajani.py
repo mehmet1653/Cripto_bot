@@ -32,6 +32,7 @@ exchange = ccxt.gate({
     }
 })
 
+# Sandbox kapatıldı (Gerçek emir için False)
 exchange.set_sandbox_mode(False)
 
 TAKIP_EDILENLER = [
@@ -117,7 +118,7 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {"basarili_islem_sayisi": 0, "basa
 COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
 MAKSIMUM_TOPLAM_POZISYON = 3
-COOLDOWN_SURESI_SANIYE = 30 * 60  # Testereyi önlemek için 30 dakikaya çıkarıldı
+COOLDOWN_SURESI_SANIYE = 45 * 60  # Testereye karşı 45 dakika bekleme
 
 ai_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
 ai_model_egitildi = False
@@ -143,7 +144,7 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id):
     try:
         olasiliklar = ai_model.predict_proba(np.array([[float(rsi), float(adx), float(ema_fark), int(yon_kod), float(atr_yuzde), int(coin_id)]]))[0]
         classes = list(ai_model.classes_)
-        return (olasiliklar[classes.index(1)] if 1 in classes else 1.0) >= 0.58
+        return (olasiliklar[classes.index(1)] if 1 in classes else 1.0) >= 0.60
     except Exception:
         return True
 
@@ -280,7 +281,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
-    print("🚀 Tarayıcı Döngüsü Başlatıldı.", flush=True)
+    print("🚀 Tarayıcı Döngüsü Başlatıldı (1h Ana Trend Filtreli).", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -289,8 +290,6 @@ def otomatik_arkaplan_tarayici():
     
     onceki_aktif_semboller = set()
     onceki_pnl_takibi = {}
-    
-    # Rüzgar değişimlerinde sahte sinyalleri (testereyi) önlemek için sayaç
     ruzgar_sayaclari = {}
 
     while True:
@@ -339,40 +338,29 @@ def otomatik_arkaplan_tarayici():
 
             onceki_aktif_semboller = guncel_aktif_semboller.copy()
 
-            # 2. AÇIK POZİSYONLARIN RÜZGARINI KONTROL ET (TESTERE FİLTRELİ)
+            # 2. AÇIK POZİSYONLARIN RÜZGARINI KONTROL ET (1 SAATLİK TREND FİLTRESİ)
             for symbol, pos in list(guncel_borsa_poslari.items()):
                 try:
                     yon = str(pos.get('side', '')).upper()
                     pnl = float(pos.get('unrealizedPnl', 0))
                     kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 1.0)
 
-                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
+                    # 1 saatlik (1h) mumlara bakarak ana trendi ölçüyoruz (Gürültüyü yok eder)
+                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    ema5 = ta.trend.ema_indicator(df['close'], window=5).iloc[-1]
-                    ema13 = ta.trend.ema_indicator(df['close'], window=13).iloc[-1]
+                    ema9 = ta.trend.ema_indicator(df['close'], window=9).iloc[-1]
+                    ema21 = ta.trend.ema_indicator(df['close'], window=21).iloc[-1]
                     adx_val = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx().iloc[-1]
                     atr = atr_ve_volatilite_hesapla(df)
 
-                    son_kapanan_close = df['close'].iloc[-2]
-                    son_kapanan_open = df['open'].iloc[-2]
-                    onceki_kapanan_close = df['close'].iloc[-3]
-                    onceki_kapanan_open = df['open'].iloc[-3]
-
-                    short_formasyon = (onceki_kapanan_close > onceki_kapanan_open) and (son_kapanan_close < son_kapanan_open)
-                    long_formasyon = (onceki_kapanan_close < onceki_kapanan_open) and (son_kapanan_close > son_kapanan_open)
-
-                    temel_puan = 75 if adx_val >= 25 else 60
-                    if ema5 > ema13 and long_formasyon:
-                        grid_yonu, sinyal_puani = "LONG", temel_puan + 10
-                    elif ema5 < ema13 and short_formasyon:
-                        grid_yonu, sinyal_puani = "SHORT", temel_puan + 10
+                    if ema9 > ema21:
+                        grid_yonu, sinyal_puani = "LONG", 80 if adx_val >= 25 else 70
                     else:
-                        grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
-                        sinyal_puani = temel_puan
+                        grid_yonu, sinyal_puani = "SHORT", 80 if adx_val >= 25 else 70
 
-                    print(f"📌 [AÇIK POZİSYON] {symbol} | Mevcut: {yon} | Rüzgar: {grid_yonu} (Puan: {sinyal_puani})", flush=True)
+                    print(f"📌 [1h RÜZGAR] {symbol} | Mevcut: {yon} | 1h Trend: {grid_yonu} (ADX: {adx_val:.1f})", flush=True)
 
-                    # Rüzgar tersine döndü mü kontrol et
+                    # Rüzgarın tersine döndüğünü kesinleştirmek için 5 döngü boyunca aynı kalmalı
                     if sinyal_puani >= 75 and yon != grid_yonu:
                         if symbol not in ruzgar_sayaclari:
                             ruzgar_sayaclari[symbol] = {"yon": grid_yonu, "sayac": 1}
@@ -381,9 +369,8 @@ def otomatik_arkaplan_tarayici():
                         else:
                             ruzgar_sayaclari[symbol] = {"yon": grid_yonu, "sayac": 1}
 
-                        # Rüzgarın kalıcı olduğunu anlamak için üst üste 3 döngü (15 saniye) boyunca aynı yönü koruması şartı
-                        if ruzgar_sayaclari[symbol]["sayac"] >= 3:
-                            print(f"🔄 [RÜZGAR KALICI OLARAK DÖNDÜ] {symbol} | Eski: {yon} -> Yeni: {grid_yonu}.", flush=True)
+                        if ruzgar_sayaclari[symbol]["sayac"] >= 5:  # Üst üste 5 kez (25 saniye boyunca 1h trend teyitli)
+                            print(f"🔄 [1h TREND DEĞİŞTİ] {symbol} | Eski: {yon} -> Yeni: {grid_yonu}.", flush=True)
                             try:
                                 exchange.cancel_all_orders(symbol)
                                 kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
@@ -391,7 +378,7 @@ def otomatik_arkaplan_tarayici():
                             except Exception:
                                 pass
                             
-                            pozisyon_kapandi_olarak_isaretle(symbol, yon, kar_zarar=pnl, sebep_mesaji=f"🔄 *RÜZGAR TERSİNE DÖNDÜ*\n📌 `{symbol}` | PnL: `{pnl:+.2f} USDT`", cooldown_uygula=False, egitim_ekle=True)
+                            pozisyon_kapandi_olarak_isaretle(symbol, yon, kar_zarar=pnl, sebep_mesaji=f"🔄 *1h ANA TREND DÖNDÜ*\n📌 `{symbol}` | PnL: `{pnl:+.2f} USDT`", cooldown_uygula=False, egitim_ekle=True)
                             
                             toplam_bakiye = float(exchange.fetch_balance()['total'].get('USDT', 0))
                             exchange.set_leverage(10, symbol)
@@ -401,16 +388,16 @@ def otomatik_arkaplan_tarayici():
                             yeni_islem_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
                             exchange.create_order(symbol, 'market', yeni_islem_yonu, yeni_miktar)
 
-                            telegram_mesaj_gonder(f"⚡ *RÜZGAR TERSİNE İŞLEM AÇILDI*\n📌 `{symbol}` | Yön: `{grid_yonu}`")
+                            telegram_mesaj_gonder(f"⚡ *YENİ TREND İŞLEMİ AÇILDI*\n📌 `{symbol}` | Yön: `{grid_yonu}`")
                             del ruzgar_sayaclari[symbol]
                     else:
                         if symbol in ruzgar_sayaclari:
                             del ruzgar_sayaclari[symbol]
 
                 except Exception as e:
-                    print(f"⚠️ Açık pozisyon rüzgar kontrol hatası ({symbol}): {e}", flush=True)
+                    print(f"⚠️ 1h rüzgar kontrol hatası ({symbol}): {e}", flush=True)
 
-            # 3. TÜM LİSTEYİ TARAYIP FIRSATLARI GÖSTER VE İŞLEM AÇ
+            # 3. LİSTEYİ TARAYIP İŞLEM AÇMA (1h Trend ve 75 Puan Kuralı)
             taranan_sinyaller = []
 
             for symbol in TAKIP_EDILENLER:
@@ -425,43 +412,31 @@ def otomatik_arkaplan_tarayici():
 
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
-                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
+                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-                    ema5 = ta.trend.ema_indicator(df['close'], window=5).iloc[-1]
-                    ema13 = ta.trend.ema_indicator(df['close'], window=13).iloc[-1]
+                    ema9 = ta.trend.ema_indicator(df['close'], window=9).iloc[-1]
+                    ema21 = ta.trend.ema_indicator(df['close'], window=21).iloc[-1]
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
                     adx_val = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx().iloc[-1]
                     atr = atr_ve_volatilite_hesapla(df)
 
-                    son_kapanan_close = df['close'].iloc[-2]
-                    son_kapanan_open = df['open'].iloc[-2]
-                    onceki_kapanan_close = df['close'].iloc[-3]
-                    onceki_kapanan_open = df['open'].iloc[-3]
-
-                    short_formasyon_onayi = (onceki_kapanan_close > onceki_kapanan_open) and (son_kapanan_close < son_kapanan_open)
-                    long_formasyon_onayi = (onceki_kapanan_close < onceki_kapanan_open) and (son_kapanan_close > son_kapanan_open)
-
-                    temel_puan = 75 if adx_val >= 25 else 60
-                    if ema5 > ema13 and long_formasyon_onayi:
-                        grid_yonu, sinyal_puani = "LONG", temel_puan + 10
-                    elif ema5 < ema13 and short_formasyon_onayi:
-                        grid_yonu, sinyal_puani = "SHORT", temel_puan + 10
+                    if ema9 > ema21:
+                        grid_yonu, sinyal_puani = "LONG", 80 if adx_val >= 25 else 70
                     else:
-                        grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
-                        sinyal_puani = temel_puan
+                        grid_yonu, sinyal_puani = "SHORT", 80 if adx_val >= 25 else 70
 
-                    print(f"🔍 {symbol} | Puan: {sinyal_puani} | Yön: {grid_yonu} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
+                    print(f"🔍 [1h TARAMA] {symbol} | Puan: {sinyal_puani} | Yön: {grid_yonu} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
 
                     if symbol in guncel_borsa_poslari:
                         continue
 
-                    if not yapay_zeka_islem_onayi(rsi, adx_val, float(ema5 - ema13), (1 if grid_yonu == 'LONG' else -1), atr, COIN_ID_MAP.get(symbol, 0)):
+                    if not yapay_zeka_islem_onayi(rsi, adx_val, float(ema9 - ema21), (1 if grid_yonu == 'LONG' else -1), atr, COIN_ID_MAP.get(symbol, 0)):
                         continue
 
                     taranan_sinyaller.append({
                         "symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, 
-                        "rsi": rsi, "adx": adx_val, "ema_fark": float(ema5 - ema13), 
+                        "rsi": rsi, "adx": adx_val, "ema_fark": float(ema9 - ema21), 
                         "fiyat": guncel_fiyat, "atr": atr
                     })
                 except Exception as e:
@@ -472,7 +447,7 @@ def otomatik_arkaplan_tarayici():
 
             for sinyal in taranan_sinyaller:
                 if len(guncel_borsa_poslari) >= MAKSIMUM_TOPLAM_POZISYON: break
-                if sinyal["puan"] < 75: continue  # Puan eşiği 75'e çekilerek gürültü filtrelendi
+                if sinyal["puan"] < 75: continue  # Sadece güçlü 1h trendleri al
 
                 try:
                     toplam_bakiye = float(exchange.fetch_balance()['total'].get('USDT', 0))
@@ -494,7 +469,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     print(f"⚡ [İŞLEM AÇILDI] {sinyal['symbol']} | Yön: {sinyal['yon']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
+                    telegram_mesaj_gonder(f"⚡ *YENİ İŞLEM AÇILDI*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası: {e}", flush=True)
