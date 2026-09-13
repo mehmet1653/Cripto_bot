@@ -127,7 +127,7 @@ def yapay_zekayi_egit_ve_guncelle():
     global ai_model, ai_model_egitildi
     with state_lock:
         veriler = list(ANALitik_HAFIZA.get("egitim_verileri", []))
-    if len(veriler) < 20:
+    if len(veriler) < 5:  # Test için düşük tutuldu, 5 veri olunca eğitir
         ai_model_egitildi = False
         return
     try:
@@ -161,25 +161,42 @@ def telegram_mesaj_gonder(mesaj):
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}, timeout=5)
     except Exception: pass
 
-def pozisyon_kapandi_olarak_isaretle(symbol, yon, basarili=True, sebep_mesaji="", cooldown_uygula=True):
+def pozisyon_kapandi_olarak_isaretle(symbol, yon, kar_zarar=0.0, sebep_mesaji="", cooldown_uygula=True, egitim_ekle=True):
     with state_lock:
         bas_sayi = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0))
         basarisiz_sayi = int(ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0))
+        
+        basarili = kar_zarar > 0
         if basarili:
             bas_sayi += 1
         else:
             basarisiz_sayi += 1
+            
         ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
         ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
 
-        # Sadece TP/SL durumunda cooldown ekle (Rüzgar değişiminde cooldown UYGULANMAZ)
+        # Yapay zeka eğitim verisi ekle (RSI, ADX, EMA_Fark, Yon_Kod, ATR, Coin_ID, Sonuc(1 veya 0))
+        if egitim_ekle:
+            aktif_bilgi = AKTIF_GRID_SISTEMLERI.get(symbol, {})
+            r = float(aktif_bilgi.get("giris_rsi", 50.0))
+            a = float(aktif_bilgi.get("giris_adx", 25.0))
+            ef = float(aktif_bilgi.get("giris_ema_fark", 0.0))
+            atr_v = float(aktif_bilgi.get("giris_atr", 1.5))
+            y_kod = 1 if yon == "LONG" else -1
+            c_id = int(COIN_ID_MAP.get(symbol, 0))
+            sonuc_kod = 1 if basarili else 0
+            
+            egitim_satiri = [r, a, ef, y_kod, atr_v, c_id, sonuc_kod]
+            if "egitim_verileri" not in ANALitik_HAFIZA:
+                ANALitik_HAFIZA["egitim_verileri"] = []
+            ANALitik_HAFIZA["egitim_verileri"].append(egitim_satiri)
+
         if cooldown_uygula:
             COIN_COOLDOWNLAR[symbol] = {
                 "zaman": float(time.time() + COOLDOWN_SURESI_SANIYE),
                 "son_yon": yon
             }
         else:
-            # Rüzgar değişiminde önceki olası cooldown'u temizle ki hemen tersine açabilsin
             if symbol in COIN_COOLDOWNLAR:
                 del COIN_COOLDOWNLAR[symbol]
 
@@ -187,6 +204,7 @@ def pozisyon_kapandi_olarak_isaretle(symbol, yon, basarili=True, sebep_mesaji=""
             del AKTIF_GRID_SISTEMLERI[symbol]
 
     hafizayi_kaydet()
+    yapay_zekayi_egit_ve_guncelle()
     if sebep_mesaji:
         telegram_mesaj_gonder(sebep_mesaji)
 
@@ -249,13 +267,14 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if kontrat > 0:
                 sym = pos['symbol']
                 yon = str(pos.get('side', '')).upper()
+                pnl = float(pos.get('unrealizedPnl', 0))
                 kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
                 try:
                     exchange.cancel_all_orders(sym)
                     exchange.create_order(sym, 'market', kapatma_yonu, kontrat, None, {'reduceOnly': True})
                 except Exception:
                     pass
-                pozisyon_kapandi_olarak_isaretle(sym, yon, basarili=False, sebep_mesaji=f"🛑 Manuel Kapatma - `{sym}`", cooldown_uygula=True)
+                pozisyon_kapandi_olarak_isaretle(sym, yon, kar_zarar=pnl, sebep_mesaji=f"🛑 *MANUEL KAPATMA*\n📌 `{sym}` | PnL: `{pnl:+.2f} USDT`", cooldown_uygula=True)
         await update.message.reply_text("✅ Tüm pozisyonlar kapatıldı.")
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
@@ -270,6 +289,7 @@ def otomatik_arkaplan_tarayici():
     except Exception: pass
     
     onceki_aktif_semboller = set()
+    onceki_pnl_takibi = {}
 
     while True:
         try:
@@ -279,40 +299,50 @@ def otomatik_arkaplan_tarayici():
 
             try:
                 raw_positions = exchange.fetch_positions()
-                guncel_borsa_poslari = {p['symbol']: p for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0}
+                guncel_borsa_poslari = {}
+                for p in raw_positions:
+                    kont = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+                    if kont > 0:
+                        sym = p['symbol']
+                        guncel_borsa_poslari[sym] = p
+                        onceki_pnl_takibi[sym] = float(p.get('unrealizedPnl', 0))
             except Exception as e:
                 print(f"⚠️ Pozisyonlar çekilirken hata: {e}", flush=True)
                 guncel_borsa_poslari = {}
 
             guncel_aktif_semboller = set(guncel_borsa_poslari.keys())
 
-            # Borsa tarafında (TP veya SL ile) kapanan pozisyonları tespit et (15 dk cooldown uygulanır)
+            # TP veya SL ile borsa tarafında kapanan pozisyonları tespit et
             kapananlar = onceki_aktif_semboller - guncel_aktif_semboller
             for kapatilan_sym in kapananlar:
-                print(f"🎯 Borsa tarafında pozisyon kapandı (TP/SL tetiklendi): {kapatilan_sym}", flush=True)
+                son_pnl = onceki_pnl_takibi.get(kapatilan_sym, 0.0)
+                durum_emoji = "🎯 *KÂR ALINDI (TP)*" if son_pnl >= 0 else "❌ *STOP OLDU (SL)*"
+                print(f"🎯 Borsa tarafında pozisyon kapandı: {kapatilan_sym} | PnL: {son_pnl}", flush=True)
+                
                 pozisyon_kapandi_olarak_isaretle(
                     kapatilan_sym, 
                     yon="BİLİNMİYOR", 
-                    basarili=True, 
-                    sebep_mesaji=f"🎯 *KÂR ALINDI (TP)*\n📌 `{kapatilan_sym}` | İşlem borsa emriyle tamamlandı ve 15 dk cooldown başlatıldı.",
-                    cooldown_uygula=True
+                    kar_zarar=son_pnl, 
+                    sebep_mesaji=f"{durum_emoji}\n📌 `{kapatilan_sym}` | PnL: `{son_pnl:+.2f} USDT` ve 15 dk cooldown başlatıldı.",
+                    cooldown_uygula=True,
+                    egitim_ekle=True
                 )
                 try:
                     exchange.cancel_all_orders(kapatilan_sym)
                 except Exception:
                     pass
+                onceki_pnl_takibi.pop(kapatilan_sym, None)
 
             onceki_aktif_semboller = guncel_aktif_semboller.copy()
 
-            # Rüzgar tersine dönme kontrolü (Pozisyonu kapatıp BEKLEMEDEN hemen zıt yöne açacak)
+            # Rüzgar tersine dönme kontrolü
             for symbol, pos in guncel_borsa_poslari.items():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
                 except Exception: continue
 
                 yon = str(pos.get('side', '')).upper()
-                merkez = float(pos.get('entryPrice', 0))
-                kaldirac = int(pos.get('leverage', 10))
+                pnl = float(pos.get('unrealizedPnl', 0))
                 kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 1.0)
 
                 try:
@@ -342,7 +372,7 @@ def otomatik_arkaplan_tarayici():
                         sinyal_puani = temel_puan
 
                     if sinyal_puani >= 70 and yon != grid_yonu:
-                        print(f"🔄 [RÜZGAR DÖNDÜ] {symbol} | Eski: {yon} -> Yeni: {grid_yonu}. Kapatılıp hemen tersine açılıyor.", flush=True)
+                        print(f"🔄 [RÜZGAR DÖNDÜ] {symbol} | Eski: {yon} -> Yeni: {grid_yonu}.", flush=True)
                         try:
                             exchange.cancel_all_orders(symbol)
                             kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
@@ -350,10 +380,9 @@ def otomatik_arkaplan_tarayici():
                         except Exception:
                             pass
                         
-                        # Rüzgar değişiminde cooldown YOK (cooldown_uygula=False), hemen zıt yöne açıyoruz
-                        pozisyon_kapandi_olarak_isaretle(symbol, yon, basarili=False, sebep_mesaji=f"🔄 *RÜZGAR TERSİNE DÖNDÜ*\n📌 `{symbol}` | Pozisyon kapatılıp hemen zıt yöne dönülüyor.", cooldown_uygula=False)
+                        # Rüzgar değişiminde cooldown YOK, hemen zıt yöne aç
+                        pozisyon_kapandi_olarak_isaretle(symbol, yon, kar_zarar=pnl, sebep_mesaji=f"🔄 *RÜZGAR TERSİne DÖNDÜ*\n📌 `{symbol}` | PnL: `{pnl:+.2f} USDT` ile kapatılıp hemen zıt yöne dönülüyor.", cooldown_uygula=False, egitim_ekle=True)
                         
-                        # Zıt yöne anında işlem aç
                         try:
                             toplam_bakiye = float(exchange.fetch_balance()['total'].get('USDT', 0))
                             exchange.set_leverage(10, symbol)
@@ -364,7 +393,12 @@ def otomatik_arkaplan_tarayici():
                             exchange.create_order(symbol, 'market', yeni_islem_yonu, yeni_miktar)
 
                             with state_lock:
-                                AKTIF_GRID_SISTEMLERI[symbol] = {"giris_rsi": float(rsi)}
+                                AKTIF_GRID_SISTEMLERI[symbol] = {
+                                    "giris_rsi": float(rsi),
+                                    "giris_adx": float(adx_val),
+                                    "giris_ema_fark": float(ema5 - ema13),
+                                    "giris_atr": float(atr)
+                                }
                             hafizayi_kaydet()
                             telegram_mesaj_gonder(f"⚡ *RÜZGAR TERSİNE İŞLEM AÇILDI*\n📌 `{symbol}` | Yön: `{grid_yonu}`")
                         except Exception as e:
@@ -381,7 +415,6 @@ def otomatik_arkaplan_tarayici():
                 if not BOT_CALISIYOR_MU: break
                 if symbol in guncel_borsa_poslari: continue
                 
-                # Cooldown kontrolü (Sadece normal TP/SL sonrası 15 dk engeller)
                 with state_lock:
                     cooldown_veri = COIN_COOLDOWNLAR.get(symbol)
                     if cooldown_veri:
@@ -446,7 +479,12 @@ def otomatik_arkaplan_tarayici():
                     exchange.create_order(sinyal["symbol"], 'market', islem_yonu, miktar)
 
                     with state_lock:
-                        AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {"giris_rsi": float(sinyal["rsi"])}
+                        AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {
+                            "giris_rsi": float(sinyal["rsi"]),
+                            "giris_adx": float(sinyal["adx"]),
+                            "giris_ema_fark": float(sinyal["ema_fark"]),
+                            "giris_atr": float(sinyal["atr"])
+                        }
                     hafizayi_kaydet()
                     
                     print(f"⚡ [İŞLEM AÇILDI] {sinyal['symbol']} | Yön: {sinyal['yon']}", flush=True)
