@@ -23,7 +23,6 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://rllpcylzhptqwzmzehnv.supa
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "Sb_secret_ln9y67Ep_zCtOQ9Q2NE8KQ_nf0gKkmO")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Gate.io bağlantısı optimize edildi
 exchange = ccxt.gate({
     'apiKey': '82cca880898a88d1a31e86d8eb474c57',
     'secret': '1ac479b9df5e6f2e89560b0d238a250694719b6fcae20da00ebc54ad6aeb8898',
@@ -271,7 +270,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
                 try:
                     exchange.cancel_all_orders(sym)
-                    exchange.create_order(sym, 'market', kapatma_yonu, kontrat, None, {'reduceOnly': True})
+                    exchange.create_order(sym, 'market', kapatma_yonu, kontrat, None, {'reduce_only': True})
                 except Exception:
                     pass
                 pozisyon_kapandi_olarak_isaretle(sym, yon, kar_zarar=pnl, sebep_mesaji=f"🛑 *MANUEL KAPATMA*\n📌 `{sym}` | PnL: `{pnl:+.2f} USDT`", cooldown_uygula=True)
@@ -282,7 +281,8 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
-    print("🚀 Tarayıcı Döngüsü Başlatıldı (1h Ana Trend Filtreli).", flush=True)
+    print("🚀 Tarayıcı Döngüsü Başlatıldı.", flush=True)
+    
     try:
         exchange.load_markets()
         exchange.load_time_difference()
@@ -350,7 +350,6 @@ def otomatik_arkaplan_tarayici():
                     ema9 = ta.trend.ema_indicator(df['close'], window=9).iloc[-1]
                     ema21 = ta.trend.ema_indicator(df['close'], window=21).iloc[-1]
                     adx_val = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx().iloc[-1]
-                    atr = atr_ve_volatilite_hesapla(df)
 
                     if ema9 > ema21:
                         grid_yonu, sinyal_puani = "LONG", 80 if adx_val >= 25 else 70
@@ -369,7 +368,7 @@ def otomatik_arkaplan_tarayici():
                             try:
                                 exchange.cancel_all_orders(symbol)
                                 kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
-                                exchange.create_order(symbol, 'market', kapatma_yonu, kontrat, None, {'reduceOnly': True})
+                                exchange.create_order(symbol, 'market', kapatma_yonu, kontrat, None, {'reduce_only': True})
                             except Exception:
                                 pass
                             
@@ -451,6 +450,8 @@ def otomatik_arkaplan_tarayici():
                     miktar = float(exchange.amount_to_precision(sinyal["symbol"], max((toplam_bakiye * 0.20 * 10) / sinyal["fiyat"] / float(market.get('contractSize', 1.0)), float(market['limits']['amount']['min'] or 1.0))))
                     
                     islem_yonu = 'buy' if sinyal["yon"] == 'LONG' else 'sell'
+                    
+                    # Emir parametreleri kesinleştirildi ve eski çalışan yapıya çekildi
                     exchange.create_order(sinyal["symbol"], 'market', islem_yonu, miktar)
 
                     with state_lock:
