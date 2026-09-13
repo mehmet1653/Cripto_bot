@@ -258,7 +258,7 @@ def otomatik_arkaplan_tarayici():
                 elif roe <= -10.0:
                     pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT`", basarili=False, ruzgar_dondu=False)
 
-            # 2. Aşama: Tüm coinleri tarama ve rüzgar dönüşü kontrolü
+            # 2. Aşama: Tüm coinleri tarama (EMA 5 ve EMA 13 ile hassas yön takibi)
             taranan_sinyaller = []
 
             for symbol in TAKIP_EDILENLER:
@@ -269,8 +269,10 @@ def otomatik_arkaplan_tarayici():
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-                    ema7 = ta.trend.ema_indicator(df['close'], window=7).iloc[-1]
-                    ema21 = ta.trend.ema_indicator(df['close'], window=21).iloc[-1]
+                    # HASSAS EMA PERİYOTLARI (5 ve 13)
+                    ema5 = ta.trend.ema_indicator(df['close'], window=5).iloc[-1]
+                    ema13 = ta.trend.ema_indicator(df['close'], window=13).iloc[-1]
+                    
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
                     adx_val = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx().iloc[-1]
                     atr = atr_ve_volatilite_hesapla(df)
@@ -279,10 +281,10 @@ def otomatik_arkaplan_tarayici():
                     continue
 
                 if adx_val >= 25:
-                    grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
+                    grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     sinyal_puani = 75
                 else:
-                    grid_yonu = "LONG" if ema7 > ema21 else "SHORT"
+                    grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     sinyal_puani = 60
 
                 # --- AÇIK POZİSYONDA RÜZGARIN TERSİNE DÖNMESİ KONTROLÜ ---
@@ -310,10 +312,10 @@ def otomatik_arkaplan_tarayici():
 
                     print(f"📊 [ANALİZ] {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
 
-                    if not yapay_zeka_islem_onayi(rsi, adx_val, float(ema7 - ema21), (1 if grid_yonu == 'LONG' else -1), atr, COIN_ID_MAP.get(symbol, 0)):
+                    if not yapay_zeka_islem_onayi(rsi, adx_val, float(ema5 - ema13), (1 if grid_yonu == 'LONG' else -1), atr, COIN_ID_MAP.get(symbol, 0)):
                         continue
 
-                    taranan_sinyaller.append({"symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, "rsi": rsi, "adx": adx_val, "ema_fark": float(ema7 - ema21), "fiyat": guncel_fiyat, "atr": atr})
+                    taranan_sinyaller.append({"symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, "rsi": rsi, "adx": adx_val, "ema_fark": float(ema5 - ema13), "fiyat": guncel_fiyat, "atr": atr})
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
