@@ -264,7 +264,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for pos in exchange.fetch_positions():
             kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
             if kontrat > 0:
-                sym = pos['symbol']
+                sym = pos['symbol']amo
                 yon = str(pos.get('side', '')).upper()
                 pnl = float(pos.get('unrealizedPnl', 0))
                 kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
@@ -285,14 +285,17 @@ def otomatik_arkaplan_tarayici():
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
-    except Exception: pass
+    except Exception as e:
+        print(f"⚠️ İlk yükleme hatası: {e}", flush=True)
     
     onceki_aktif_semboller = set()
     onceki_pnl_takibi = {}
 
     while True:
         try:
+            print("🔄 Piyasa taranıyor...", flush=True)
             if not BOT_CALISIYOR_MU:
+                print("⏸️ Bot durduruldu modunda bekliyor...", flush=True)
                 time.sleep(5)
                 continue
 
@@ -311,7 +314,6 @@ def otomatik_arkaplan_tarayici():
 
             guncel_aktif_semboller = set(guncel_borsa_poslari.keys())
 
-            # TP veya SL ile borsa tarafında kapanan pozisyonları tespit et
             kapananlar = onceki_aktif_semboller - guncel_aktif_semboller
             for kapatilan_sym in kapananlar:
                 son_pnl = onceki_pnl_takibi.get(kapatilan_sym, 0.0)
@@ -334,7 +336,6 @@ def otomatik_arkaplan_tarayici():
 
             onceki_aktif_semboller = guncel_aktif_semboller.copy()
 
-            # Rüzgar tersine dönme kontrolü (Döngü hatası almamak için list() içine alındı)
             for symbol, pos in list(guncel_borsa_poslari.items()):
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
@@ -379,7 +380,6 @@ def otomatik_arkaplan_tarayici():
                         except Exception:
                             pass
                         
-                        # Rüzgar değişiminde cooldown YOK, hemen zıt yöne aç
                         pozisyon_kapandi_olarak_isaretle(symbol, yon, kar_zarar=pnl, sebep_mesaji=f"🔄 *RÜZGAR TERSİNE DÖNDÜ*\n📌 `{symbol}` | PnL: `{pnl:+.2f} USDT` ile kapatılıp hemen zıt yöne dönülüyor.", cooldown_uygula=False, egitim_ekle=True)
                         
                         try:
@@ -405,8 +405,8 @@ def otomatik_arkaplan_tarayici():
 
                         guncel_borsa_poslari.pop(symbol, None)
                         onceki_aktif_semboller.discard(symbol)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"⚠️ Rüzgar kontrol hatası ({symbol}): {e}", flush=True)
 
             taranan_sinyaller = []
 
@@ -449,7 +449,10 @@ def otomatik_arkaplan_tarayici():
                         grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
                         sinyal_puani = temel_puan
 
+                    print(f"🔍 {symbol} | Puan: {sinyal_puani} | Yön: {grid_yonu} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
+
                     if not yapay_zeka_islem_onayi(rsi, adx_val, float(ema5 - ema13), (1 if grid_yonu == 'LONG' else -1), atr, COIN_ID_MAP.get(symbol, 0)):
+                        print(f"🛡️ Yapay Zeka {symbol} için işlemi onaylamadı.", flush=True)
                         continue
 
                     taranan_sinyaller.append({
@@ -457,7 +460,8 @@ def otomatik_arkaplan_tarayici():
                         "rsi": rsi, "adx": adx_val, "ema_fark": float(ema5 - ema13), 
                         "fiyat": guncel_fiyat, "atr": atr
                     })
-                except Exception:
+                except Exception as e:
+                    print(f"⚠️ Sinyal tarama hatası ({symbol}): {e}", flush=True)
                     continue
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
@@ -506,5 +510,5 @@ if __name__ == '__main__':
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
-    print("🤖 Telegram Bot Başlatılıyor...", flush=True)
+    print("🤖 Telegram Bot Başlatılıyor ve Polling Çalıştırılıyor...", flush=True)
     app_tg.run_polling()
