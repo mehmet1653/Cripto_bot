@@ -117,7 +117,7 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {"basarili_islem_sayisi": 0, "basa
 COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
 MAKSIMUM_TOPLAM_POZISYON = 3
-COOLDOWN_SURESI_SANIYE = 15 * 60
+COOLDOWN_SURESI_SANIYE = 30 * 60  # Testereyi önlemek için 30 dakikaya çıkarıldı
 
 ai_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
 ai_model_egitildi = False
@@ -143,7 +143,7 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id):
     try:
         olasiliklar = ai_model.predict_proba(np.array([[float(rsi), float(adx), float(ema_fark), int(yon_kod), float(atr_yuzde), int(coin_id)]]))[0]
         classes = list(ai_model.classes_)
-        return (olasiliklar[classes.index(1)] if 1 in classes else 1.0) >= 0.55
+        return (olasiliklar[classes.index(1)] if 1 in classes else 1.0) >= 0.58
     except Exception:
         return True
 
@@ -289,6 +289,9 @@ def otomatik_arkaplan_tarayici():
     
     onceki_aktif_semboller = set()
     onceki_pnl_takibi = {}
+    
+    # Rüzgar değişimlerinde sahte sinyalleri (testereyi) önlemek için sayaç
+    ruzgar_sayaclari = {}
 
     while True:
         try:
@@ -331,10 +334,12 @@ def otomatik_arkaplan_tarayici():
                 except Exception:
                     pass
                 onceki_pnl_takibi.pop(kapatilan_sym, None)
+                if kapatilan_sym in ruzgar_sayaclari:
+                    del ruzgar_sayaclari[kapatilan_sym]
 
             onceki_aktif_semboller = guncel_aktif_semboller.copy()
 
-            # 2. AÇIK POZİSYONLARIN RÜZGARINI KONTROL ET
+            # 2. AÇIK POZİSYONLARIN RÜZGARINI KONTROL ET (TESTERE FİLTRELİ)
             for symbol, pos in list(guncel_borsa_poslari.items()):
                 try:
                     yon = str(pos.get('side', '')).upper()
@@ -365,28 +370,43 @@ def otomatik_arkaplan_tarayici():
                         grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
                         sinyal_puani = temel_puan
 
-                    print(f"📌 [AÇIK POZİSYON TAKİBİ] {symbol} | Mevcut: {yon} | Rüzgar: {grid_yonu} (Puan: {sinyal_puani})", flush=True)
+                    print(f"📌 [AÇIK POZİSYON] {symbol} | Mevcut: {yon} | Rüzgar: {grid_yonu} (Puan: {sinyal_puani})", flush=True)
 
-                    if sinyal_puani >= 70 and yon != grid_yonu:
-                        print(f"🔄 [RÜZGAR DÖNDÜ] {symbol} | Eski: {yon} -> Yeni: {grid_yonu}.", flush=True)
-                        try:
-                            exchange.cancel_all_orders(symbol)
-                            kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
-                            exchange.create_order(symbol, 'market', kapatma_yonu, kontrat, None, {'reduceOnly': True})
-                        except Exception:
-                            pass
-                        
-                        pozisyon_kapandi_olarak_isaretle(symbol, yon, kar_zarar=pnl, sebep_mesaji=f"🔄 *RÜZGAR TERSİNE DÖNDÜ*\n📌 `{symbol}` | PnL: `{pnl:+.2f} USDT`", cooldown_uygula=False, egitim_ekle=True)
-                        
-                        toplam_bakiye = float(exchange.fetch_balance()['total'].get('USDT', 0))
-                        exchange.set_leverage(10, symbol)
-                        market = exchange.market(symbol)
-                        yeni_miktar = float(exchange.amount_to_precision(symbol, max((toplam_bakiye * 0.20 * 10) / df['close'].iloc[-1] / float(market.get('contractSize', 1.0)), float(market['limits']['amount']['min'] or 1.0))))
-                        
-                        yeni_islem_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
-                        exchange.create_order(symbol, 'market', yeni_islem_yonu, yeni_miktar)
+                    # Rüzgar tersine döndü mü kontrol et
+                    if sinyal_puani >= 75 and yon != grid_yonu:
+                        if symbol not in ruzgar_sayaclari:
+                            ruzgar_sayaclari[symbol] = {"yon": grid_yonu, "sayac": 1}
+                        elif ruzgar_sayaclari[symbol]["yon"] == grid_yonu:
+                            ruzgar_sayaclari[symbol]["sayac"] += 1
+                        else:
+                            ruzgar_sayaclari[symbol] = {"yon": grid_yonu, "sayac": 1}
 
-                        telegram_mesaj_gonder(f"⚡ *RÜZGAR TERSİNE İŞLEM AÇILDI*\n📌 `{symbol}` | Yön: `{grid_yonu}`")
+                        # Rüzgarın kalıcı olduğunu anlamak için üst üste 3 döngü (15 saniye) boyunca aynı yönü koruması şartı
+                        if ruzgar_sayaclari[symbol]["sayac"] >= 3:
+                            print(f"🔄 [RÜZGAR KALICI OLARAK DÖNDÜ] {symbol} | Eski: {yon} -> Yeni: {grid_yonu}.", flush=True)
+                            try:
+                                exchange.cancel_all_orders(symbol)
+                                kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
+                                exchange.create_order(symbol, 'market', kapatma_yonu, kontrat, None, {'reduceOnly': True})
+                            except Exception:
+                                pass
+                            
+                            pozisyon_kapandi_olarak_isaretle(symbol, yon, kar_zarar=pnl, sebep_mesaji=f"🔄 *RÜZGAR TERSİNE DÖNDÜ*\n📌 `{symbol}` | PnL: `{pnl:+.2f} USDT`", cooldown_uygula=False, egitim_ekle=True)
+                            
+                            toplam_bakiye = float(exchange.fetch_balance()['total'].get('USDT', 0))
+                            exchange.set_leverage(10, symbol)
+                            market = exchange.market(symbol)
+                            yeni_miktar = float(exchange.amount_to_precision(symbol, max((toplam_bakiye * 0.20 * 10) / df['close'].iloc[-1] / float(market.get('contractSize', 1.0)), float(market['limits']['amount']['min'] or 1.0))))
+                            
+                            yeni_islem_yonu = 'buy' if grid_yonu == 'LONG' else 'sell'
+                            exchange.create_order(symbol, 'market', yeni_islem_yonu, yeni_miktar)
+
+                            telegram_mesaj_gonder(f"⚡ *RÜZGAR TERSİNE İŞLEM AÇILDI*\n📌 `{symbol}` | Yön: `{grid_yonu}`")
+                            del ruzgar_sayaclari[symbol]
+                    else:
+                        if symbol in ruzgar_sayaclari:
+                            del ruzgar_sayaclari[symbol]
+
                 except Exception as e:
                     print(f"⚠️ Açık pozisyon rüzgar kontrol hatası ({symbol}): {e}", flush=True)
 
@@ -452,7 +472,7 @@ def otomatik_arkaplan_tarayici():
 
             for sinyal in taranan_sinyaller:
                 if len(guncel_borsa_poslari) >= MAKSIMUM_TOPLAM_POZISYON: break
-                if sinyal["puan"] < 70: continue
+                if sinyal["puan"] < 75: continue  # Puan eşiği 75'e çekilerek gürültü filtrelendi
 
                 try:
                     toplam_bakiye = float(exchange.fetch_balance()['total'].get('USDT', 0))
