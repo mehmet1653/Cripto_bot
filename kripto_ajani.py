@@ -32,7 +32,7 @@ exchange = ccxt.gate({
     }
 })
 
-exchange.set_sandbox_mode(True)
+exchange.set_sandbox_mode(False)
 
 TAKIP_EDILENLER = [
     'SOL/USDT:USDT', 
