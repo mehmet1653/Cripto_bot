@@ -268,8 +268,6 @@ def otomatik_arkaplan_tarayici():
         yapay_zekayi_egit_ve_guncelle()
     except Exception: pass
     
-    ruzgar_sayaclari = {}
-
     while True:
         try:
             print("🔄 Döngü taraması yapılıyor...", flush=True)
@@ -285,12 +283,6 @@ def otomatik_arkaplan_tarayici():
                 aktif_borsa_map = {}
 
             print(f"📦 Borsadaki açık pozisyon sayısı: {len(aktif_borsa_map)}", flush=True)
-
-            # Temizlik: Kapanan pozisyonların sayaçlarını sıfırla
-            aktif_symbol_set = set(aktif_borsa_map.keys())
-            for sym in list(ruzgar_sayaclari.keys()):
-                if sym not in aktif_symbol_set:
-                    del ruzgar_sayaclari[sym]
 
             for symbol, pos in aktif_borsa_map.items():
                 try:
@@ -322,6 +314,15 @@ def otomatik_arkaplan_tarayici():
                 
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
+                    
+                    # 1) Üst Zaman Dilimi (1h) Trend Filtresi İçin Veri Çekme
+                    ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=30)
+                    df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    ema5_1h = ta.trend.ema_indicator(df_1h['close'], window=5).iloc[-1]
+                    ema13_1h = ta.trend.ema_indicator(df_1h['close'], window=13).iloc[-1]
+                    ana_trend_yonu = "LONG" if ema5_1h > ema13_1h else "SHORT"
+
+                    # 2) Mikro Zaman Dilimi (15m) Verileri
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
@@ -330,7 +331,14 @@ def otomatik_arkaplan_tarayici():
                     
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
                     adx_val = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx().iloc[-1]
-                    atr = atr_ve_volatilite_hesapla(df)
+                    
+                    # ATR ve Tampon Bölge Hesaplamaları
+                    atr_degeri = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
+                    atr_yuzde = float((atr_degeri / guncel_fiyat) * 100)
+                    
+                    ema_fark = abs(ema5 - ema13)
+                    # ATR'nin %20'si kadarlık tampon eşik bölgesi
+                    tampon_esigi = atr_degeri * 0.20
 
                     son_kapanan_close = df['close'].iloc[-2]
                     son_kapanan_open = df['open'].iloc[-2]
@@ -359,32 +367,27 @@ def otomatik_arkaplan_tarayici():
                     grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     sinyal_puani = temel_puan
 
-                print(f"📊 Analiz Ediliyor -> {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} | EMA Fark: {ema5 - ema13:.4f}", flush=True)
+                # --- MULTI-TIMEFRAME & ATR TAMPON FİLTRESİ ---
+                # 1) Üst zaman dilimi (1h) ana trendiyle uyuşmuyorsa puanı kır veya sinyali nötrle
+                if grid_yonu != ana_trend_yonu:
+                    sinyal_puani -= 25  # Puanı düşürerek zayıf/ters sinyalleri ele
+
+                # 2) ATR Tampon Bölge Kontrolü: EMA farkı tampon eşiğini aşmadıysa gürültü say ve puanı kır
+                if ema_fark < tampon_esigi:
+                    sinyal_puani -= 20
+
+                print(f"📊 Analiz Ediliyor -> {symbol} | Yön: {grid_yonu} | 1h Ana Trend: {ana_trend_yonu} | Puan: {sinyal_puani} | EMA Fark: {ema_fark:.4f} (Eşik: {tampon_esigi:.4f})", flush=True)
 
                 if symbol in aktif_borsa_map:
                     mevcut_pos = aktif_borsa_map[symbol]
                     mevcut_yon = str(mevcut_pos.get('side', '')).upper()
                     mevcut_kontrat = float(mevcut_pos.get('contracts', 0) or mevcut_pos.get('size', 0) or 1.0)
                     
-                    # Rüzgar yönü değişti filtresi düzeltildi: Anlık değil, arka arkaya (en az 4 kez) doğrulanması gerekiyor
-                    if sinyal_puani >= 70 and mevcut_yon != grid_yonu:
-                        if symbol not in ruzgar_sayaclari:
-                            ruzgar_sayaclari[symbol] = {"yon": grid_yonu, "sayac": 1}
-                        elif ruzgar_sayaclari[symbol]["yon"] == grid_yonu:
-                            ruzgar_sayaclari[symbol]["sayac"] += 1
-                        else:
-                            ruzgar_sayaclari[symbol] = {"yon": grid_yonu, "sayac": 1}
-
-                        print(f"🌬️ Rüzgar Taraması ({symbol}): Mevcut Yön: {mevcut_yon} vs Trend Yönü: {grid_yonu} | Sayaç: {ruzgar_sayaclari[symbol]['sayac']}/4", flush=True)
-
-                        if ruzgar_sayaclari[symbol]["sayac"] >= 4:
-                            print(f"🔄 [RÜZGAR DÖNDÜ] {symbol} | Eski Yön: {mevcut_yon} -> Yeni Yön: {grid_yonu}. Pozisyon ters çevriliyor!", flush=True)
-                            pozisyonu_kapat(symbol, mevcut_yon, mevcut_kontrat, f"🔄 *RÜZGAR TERSİNE DÖNDÜ*\n📌 `{symbol}` | Pozisyon kapatılıp zıt yöne dönülüyor.", basarili=False, ruzgar_dondu=True)
-                            aktif_borsa_map.pop(symbol, None)
-                            ruzgar_sayaclari.pop(symbol, None)
-                    else:
-                        if symbol in ruzgar_sayaclari:
-                            ruzgar_sayaclari.pop(symbol, None)
+                    # Rüzgar Dönüşü: Artık hem 1h trend uyumu hem de ATR tampon eşiği sağlandığında rüzgar döndü kabul edilir
+                    if sinyal_puani >= 70 and mevcut_yon != grid_yonu and grid_yonu == ana_trend_yonu and ema_fark >= tampon_esigi:
+                        print(f"🔄 [RÜZGAR DÖNDÜ] {symbol} | Eski Yön: {mevcut_yon} -> Yeni Yön: {grid_yonu}. Pozisyon ters çevriliyor!", flush=True)
+                        pozisyonu_kapat(symbol, mevcut_yon, mevcut_kontrat, f"🔄 *RÜZGAR TERSİNE DÖNDÜ*\n📌 `{symbol}` | Pozisyon kapatılıp zıt yöne dönülüyor.", basarili=False, ruzgar_dondu=True)
+                        aktif_borsa_map.pop(symbol, None)
 
                 if symbol not in aktif_borsa_map:
                     with state_lock:
@@ -397,11 +400,11 @@ def otomatik_arkaplan_tarayici():
                                 if time.time() < float(cooldown_veri):
                                     continue
 
-                    if not yapay_zeka_islem_onayi(rsi, adx_val, float(ema5 - ema13), (1 if grid_yonu == 'LONG' else -1), atr, COIN_ID_MAP.get(symbol, 0)):
+                    if not yapay_zeka_islem_onayi(rsi, adx_val, float(ema5 - ema13), (1 if grid_yonu == 'LONG' else -1), atr_yuzde, COIN_ID_MAP.get(symbol, 0)):
                         print(f"🤖 Yapay zeka sinyali onaylamadı: {symbol}", flush=True)
                         continue
 
-                    taranan_sinyaller.append({"symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, "rsi": rsi, "adx": adx_val, "ema_fark": float(ema5 - ema13), "fiyat": guncel_fiyat, "atr": atr})
+                    taranan_sinyaller.append({"symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, "rsi": rsi, "adx": adx_val, "ema_fark": float(ema5 - ema13), "fiyat": guncel_fiyat, "atr": atr_yuzde})
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
