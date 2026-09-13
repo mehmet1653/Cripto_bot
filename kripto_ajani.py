@@ -23,16 +23,17 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://rllpcylzhptqwzmzehnv.supa
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "Sb_secret_ln9y67Ep_zCtOQ9Q2NE8KQ_nf0gKkmO")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# Gate.io bağlantısı optimize edildi
 exchange = ccxt.gate({
     'apiKey': '82cca880898a88d1a31e86d8eb474c57',
     'secret': '1ac479b9df5e6f2e89560b0d238a250694719b6fcae20da00ebc54ad6aeb8898',
     'enableRateLimit': True,
     'options': {
-        'defaultType': 'swap'
+        'defaultType': 'swap',
+        'adjustForTimeDifference': True
     }
 })
 
-# Sandbox kapatıldı (Gerçek emir için False)
 exchange.set_sandbox_mode(False)
 
 TAKIP_EDILENLER = [
@@ -118,7 +119,7 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {"basarili_islem_sayisi": 0, "basa
 COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
 MAKSIMUM_TOPLAM_POZISYON = 3
-COOLDOWN_SURESI_SANIYE = 45 * 60  # Testereye karşı 45 dakika bekleme
+COOLDOWN_SURESI_SANIYE = 45 * 60
 
 ai_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
 ai_model_egitildi = False
@@ -284,6 +285,7 @@ def otomatik_arkaplan_tarayici():
     print("🚀 Tarayıcı Döngüsü Başlatıldı (1h Ana Trend Filtreli).", flush=True)
     try:
         exchange.load_markets()
+        exchange.load_time_difference()
         yapay_zekayi_egit_ve_guncelle()
     except Exception as e:
         print(f"⚠️ İlk yükleme hatası: {e}", flush=True)
@@ -313,7 +315,6 @@ def otomatik_arkaplan_tarayici():
 
             guncel_aktif_semboller = set(guncel_borsa_poslari.keys())
 
-            # 1. Kapanan pozisyonları tespit et
             kapananlar = onceki_aktif_semboller - guncel_aktif_semboller
             for kapatilan_sym in kapananlar:
                 son_pnl = onceki_pnl_takibi.get(kapatilan_sym, 0.0)
@@ -338,14 +339,12 @@ def otomatik_arkaplan_tarayici():
 
             onceki_aktif_semboller = guncel_aktif_semboller.copy()
 
-            # 2. AÇIK POZİSYONLARIN RÜZGARINI KONTROL ET (1 SAATLİK TREND FİLTRESİ)
             for symbol, pos in list(guncel_borsa_poslari.items()):
                 try:
                     yon = str(pos.get('side', '')).upper()
                     pnl = float(pos.get('unrealizedPnl', 0))
                     kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 1.0)
 
-                    # 1 saatlik (1h) mumlara bakarak ana trendi ölçüyoruz (Gürültüyü yok eder)
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     ema9 = ta.trend.ema_indicator(df['close'], window=9).iloc[-1]
@@ -358,9 +357,6 @@ def otomatik_arkaplan_tarayici():
                     else:
                         grid_yonu, sinyal_puani = "SHORT", 80 if adx_val >= 25 else 70
 
-                    print(f"📌 [1h RÜZGAR] {symbol} | Mevcut: {yon} | 1h Trend: {grid_yonu} (ADX: {adx_val:.1f})", flush=True)
-
-                    # Rüzgarın tersine döndüğünü kesinleştirmek için 5 döngü boyunca aynı kalmalı
                     if sinyal_puani >= 75 and yon != grid_yonu:
                         if symbol not in ruzgar_sayaclari:
                             ruzgar_sayaclari[symbol] = {"yon": grid_yonu, "sayac": 1}
@@ -369,8 +365,7 @@ def otomatik_arkaplan_tarayici():
                         else:
                             ruzgar_sayaclari[symbol] = {"yon": grid_yonu, "sayac": 1}
 
-                        if ruzgar_sayaclari[symbol]["sayac"] >= 5:  # Üst üste 5 kez (25 saniye boyunca 1h trend teyitli)
-                            print(f"🔄 [1h TREND DEĞİŞTİ] {symbol} | Eski: {yon} -> Yeni: {grid_yonu}.", flush=True)
+                        if ruzgar_sayaclari[symbol]["sayac"] >= 5:
                             try:
                                 exchange.cancel_all_orders(symbol)
                                 kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
@@ -397,7 +392,6 @@ def otomatik_arkaplan_tarayici():
                 except Exception as e:
                     print(f"⚠️ 1h rüzgar kontrol hatası ({symbol}): {e}", flush=True)
 
-            # 3. LİSTEYİ TARAYIP İŞLEM AÇMA (1h Trend ve 75 Puan Kuralı)
             taranan_sinyaller = []
 
             for symbol in TAKIP_EDILENLER:
@@ -447,7 +441,7 @@ def otomatik_arkaplan_tarayici():
 
             for sinyal in taranan_sinyaller:
                 if len(guncel_borsa_poslari) >= MAKSIMUM_TOPLAM_POZISYON: break
-                if sinyal["puan"] < 75: continue  # Sadece güçlü 1h trendleri al
+                if sinyal["puan"] < 75: continue
 
                 try:
                     toplam_bakiye = float(exchange.fetch_balance()['total'].get('USDT', 0))
