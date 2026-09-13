@@ -168,15 +168,14 @@ def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True, ruzgar_don
         print(f"⚠️ Kapatma hatası: {e}", flush=True)
 
     with state_lock:
-        with state_lock:
-            bas_sayi = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0))
-            basarisiz_sayi = int(ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0))
-            if basarili:
-                bas_sayi += 1
-            else:
-                basarisiz_sayi += 1
-            ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
-            ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
+        bas_sayi = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0))
+        basarisiz_sayi = int(ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0))
+        if basarili:
+            bas_sayi += 1
+        else:
+            basarisiz_sayi += 1
+        ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
+        ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
 
         if not ruzgar_dondu:
             COIN_COOLDOWNLAR[symbol] = {
@@ -284,7 +283,7 @@ def otomatik_arkaplan_tarayici():
                 elif roe <= -10.0:
                     pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT`", basarili=False, ruzgar_dondu=False)
 
-            # 2. Aşama: Tüm coinleri tarama (EMA 5 ve EMA 13 ile hassas yön takibi)
+            # 2. Aşama: Mum formasyonu + EMA 5/13 teyitli tarama
             taranan_sinyaller = []
 
             for symbol in TAKIP_EDILENLER:
@@ -301,16 +300,37 @@ def otomatik_arkaplan_tarayici():
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
                     adx_val = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx().iloc[-1]
                     atr = atr_ve_volatilite_hesapla(df)
+
+                    # MUM FORMASYONU TEYİDİ (Örn: Tepe/Dip ve Kapanmış Son 2 Mum Teyidi)
+                    son_kapanan_close = df['close'].iloc[-2]
+                    son_kapanan_open = df['open'].iloc[-2]
+                    onceki_kapanan_close = df['close'].iloc[-3]
+                    onceki_kapanan_open = df['open'].iloc[-3]
+
+                    # İki ardışık kırmızı mum ve tepe kırılım teyidi
+                    short_formasyon_onayi = (onceki_kapanan_close > onceki_kapanan_open) and (son_kapanan_close < son_kapanan_open) and (df['close'].iloc[-2] < df['open'].iloc[-2])
+                    # İki ardışık yeşil mum ve dip dönüş teyidi
+                    long_formasyon_onayi = (onceki_kapanan_close < onceki_kapanan_open) and (son_kapanan_close > son_kapanan_open)
+
                 except Exception as e:
                     print(f"⚠️ Veri çekme hatası ({symbol}): {e}", flush=True)
                     continue
 
+                # Puan ve Yön Belirleme (ADX + EMA + Formasyon uyumu)
                 if adx_val >= 25:
-                    grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
-                    sinyal_puani = 75
+                    temel_puan = 75
+                else:
+                    temel_puan = 60
+
+                if ema5 > ema13 and long_formasyon_onayi:
+                    grid_yonu = "LONG"
+                    sinyal_puani = temel_puan + 10
+                elif ema5 < ema13 and short_formasyon_onayi:
+                    grid_yonu = "SHORT"
+                    sinyal_puani = temel_puan + 10
                 else:
                     grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
-                    sinyal_puani = 60
+                    sinyal_puani = temel_puan
 
                 # --- AÇIK POZİSYONDA RÜZGARIN TERSİNE DÖNMESİ KONTROLÜ ---
                 if symbol in aktif_borsa_map:
