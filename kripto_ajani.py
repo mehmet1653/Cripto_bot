@@ -212,7 +212,13 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             yon = str(p.get('side', '')).upper()
             pnl_val = float(p.get('unrealizedPnl', 0))
             giris = float(p.get('entryPrice', 0))
-            pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}` | PnL: `{pnl_val:+.2f} USDT`"
+            kaldirac = int(p.get('leverage', 10))
+            guncel_fiyat = exchange.fetch_ticker(sym)['last']
+            
+            fark = (guncel_fiyat - giris) / giris if yon == "LONG" else (giris - guncel_fiyat) / giris
+            roe = fark * 100 * kaldirac
+            
+            pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  PnL: `{pnl_val:+.2f} USDT` (`%{roe:+.2f}`)"
 
         mesaj = (
             "📊 **HİBRİT BOT DURUMU**\n\n"
