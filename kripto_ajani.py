@@ -163,7 +163,6 @@ def telegram_mesaj_gonder(mesaj):
 def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True, ruzgar_dondu=False):
     kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
     try:
-        # Önce borsadaki açık emirleri (TP/SL) iptal et
         try:
             exchange.cancel_all_orders(symbol)
         except Exception:
@@ -282,7 +281,6 @@ def otomatik_arkaplan_tarayici():
             except Exception:
                 aktif_borsa_map = {}
 
-            # 1. Aşama: Açık pozisyonların TP / SL kontrolü (Yedek güvenlik döngüsü)
             for symbol, pos in aktif_borsa_map.items():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
@@ -302,7 +300,6 @@ def otomatik_arkaplan_tarayici():
                 elif roe <= -10.0:
                     pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT`", basarili=False, ruzgar_dondu=False)
 
-            # 2. Aşama: Mum formasyonu + EMA 5/13 teyitli tarama
             taranan_sinyaller = []
 
             for symbol in TAKIP_EDILENLER:
@@ -347,7 +344,6 @@ def otomatik_arkaplan_tarayici():
                     grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     sinyal_puani = temel_puan
 
-                # Rüzgarın tersine dönmesi kontrolü
                 if symbol in aktif_borsa_map:
                     mevcut_pos = aktif_borsa_map[symbol]
                     mevcut_yon = str(mevcut_pos.get('side', '')).upper()
@@ -358,7 +354,6 @@ def otomatik_arkaplan_tarayici():
                         pozisyonu_kapat(symbol, mevcut_yon, mevcut_kontrat, f"🔄 *RÜZGAR TERSİNE DÖNDÜ*\n📌 `{symbol}` | Pozisyon kapatılıp zıt yöne dönülüyor.", basarili=False, ruzgar_dondu=True)
                         aktif_borsa_map.pop(symbol, None)
 
-                # Cooldown kontrolü
                 if symbol not in aktif_borsa_map:
                     with state_lock:
                         cooldown_veri = COIN_COOLDOWNLAR.get(symbol)
@@ -377,7 +372,6 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
-            # 3. Aşama: Yeni pozisyon açma ve borsaya TP / SL emirlerini gönderme
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
                 if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON: break
@@ -393,10 +387,8 @@ def otomatik_arkaplan_tarayici():
                     islem_yonu = 'buy' if sinyal["yon"] == 'LONG' else 'sell'
                     giris_fiyati = sinyal["fiyat"]
                     
-                    # Piyasa emri ile pozisyonu aç
                     exchange.create_order(sinyal["symbol"], 'market', islem_yonu, miktar)
 
-                    # --- BORSAYA TP VE SL EMİRLERİNİ GÖNDERME ---
                     kaldirac = 10
                     if sinyal["yon"] == 'LONG':
                         tp_fiyat = giris_fiyati * (1 + (0.20 / kaldirac))
@@ -407,11 +399,8 @@ def otomatik_arkaplan_tarayici():
                         sl_fiyat = giris_fiyati * (1 + (0.10 / kaldirac))
                         kapat_yon = 'buy'
 
-                    # Gate.io ve benzeri borsalar için stop/limit tetiklemeli emirler
                     try:
-                        # Kâr Al (TP) Emri
-                        exchange.create_order(sinyal["symbol'], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
-                        # Zarar Kes (SL) Emri (Trigger price destekli)
+                        exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
                         exchange.create_order(sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
                     except Exception as emir_hata:
                         print(f"⚠️ TP/SL borsaya iletilirken hata oluştu: {emir_hata}", flush=True)
