@@ -168,6 +168,16 @@ def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True, ruzgar_don
         print(f"⚠️ Kapatma hatası: {e}", flush=True)
 
     with state_lock:
+        with state_lock:
+            bas_sayi = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0))
+            basarisiz_sayi = int(ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0))
+            if basarili:
+                bas_sayi += 1
+            else:
+                basarisiz_sayi += 1
+            ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
+            ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
+
         if not ruzgar_dondu:
             COIN_COOLDOWNLAR[symbol] = {
                 "zaman": float(time.time() + COOLDOWN_SURESI_SANIYE),
@@ -190,7 +200,23 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total = float(balance['total'].get('USDT', 0))
         borsa_poslari = [p for p in exchange.fetch_positions() if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
         toplam_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in borsa_poslari)
-        await update.message.reply_text(f"📊 Kasa: `{total:.2f} USDT` | PnL: `{toplam_pnl:+.2f} USDT` | Poz: `{len(borsa_poslari)}`", parse_mode='Markdown')
+        
+        basarili = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0))
+        basarisiz = int(ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0))
+        toplam_islem = basarili + basarisiz
+        basari_orani = (basarili / toplam_islem * 100) if toplam_islem > 0 else 0.0
+        egitim_veri_sayisi = len(ANALitik_HAFIZA.get("egitim_verileri", []))
+
+        mesaj = (
+            "📊 **HİBRİT BOT DURUMU**\n\n"
+            f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
+            f"🟢 Anlık PnL: `{toplam_pnl:+.2f} USDT`\n"
+            f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n\n"
+            f"✅ Başarili TP: `{basarili}` | ❌ Başarısız SL: `{basarisiz}`\n"
+            f"📈 Başarı Oranı: `%{basari_orani:.1f}`\n"
+            f"🧠 Al Verisi: `{egitim_veri_sayisi}/20`"
+        )
+        await update.message.reply_text(mesaj, parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
 
@@ -269,7 +295,6 @@ def otomatik_arkaplan_tarayici():
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-                    # HASSAS EMA PERİYOTLARI (5 ve 13)
                     ema5 = ta.trend.ema_indicator(df['close'], window=5).iloc[-1]
                     ema13 = ta.trend.ema_indicator(df['close'], window=13).iloc[-1]
                     
