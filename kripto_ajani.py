@@ -279,8 +279,11 @@ def otomatik_arkaplan_tarayici():
             try:
                 raw_positions = exchange.fetch_positions()
                 aktif_borsa_map = {p['symbol']: p for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0}
-            except Exception:
+            except Exception as e:
+                print(f"⚠️ Pozisyonlar çekilirken hata: {e}", flush=True)
                 aktif_borsa_map = {}
+
+            print(f"📦 Borsadaki açık pozisyon sayısı: {len(aktif_borsa_map)}", flush=True)
 
             for symbol, pos in aktif_borsa_map.items():
                 try:
@@ -296,9 +299,13 @@ def otomatik_arkaplan_tarayici():
                 pnl = float(pos.get('unrealizedPnl', 0))
                 kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 1.0)
 
+                print(f"👁️ RÜZGAR KONTROLÜ -> {symbol} | Yön: {yon} | Giriş: {merkez} | Güncel: {guncel_fiyat} | ROE: %{roe:.2f} | PnL: {pnl:.2f} USDT", flush=True)
+
                 if roe >= 20.0:
+                    print(f"🎯 Kâr al seviyesine ulaşıldı! {symbol}", flush=True)
                     pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *KÂR ALINDI (TP)*\n📌 `{symbol}` | Kâr: `+{pnl:.2f} USDT`", basarili=True, ruzgar_dondu=False)
                 elif roe <= -10.0:
+                    print(f"🛑 Zarar kes seviyesine ulaşıldı! {symbol}", flush=True)
                     pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT`", basarili=False, ruzgar_dondu=False)
 
             taranan_sinyaller = []
@@ -345,11 +352,14 @@ def otomatik_arkaplan_tarayici():
                     grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     sinyal_puani = temel_puan
 
+                print(f"📊 Analiz Ediliyor -> {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} | EMA Fark: {ema5 - ema13:.4f}", flush=True)
+
                 if symbol in aktif_borsa_map:
                     mevcut_pos = aktif_borsa_map[symbol]
                     mevcut_yon = str(mevcut_pos.get('side', '')).upper()
                     mevcut_kontrat = float(mevcut_pos.get('contracts', 0) or mevcut_pos.get('size', 0) or 1.0)
                     
+                    print(f"🌬️ Rüzgar Yönü Kıyaslama ({symbol}): Mevcut Pozisyon Yönü = {mevcut_yon} vs Hesaplanan Trend Yönü = {grid_yonu}", flush=True)
                     if sinyal_puani >= 70 and mevcut_yon != grid_yonu:
                         print(f"🔄 [RÜZGAR DÖNDÜ] {symbol} | Eski Yön: {mevcut_yon} -> Yeni Yön: {grid_yonu}. Pozisyon ters çevriliyor!", flush=True)
                         pozisyonu_kapat(symbol, mevcut_yon, mevcut_kontrat, f"🔄 *RÜZGAR TERSİNE DÖNDÜ*\n📌 `{symbol}` | Pozisyon kapatılıp zıt yöne dönülüyor.", basarili=False, ruzgar_dondu=True)
@@ -367,6 +377,7 @@ def otomatik_arkaplan_tarayici():
                                     continue
 
                     if not yapay_zeka_islem_onayi(rsi, adx_val, float(ema5 - ema13), (1 if grid_yonu == 'LONG' else -1), atr, COIN_ID_MAP.get(symbol, 0)):
+                        print(f"🤖 Yapay zeka sinyali onaylamadı: {symbol}", flush=True)
                         continue
 
                     taranan_sinyaller.append({"symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, "rsi": rsi, "adx": adx_val, "ema_fark": float(ema5 - ema13), "fiyat": guncel_fiyat, "atr": atr})
