@@ -221,7 +221,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} ({kaldirac}x) | Giriş: `{giris}`\n  PnL: `{pnl_val:+.2f} USDT` (`%{roe:+.2f}`)"
 
         mesaj = (
-            "📊 **HİBRİT BOT DURUMU (50x Optimize Puanlama)**\n\n"
+            "📊 **HİBRİT BOT DURUMU (TP: %20 | SL: %10)**\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"🟢 Anlık PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -237,7 +237,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot 50x Optimize Modda Aktif!")
+    await update.message.reply_text("🟢 Bot TP:%20 SL:%10 Modda Aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -257,7 +257,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
-    print("🚀 Tarayıcı Döngüsü Başlatıldı (50x Optimize Puanlama).", flush=True)
+    print("🚀 Tarayıcı Döngüsü Başlatıldı (TP: %20 | SL: %10).", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -278,20 +278,17 @@ def otomatik_arkaplan_tarayici():
                 print(f"⚠️ Pozisyonlar çekilirken hata: {e}", flush=True)
                 aktif_borsa_map = {}
 
-            # --- BORSA TARAFINDAN KAPATILAN (TP / SL OLAN) POZİSYONLARI DOĞRU TESPİT ET ---
             su_anki_aktif_semboller = set(aktif_borsa_map.keys())
             kapanan_semboller = onceki_aktif_semboller - su_anki_aktif_semboller
             
             for kapatilan_sym in kapanan_semboller:
                 print(f"🎯 Borsa tarafında kapandı (TP/SL kontrol ediliyor): {kapatilan_sym}", flush=True)
                 
-                # İşlemin kârda mı zararda mı kapandığını anlamak için son işlemlere bakalım
                 basarili_mi = True
                 pnl_cikti = 0.0
                 try:
                     trades = exchange.fetch_my_trades(kapatilan_sym, limit=5)
                     if trades:
-                        # Son kapatma işlemine ait kâr/zarar verisini bulmaya çalışalım
                         son_trade = trades[-1]
                         pnl_cikti = float(son_trade.get('info', {}).get('pnl', 0) or son_trade.get('realizedPnl', 0) or 0)
                         if pnl_cikti < 0:
@@ -303,7 +300,7 @@ def otomatik_arkaplan_tarayici():
                     if basarili_mi:
                         bas_sayi = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0)) + 1
                         ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
-                        mesaj_str = f"🎯 *KÂR ALINDI (TP)*\n📌 `{kapatilan_sym}` pozisyonu kârla kapatıldı! (PnL: `+{pnl_vaarlik_kontrol(pnl_cikti)} USDT`)"
+                        mesaj_str = f"🎯 *KÂR ALINDI (TP)*\n📌 `{kapatilan_sym}` pozisyonu kârla kapatıldı! (PnL: `+{pnl_cikti:.2f} USDT`)"
                     else:
                         basarisiz_sayi = int(ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0)) + 1
                         ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
@@ -321,7 +318,7 @@ def otomatik_arkaplan_tarayici():
             onceki_aktif_semboller = su_anki_aktif_semboller
 
             if aktif_borsa_map:
-                print(f"👀 [50x AÇIK POZİSYONLAR TAKİP EDİLİYOR] Toplam: {len(aktif_borsa_map)} adet", flush=True)
+                print(f"👀 [AÇIK POZİSYONLAR TAKİP EDİLİYOR] Toplam: {len(aktif_borsa_map)} adet", flush=True)
 
             for symbol, pos in list(aktif_borsa_map.items()):
                 try:
@@ -339,12 +336,12 @@ def otomatik_arkaplan_tarayici():
 
                 print(f"   🔍 Takip Ediliyor -> {symbol} | Yön: {yon} ({kaldirac}x) | Giriş: {merkez} | Güncel: {guncel_fiyat} | PnL: {pnl:+.2f} USDT (%{roe:+.2f})", flush=True)
 
-                if roe >= 12.0:
-                    print(f"🎯 50x Kâr al seviyesine ulaşıldı! {symbol}", flush=True)
-                    pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *50x KÂR ALINDI (TP)*\n📌 `{symbol}` | Kâr: `+{pnl:.2f} USDT` (`%{roe:.2f}`)", basarili=True, ruzgar_dondu=False)
-                elif roe <= -6.0:
-                    print(f"🛑 50x Zarar kes seviyesine ulaşıldı! {symbol}", flush=True)
-                    pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *50x ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT` (`%{roe:.2f}`)", basarili=False, ruzgar_dondu=False)
+                if roe >= 20.0:
+                    print(f"🎯 Kâr al seviyesine (%20) ulaşıldı! {symbol}", flush=True)
+                    pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *KÂR ALINDI (TP)*\n📌 `{symbol}` | Kâr: `+{pnl:.2f} USDT` (`%{roe:.2f}`)", basarili=True, ruzgar_dondu=False)
+                elif roe <= -10.0:
+                    print(f"🛑 Zarar kes seviyesine (%-10) ulaşıldı! {symbol}", flush=True)
+                    pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT` (`%{roe:.2f}`)", basarili=False, ruzgar_dondu=False)
 
             taranan_sinyaller = []
 
@@ -354,21 +351,18 @@ def otomatik_arkaplan_tarayici():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
                     
-                    # 4h Trend
                     ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=30)
                     df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     ema5_4h = ta.trend.ema_indicator(df_4h['close'], window=5).iloc[-1]
                     ema13_4h = ta.trend.ema_indicator(df_4h['close'], window=13).iloc[-1]
                     t_4h = "LONG" if ema5_4h > ema13_4h else "SHORT"
 
-                    # 1h Trend
                     ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=30)
                     df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     ema5_1h = ta.trend.ema_indicator(df_1h['close'], window=5).iloc[-1]
                     ema13_1h = ta.trend.ema_indicator(df_1h['close'], window=13).iloc[-1]
                     t_1h = "LONG" if ema5_1h > ema13_1h else "SHORT"
 
-                    # 15m Verileri
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
@@ -388,11 +382,7 @@ def otomatik_arkaplan_tarayici():
                     short_formasyon_onayi = (onceki_kapanan_close > onceki_kapanan_open) and (son_kapanan_close < son_kapanan_open)
                     long_formasyon_onayi = (onceki_kapanan_close < onceki_kapanan_open) and (son_kapanan_close > son_kapanan_open)
 
-                    if ema5 > ema13:
-                        coin_yonu = "LONG"
-                    else:
-                        coin_yonu = "SHORT"
-
+                    coin_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     sinyal_puani = 65
 
                     if coin_yonu == "LONG" and long_formasyon_onayi:
@@ -400,25 +390,14 @@ def otomatik_arkaplan_tarayici():
                     elif coin_yonu == "SHORT" and short_formasyon_onayi:
                         sinyal_puani += 15
 
-                    if adx_val >= 20:
-                        sinyal_puani += 10
+                    if adx_val >= 20: sinyal_puani += 10
+                    if coin_yonu == t_1h: sinyal_puani += 5
+                    else: sinyal_puani -= 10
+                    if coin_yonu == t_4h: sinyal_puani += 5
+                    else: sinyal_puani -= 10
 
-                    if coin_yonu == t_1h:
-                        sinyal_puani += 5
-                    else:
-                        sinyal_puani -= 10
-
-                    if coin_yonu == t_4h:
-                        sinyal_puani += 5
-                    else:
-                        sinyal_puani -= 10
-
-                    if coin_yonu == "LONG" and rsi < 35:
-                        sinyal_puani += 5
-                    elif coin_yonu == "SHORT" and rsi > 65:
-                        sinyal_puani += 5
-
-                    print(f"📊 Analiz (Optimizasyon) -> {symbol} | Yön: {coin_yonu} | RSI: {rsi:.1f} | ADX: {adx_val:.1f} | Puan: {sinyal_puani}", flush=True)
+                    if coin_yonu == "LONG" and rsi < 35: sinyal_puani += 5
+                    elif coin_yonu == "SHORT" and rsi > 65: sinyal_puani += 5
 
                     if symbol in aktif_borsa_map:
                         mevcut_pos = aktif_borsa_map[symbol]
@@ -435,11 +414,9 @@ def otomatik_arkaplan_tarayici():
                             cooldown_veri = COIN_COOLDOWNLAR.get(symbol)
                             if cooldown_veri:
                                 if isinstance(cooldown_veri, dict):
-                                    if time.time() < cooldown_veri.get("zaman", 0):
-                                        continue
+                                    if time.time() < cooldown_veri.get("zaman", 0): continue
                                 else:
-                                    if time.time() < float(cooldown_veri):
-                                        continue
+                                    if time.time() < float(cooldown_veri): continue
 
                         if not yapay_zeka_islem_onayi(rsi, adx_val, float(ema5 - ema13), (1 if coin_yonu == 'LONG' else -1), atr_yuzde, COIN_ID_MAP.get(symbol, 0)):
                             continue
@@ -450,7 +427,6 @@ def otomatik_arkaplan_tarayici():
                                 "rsi": rsi, "adx": adx_val, "ema_fark": float(ema5 - ema13), 
                                 "fiyat": guncel_fiyat, "atr": atr_yuzde, "ema5": ema5, "ema13": ema13
                             })
-
                 except Exception as e:
                     print(f"⚠️ Veri çekme hatası ({symbol}): {e}", flush=True)
                     continue
@@ -475,36 +451,33 @@ def otomatik_arkaplan_tarayici():
 
                     kaldirac = HEDEF_KALDIRAC
                     if sinyal["yon"] == 'LONG':
-                        tp_fiyat = giris_fiyati * (1 + (0.12 / kaldirac))
-                        sl_fiyat = giris_fiyati * (1 - (0.06 / kaldirac))
+                        tp_fiyat = giris_fiyati * (1 + (0.20 / kaldirac))
+                        sl_fiyat = giris_fiyati * (1 - (0.10 / kaldirac))
                         kapat_yon = 'sell'
                     else:
-                        tp_fiyat = giris_fiyati * (1 - (0.12 / kaldirac))
-                        sl_fiyat = giris_fiyati * (1 + (0.06 / kaldirac))
+                        tp_fiyat = giris_fiyati * (1 - (0.20 / kaldirac))
+                        sl_fiyat = giris_fiyati * (1 + (0.10 / kaldirac))
                         kapat_yon = 'buy'
 
                     try:
                         exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
                         exchange.create_order(sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
                     except Exception as emir_hata:
-                        print(f"⚠️ 50x TP/SL hatası: {emir_hata}", flush=True)
+                        print(f"⚠️ TP/SL emir hatası: {emir_hata}", flush=True)
 
                     with state_lock:
                         AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {"giris_rsi": float(sinyal["rsi"])}
                     hafizayi_kaydet()
                     
-                    print(f"⚡ [50x İŞLEM AÇILDI] {sinyal['symbol']} | Yön: {sinyal['yon']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *50x İŞLEM AÇILDI*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` (50x) | Fiyat: `{giris_fiyati}` | RSI: `{sinyal['rsi']:.1f}` | Puan: `{sinyal['puan']}`")
+                    print(f"⚡ [İŞLEM AÇILDI] {sinyal['symbol']} | Yön: {sinyal['yon']}", flush=True)
+                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` (50x) | Fiyat: `{giris_fiyati}` | TP: `%20` | SL: `%-10`")
                     break
                 except Exception as e:
-                    print(f"❌ 50x İşlem açma hatası: {e}", flush=True)
+                    print(f"❌ İşlem açma hatası: {e}", flush=True)
 
         except Exception as e:
             print(f"⚠️ Döngü hatası: {e}", flush=True)
         time.sleep(5)
-
-def pnl_vaarlik_kontrol(deger):
-    return f"{deger:.2f}"
 
 if __name__ == '__main__':
     t = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
@@ -516,5 +489,5 @@ if __name__ == '__main__':
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
-    print("🤖 50x Optimize Telegram Bot Başlatılıyor...", flush=True)
+    print("🤖 Bot Başlatılıyor (TP:%20 | SL:%10)...", flush=True)
     app_tg.run_polling()
