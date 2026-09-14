@@ -16,8 +16,8 @@ os.environ['PYTHONUNBUFFERED'] = '1'
 sys.stdout.reconfigure(line_buffering=True)
 
 # ==================== AYARLAR VE ANAHTARLAR ====================
-TELEGRAM_TOKEN = "8870934003:AAGOzmO_VwYnj0Wz2hehl176rKiOkEaV0b0"
-CHAT_ID = "6929517567"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8870934003:AAGOzmO_VwYnj0Wz2hehl176rKiOkEaV0b0")
+CHAT_ID = os.environ.get("CHAT_ID", "6929517567")
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://rllpcylzhptqwzmzehnv.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "Sb_secret_ln9y67Ep_zCtOQ9Q2NE8KQ_nf0gKkmO")
@@ -52,13 +52,13 @@ COIN_ID_MAP = {
 
 BOT_CALISIYOR_MU = True
 STATE_LOCK = threading.Lock()
-KALDIRAC = 5  # İstediğin gibi 5x yapıldı
+KALDIRAC = 5  # 5x Kaldıraç aktif
 
 # ==================== SUPABASE HAFIZA ====================
 def hafizayi_yukle():
     try:
         response = supabase.table("bot_hafiza").select("*").eq("id", 1).execute()
-        if response.data and len(response.data > 0):
+        if response.data and len(response.data) > 0:
             veri = response.data[0]
             print("💾 Hafıza Supabase'den başarıyla yüklendi.", flush=True)
             return {
@@ -156,21 +156,12 @@ def atr_ve_volatilite_hesapla(df):
         return 1.5
 
 def dinamik_tp_sl_hesapla(df, giris_fiyati, yon):
-    """
-    Mumların ortalama boyuna ve ATR'ye dayanarak dinamik TP/SL yüzdeleri belirler.
-    """
     try:
-        # Son mumların ortalama gövde boyunu hesapla
         df['body'] = abs(df['close'] - df['open'])
         ortalama_mum_boyu_yuzde = (df['body'].rolling(window=10).mean().iloc[-1] / giris_fiyati) * 100
-        
-        # ATR bazlı volatilite
         atr_yuzde = atr_ve_volatilite_hesapla(df)
         
-        # Dinamik Çarpan: Volatilite ve mum boyuna göre TP/SL mesafesini esnetiyoruz
         faktor = max(0.8, min(2.0, (ortalama_mum_boyu_yuzde + atr_yuzde) / 2.0))
-        
-        # 5x kaldıraç için baz yüzde oranları (Örn: %1.5 kâr, %0.8 zarar hedefi gibi piyasa koşuluna uyarlanır)
         tp_yuzde = max(0.012, 0.015 * faktor)
         sl_yuzde = max(0.007, 0.008 * faktor)
         
@@ -185,7 +176,6 @@ def dinamik_tp_sl_hesapla(df, giris_fiyati, yon):
             
         return tp_fiyat, sl_fiyat, kapat_yon, tp_yuzde * 100 * KALDIRAC
     except Exception:
-        # Hata durumunda güvenli sabit oranlar (5x kaldıraça göre)
         if yon == 'LONG':
             return giris_fiyati * 1.02, giris_fiyati * 0.99, 'sell', 10.0
         else:
@@ -319,8 +309,6 @@ def otomatik_arkaplan_tarayici():
                 print(f"⚠️ Pozisyonlar çekilirken hata: {e}", flush=True)
                 aktif_borsa_map = {}
 
-            print(f"📦 Borsadaki açık pozisyon sayısı: {len(aktif_borsa_map)}", flush=True)
-
             for symbol, pos in aktif_borsa_map.items():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
@@ -335,14 +323,9 @@ def otomatik_arkaplan_tarayici():
                 pnl = float(pos.get('unrealizedPnl', 0))
                 kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 1.0)
 
-                print(f"👁️ RÜZGAR KONTROLÜ -> {symbol} | Yön: {yon} | Giriş: {merkez} | Güncel: {guncel_fiyat} | ROE: %{roe:.2f} | PnL: {pnl:.2f} USDT", flush=True)
-
-                # Not: Borsa üzerindeki TP/SL limit emirleri zaten çalışır, ek güvenlik olarak ROE takibi:
                 if roe >= 25.0:
-                    print(f"🎯 Kâr al seviyesine ulaşıldı! {symbol}", flush=True)
                     pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *KÂR ALINDI (TP)*\n📌 `{symbol}` | Kâr: `+{pnl:.2f} USDT`", basarili=True, ruzgar_dondu=False)
                 elif roe <= -15.0:
-                    print(f"🛑 Zarar kes seviyesine ulaşıldı! {symbol}", flush=True)
                     pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT`", basarili=False, ruzgar_dondu=False)
 
             taranan_sinyaller = []
@@ -389,16 +372,12 @@ def otomatik_arkaplan_tarayici():
                     grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     sinyal_puani = temel_puan
 
-                print(f"📊 Analiz Ediliyor -> {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} | EMA Fark: {ema5 - ema13:.4f}", flush=True)
-
                 if symbol in aktif_borsa_map:
                     mevcut_pos = aktif_borsa_map[symbol]
                     mevcut_yon = str(mevcut_pos.get('side', '')).upper()
                     mevcut_kontrat = float(mevcut_pos.get('contracts', 0) or mevcut_pos.get('size', 0) or 1.0)
                     
-                    print(f"🌬️ Rüzgar Yönü Kıyaslama ({symbol}): Mevcut Pozisyon Yönü = {mevcut_yon} vs Hesaplanan Trend Yönü = {grid_yonu}", flush=True)
                     if sinyal_puani >= 70 and mevcut_yon != grid_yonu:
-                        print(f"🔄 [RÜZGAR DÖNDÜ] {symbol} | Eski Yön: {mevcut_yon} -> Yeni Yön: {grid_yonu}. Pozisyon ters çevriliyor!", flush=True)
                         pozisyonu_kapat(symbol, mevcut_yon, mevcut_kontrat, f"🔄 *RÜZGAR TERSİNE DÖNDÜ*\n📌 `{symbol}` | Pozisyon kapatılıp zıt yöne dönülüyor.", basarili=False, ruzgar_dondu=True)
                         aktif_borsa_map.pop(symbol, None)
 
@@ -414,7 +393,6 @@ def otomatik_arkaplan_tarayici():
                                     continue
 
                     if not yapay_zeka_islem_onayi(rsi, adx_val, float(ema5 - ema13), (1 if grid_yonu == 'LONG' else -1), atr, COIN_ID_MAP.get(symbol, 0)):
-                        print(f"🤖 Yapay zeka sinyali onaylamadı: {symbol}", flush=True)
                         continue
 
                     taranan_sinyaller.append({
@@ -435,7 +413,6 @@ def otomatik_arkaplan_tarayici():
                     exchange.set_leverage(KALDIRAC, sinyal["symbol"])
                     
                     market = exchange.market(sinyal["symbol"])
-                    # 5x kaldıraça uygun bakiye paylaştırma
                     miktar = float(exchange.amount_to_precision(sinyal["symbol"], max((toplam_bakiye * 0.20 * KALDIRAC) / sinyal["fiyat"] / float(market.get('contractSize', 1.0)), float(market['limits']['amount']['min'] or 1.0))))
                     
                     islem_yonu = 'buy' if sinyal["yon"] == 'LONG' else 'sell'
@@ -443,20 +420,18 @@ def otomatik_arkaplan_tarayici():
                     
                     exchange.create_order(sinyal["symbol"], 'market', islem_yonu, miktar)
 
-                    # Mum boyları ve volatiliteye göre dinamik TP/SL hesaplama
                     tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = dinamik_tp_sl_hesapla(sinyal["df"], giris_fiyati, sinyal["yon"])
 
                     try:
                         exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
-                        exchange.create_order(sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
+                        exchange.create_order(sinyaline_gore := sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
                     except Exception as emir_hata:
-                        print(f"⚠️ TP/SL borsaya iletilirken hata oluştu: {emir_hata}", flush=True)
+                        pass
 
                     with STATE_LOCK:
                         AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {"giris_rsi": float(sinyal["rsi"])}
                     hafizayi_kaydet()
                     
-                    print(f"⚡ [İŞLEM AÇILDI] {sinyal['symbol']} | Yön: {sinyal['yon']} | 5x Kaldıraç & Dinamik TP/SL Kuruldu", flush=True)
                     telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X & DİNAMİK TP/SL)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
                     break
                 except Exception as e:
