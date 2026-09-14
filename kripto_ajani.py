@@ -162,9 +162,9 @@ def dinamik_tp_sl_hesapla(df, giris_fiyati, yon):
         ortalama_mum_boyu_yuzde = (df['body'].rolling(window=10).mean().iloc[-1] / giris_fiyati) * 100
         atr_yuzde = atr_ve_volatilite_hesapla(df)
         
-        faktor = max(0.8, min(2.0, (ortalama_mum_boyu_yuzde + atr_yuzde) / 2.0))
-        tp_yuzde = max(0.012, 0.015 * faktor)
-        sl_yuzde = max(0.007, 0.008 * faktor)
+        faktor = max(1.0, min(3.5, (ortalama_mum_boyu_yuzde + atr_yuzde) / 1.5))
+        tp_yuzde = max(0.025, 0.030 * faktor)
+        sl_yuzde = max(0.015, 0.018 * faktor)
         
         if yon == 'LONG':
             tp_fiyat = giris_fiyati * (1 + tp_yuzde)
@@ -178,9 +178,9 @@ def dinamik_tp_sl_hesapla(df, giris_fiyati, yon):
         return tp_fiyat, sl_fiyat, kapat_yon, tp_yuzde * 100 * KALDIRAC
     except Exception:
         if yon == 'LONG':
-            return giris_fiyati * 1.02, giris_fiyati * 0.99, 'sell', 10.0
+            return giris_fiyati * 1.035, giris_fiyati * 0.98, 'sell', 17.5
         else:
-            return giris_fiyati * 0.98, giris_fiyati * 1.01, 'buy', 10.0
+            return giris_fiyati * 0.965, giris_fiyati * 1.02, 'buy', 17.5
 
 def telegram_mesaj_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID: return
@@ -328,10 +328,10 @@ def otomatik_arkaplan_tarayici():
 
                 print(f"👁️ RÜZGAR KONTROLÜ -> {symbol} | Yön: {yon} | Giriş: {merkez} | Güncel: {guncel_fiyat} | ROE: %{roe:.2f} | PnL: {pnl:.2f} USDT", flush=True)
 
-                if roe >= 25.0:
+                if roe >= 35.0:
                     print(f"🎯 Kâr al seviyesine ulaşıldı! {symbol}", flush=True)
                     pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *KÂR ALINDI (TP)*\n📌 `{symbol}` | Kâr: `+{pnl:.2f} USDT`", basarili=True, ruzgar_dondu=False)
-                elif roe <= -15.0:
+                elif roe <= -20.0:
                     print(f"🛑 Zarar kes seviyesine ulaşıldı! {symbol}", flush=True)
                     pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT`", basarili=False, ruzgar_dondu=False)
 
@@ -445,7 +445,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     print(f"⚡ [İŞLEM AÇILDI] {sinyal['symbol']} | Yön: {sinyal['yon']} | Dinamik TP/SL Kuruldu", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X & DİNAMİK TP/SL)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
+                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X & TAM DİNAMİK TP/SL)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası: {e}", flush=True)
