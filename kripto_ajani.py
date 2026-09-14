@@ -297,7 +297,6 @@ def otomatik_arkaplan_tarayici():
     
     while True:
         try:
-            print("🔄 Döngü taraması yapılıyor...", flush=True)
             if not BOT_CALISIYOR_MU:
                 time.sleep(5)
                 continue
@@ -306,7 +305,6 @@ def otomatik_arkaplan_tarayici():
                 raw_positions = exchange.fetch_positions()
                 aktif_borsa_map = {p['symbol']: p for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0}
             except Exception as e:
-                print(f"⚠️ Pozisyonlar çekilirken hata: {e}", flush=True)
                 aktif_borsa_map = {}
 
             for symbol, pos in aktif_borsa_map.items():
@@ -354,7 +352,6 @@ def otomatik_arkaplan_tarayici():
                     long_formasyon_onayi = (onceki_kapanan_close < onceki_kapanan_open) and (son_kapanan_close > son_kapanan_open)
 
                 except Exception as e:
-                    print(f"⚠️ Veri çekme hatası ({symbol}): {e}", flush=True)
                     continue
 
                 if adx_val >= 25:
@@ -424,7 +421,7 @@ def otomatik_arkaplan_tarayici():
 
                     try:
                         exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
-                        exchange.create_order(sinyaline_gore := sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
+                        exchange.create_order(sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
                     except Exception as emir_hata:
                         pass
 
@@ -438,18 +435,18 @@ def otomatik_arkaplan_tarayici():
                     print(f"❌ İşlem açma hatası: {e}", flush=True)
 
         except Exception as e:
-            print(f"⚠️ Döngü hatası: {e}", flush=True)
+            pass
         time.sleep(5)
 
 if __name__ == '__main__':
-    t = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
-    t.start()
-    
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
-    print("🤖 Telegram Bot Başlatılıyor...", flush=True)
-    app_tg.run_polling()
+    t = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
+    t.start()
+    
+    print("🤖 Telegram Bot Doğrudan Polling ile Başlatılıyor...", flush=True)
+    app_tg.run_polling(drop_pending_updates=True)
