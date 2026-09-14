@@ -174,11 +174,23 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         toplam_islem = basarili + basarisiz
         basari_orani = (basarili / toplam_islem * 100) if toplam_islem > 0 else 0.0
 
+        detay_metni = ""
+        for p in borsa_poslari:
+            sym = p.get('symbol')
+            yon = str(p.get('side', '')).upper()
+            pnl_val = float(p.get('unrealizedPnl', 0))
+            roe_val = float(p.get('percentage', 0))
+            detay_metni += f"\n📌 `{sym}` ({yon}) | PnL: `{pnl_val:+.2f} USDT` (`%{roe_val:.2f}`)"
+
+        if not detay_metni:
+            detay_metni = "\n📌 Açık pozisyon bulunmuyor."
+
         mesaj = (
             "💎 **ELMAS KORUMALI BOT (20x | TP: %20 | SL: %5)**\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
-            f"🟢 Anlık PnL: `{toplam_pnl:+.2f} USDT`\n"
-            f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n\n"
+            f"🟢 Anlık Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
+            f"---------------------------------------"
+            f"{detay_metni}\n\n"
             f"✅ Başarılı TP: `{basarili}` | ❌ Başarısız SL: `{basarisiz}`\n"
             f"📈 Başarı Oranı: `%{basari_orani:.1f}`"
         )
@@ -235,12 +247,19 @@ def otomatik_arkaplan_tarayici():
                 basarili_mi = True
                 pnl_cikti = 0.0
                 try:
-                    trades = exchange.fetch_my_trades(kapatilan_sym, limit=5)
-                    if trades:
-                        son_trade = trades[-1]
-                        pnl_cikti = float(son_trade.get('info', {}).get('pnl', 0) or son_trade.get('realizedPnl', 0) or 0)
-                        if pnl_cikti < 0: basarili_mi = False
-                except Exception: pass
+                    ledger = exchange.fetch_ledger(kapatilan_sym, limit=5)
+                    for l in reversed(ledger):
+                        if l.get('type') == 'realized_pnl':
+                            pnl_cikti = float(l.get('amount', 0))
+                            break
+                    if pnl_cikti < 0: basarili_mi = False
+                except Exception:
+                    try:
+                        trades = exchange.fetch_my_trades(kapatilan_sym, limit=5)
+                        if trades:
+                            pnl_cikti = float(trades[-1].get('info', {}).get('pnl', trades[-1].get('realizedPnl', 0)) or 0)
+                            if pnl_cikti < 0: basarili_mi = False
+                    except Exception: pass
 
                 with state_lock:
                     if basarili_mi:
@@ -284,7 +303,6 @@ def otomatik_arkaplan_tarayici():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
                     
-                    # 4H, 1H ve 15M Üçlü Zaman Dilimi Kusursuz Uyum Şartı
                     ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=20)
                     df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     t_4h = "LONG" if ta.trend.ema_indicator(df_4h['close'], window=5).iloc[-1] > ta.trend.ema_indicator(df_4h['close'], window=13).iloc[-1] else "SHORT"
@@ -305,7 +323,6 @@ def otomatik_arkaplan_tarayici():
 
                     coin_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     
-                    # Filtre: ADX 30 altı (net trend yoksa pas geç), tüm zaman dilimleri aynı yönü göstermiyorsa girme.
                     if adx_val < 30 or coin_yonu != t_4h or coin_yonu != t_1h: 
                         continue
 
@@ -336,7 +353,6 @@ def otomatik_arkaplan_tarayici():
                     exchange.set_leverage(HEDEF_KALDIRAC, sinyal["symbol"])
                     
                     market = exchange.market(sinyal["symbol"])
-                    # Risk minimumda: Kasanın sadece %5'i ile 20x işlem açılır
                     miktar = float(exchange.amount_to_precision(sinyal["symbol"], max((toplam_bakiye * 0.05 * HEDEF_KALDIRAC) / sinyal["fiyat"] / float(market.get('contractSize', 1.0)), float(market['limits']['amount']['min'] or 1.0))))
                     
                     islem_yonu = 'buy' if sinyal["yon"] == 'LONG' else 'sell'
