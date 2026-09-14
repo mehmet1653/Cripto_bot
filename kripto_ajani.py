@@ -34,13 +34,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger("BorsaAjaniBot")
 
-# --- BORSACI BAĞLANTI (GATE.IO) ---
+# --- BORSACI BAĞLANTI (GATE.IO TESTNET) ---
 exchange = ccxt.gate({
     'apiKey': GATE_API_KEY,
     'secret': GATE_SECRET_KEY,
     'enableRateLimit': True,
     'options': {'defaultType': 'swap'}
 })
+
+# Testnet / Sandbox modunu etkinleştir
+exchange.set_sandbox_mode(True)
 
 def send_telegram(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -105,7 +108,7 @@ def get_account_status():
             active_pos_info = "\n".join(active_lines)
                 
         status_msg = (
-            f"📊 *Borsa Ajanı Durum Raporu*\n\n"
+            f"📊 *Borsa Ajanı Durum Raporu (Testnet)*\n\n"
             f"💰 Toplam Bakiye: `{usdt_total:.2f} USDT`\n"
             f"💵 Kullanılabilir: `{usdt_free:.2f} USDT`\n"
             f"📈 Açık Pozisyonlar:\n{active_pos_info}"
@@ -174,7 +177,7 @@ def execute_trade(symbol, signal, current_price, df_15m):
             exchange.create_order(symbol, 'stop', 'sell', contract_amount, params={'stop_price': sl_price, 'reduce_only': True})
             exchange.create_order(symbol, 'take_profit', 'sell', contract_amount, params={'stop_price': tp_price, 'reduce_only': True})
             
-            send_telegram(f"🟢 *LONG Açıldı ({symbol})!*\nFiyat: `{current_price}`\nSL: `{sl_price:.2f}` | TP: `{tp_price:.2f}`")
+            send_telegram(f"🟢 *LONG Açıldı [Testnet] ({symbol})!*\nFiyat: `{current_price}`\nSL: `{sl_price:.2f}` | TP: `{tp_price:.2f}`")
 
         elif signal == "SELL":
             sl_price = swing_high * 1.005
@@ -188,7 +191,7 @@ def execute_trade(symbol, signal, current_price, df_15m):
             exchange.create_order(symbol, 'stop', 'buy', contract_amount, params={'stop_price': sl_price, 'reduce_only': True})
             exchange.create_order(symbol, 'take_profit', 'buy', contract_amount, params={'stop_price': tp_price, 'reduce_only': True})
             
-            send_telegram(f"🔴 *SHORT Açıldı ({symbol})!*\nFiyat: `{current_price}`\nSL: `{sl_price:.2f}` | TP: `{tp_price:.2f}`")
+            send_telegram(f"🔴 *SHORT Açıldı [Testnet] ({symbol})!*\nFiyat: `{current_price}`\nSL: `{sl_price:.2f}` | TP: `{tp_price:.2f}`")
 
     except Exception as e:
         logger.error(f"İşlem yürütme hatası ({symbol}): {e}")
@@ -211,8 +214,8 @@ def check_telegram_commands():
         pass
 
 if __name__ == "__main__":
-    logger.info("Bot başlatıldı. 5 Güçlü Altcoin (SOL, XRP, AVAX, LINK, SUI) taranıyor.")
-    send_telegram("🤖 *Borsa Ajanı Botu Başlatıldı!* Altcoin sepeti aktif.")
+    logger.info("Bot başlatıldı [Testnet]. 5 Güçlü Altcoin taranıyor.")
+    send_telegram("🤖 *Borsa Ajanı Botu Başlatıldı (Testnet)!* Sepet aktif.")
     
     while True:
         try:
