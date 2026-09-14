@@ -244,7 +244,7 @@ def otomatik_arkaplan_tarayici():
             kapanan_semboller = onceki_aktif_semboller - su_anki_aktif_semboller
             
             for kapatilan_sym in kapanan_semboller:
-                basarili_mi = True
+                basarili_mi = False
                 pnl_cikti = 0.0
                 try:
                     ledger = exchange.fetch_ledger(kapatilan_sym, limit=5)
@@ -252,16 +252,19 @@ def otomatik_arkaplan_tarayici():
                         if l.get('type') == 'realized_pnl':
                             pnl_cikti = float(l.get('amount', 0))
                             break
-                    if pnl_cikti < 0: basarili_mi = False
+                    if pnl_cikti > 0: basarili_mi = True
                 except Exception:
                     try:
                         trades = exchange.fetch_my_trades(kapatilan_sym, limit=5)
                         if trades:
                             pnl_cikti = float(trades[-1].get('info', {}).get('pnl', trades[-1].get('realizedPnl', 0)) or 0)
-                            if pnl_cikti < 0: basarili_mi = False
+                            if pnl_cikti > 0: basarili_mi = True
                     except Exception: pass
 
                 with state_lock:
+                    if kapatilan_sym in AKTIF_GRID_SISTEMLERI:
+                        del AKTIF_GRID_SISTEMLERI[kapatilan_sym]
+                    
                     if basarili_mi:
                         ANALitik_HAFIZA["basarili_islem_sayisi"] = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0)) + 1
                         mesaj_str = f"🎯 *KÂR ALINDI (TP)*\n📌 `{kapatilan_sym}` kârla kapandı! (`+{pnl_cikti:.2f} USDT`)"
@@ -269,7 +272,6 @@ def otomatik_arkaplan_tarayici():
                         ANALitik_HAFIZA["basarisiz_islem_sayisi"] = int(ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0)) + 1
                         mesaj_str = f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{kapatilan_sym}` stop oldu. (`{pnl_cikti:.2f} USDT`)"
 
-                    if kapatilan_sym in AKTIF_GRID_SISTEMLERI: del AKTIF_GRID_SISTEMLERI[kapatilan_sym]
                     COIN_COOLDOWNLAR[kapatilan_sym] = {"zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), "son_yon": ""}
                 hafizayi_kaydet()
                 telegram_mesaj_gonder(mesaj_str)
