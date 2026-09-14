@@ -35,7 +35,7 @@ logging.basicConfig(
 logger = logging.getLogger("BorsaAjaniBot")
 
 # --- BORSACI BAĞLANTI (GATE.IO) ---
-exchange = ccxt.gateio({
+exchange = ccxt.gate({
     'apiKey': GATE_API_KEY,
     'secret': GATE_SECRET_KEY,
     'enableRateLimit': True,
@@ -222,9 +222,8 @@ if __name__ == "__main__":
                 signal, price, df_15m = analyze_market(symbol)
                 if signal in ["BUY", "SELL"]:
                     execute_trade(symbol, signal, price, df_15m)
-                    time.sleep(10) # Emirler arası kısa güvenlik payı
+                    time.sleep(10)
                 
-            # Tüm liste tarandıktan sonra döngü aralığı
             time.sleep(60)
         except Exception as e:
             logger.error(f"Ana döngü hatası: {e}")
