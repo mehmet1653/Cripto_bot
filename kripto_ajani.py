@@ -16,8 +16,8 @@ os.environ['PYTHONUNBUFFERED'] = '1'
 sys.stdout.reconfigure(line_buffering=True)
 
 # ==================== AYARLAR VE ANAHTARLAR ====================
-TELEGRAM_TOKEN = "7542198302:AAH9b8c7d6e5f4a3b2e1f0a9b8c7d6e5f4A"
-CHAT_ID = "123456789"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "7542198302:AAH9b8c7d6e5f4a3b2e1f0a9b8c7d6e5f4A")
+CHAT_ID = os.environ.get("CHAT_ID", "123456789")
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://rllpcylzhptqwzmzehnv.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "Sb_secret_ln9y67Ep_zCtOQ9Q2NE8KQ_nf0gKkmO")
@@ -34,7 +34,6 @@ exchange = ccxt.gate({
 
 exchange.set_sandbox_mode(True)
 
-# Belirtilen 5'li Altcoin Sepeti
 TAKIP_EDILENLER = [
     'SOL/USDT:USDT',
     'XRP/USDT:USDT',
@@ -52,7 +51,7 @@ COIN_ID_MAP = {
 }
 
 LEVERAGE = 5
-MARGIN_PERCENT = 0.20  # Kasanın %20'si
+MARGIN_PERCENT = 0.20
 RISK_REWARD_RATIO = 2.0
 
 BOT_CALISIYOR_MU = True
@@ -312,18 +311,15 @@ def otomatik_arkaplan_tarayici():
                 if not BOT_CALISIYOR_MU: break
                 
                 try:
-                    # 1. Çoklu Zaman Dilimi Verileri (4h, 1h, 15m)
                     df_4h = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe='4h', limit=50), columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     df_1h = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50), columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     df = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50), columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
                     guncel_fiyat = df['close'].iloc[-1]
 
-                    # 2. Üst Zaman Dilimi Trend Filtreleri
                     trend_4h = "BULLISH" if ta.trend.ema_indicator(df_4h['close'], window=9).iloc[-1] > ta.trend.ema_indicator(df_4h['close'], window=21).iloc[-1] else "BEARISH"
                     trend_1h = "BULLISH" if ta.trend.ema_indicator(df_1h['close'], window=9).iloc[-1] > ta.trend.ema_indicator(df_1h['close'], window=21).iloc[-1] else "BEARISH"
 
-                    # 3. 15m İndikatör ve Formasyon Doğrulamaları
                     ema_9 = ta.trend.ema_indicator(df['close'], window=9).iloc[-1]
                     ema_21 = ta.trend.ema_indicator(df['close'], window=21).iloc[-1]
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
@@ -340,7 +336,6 @@ def otomatik_arkaplan_tarayici():
                     print(f"⚠️ Veri çekme hatası ({symbol}): {e}", flush=True)
                     continue
 
-                # Katmanlı Teyit Puanlama Yapısı
                 grid_yonu = "NEUTRAL"
                 temel_puan = 0
 
@@ -377,7 +372,6 @@ def otomatik_arkaplan_tarayici():
                     if not yapay_zeka_islem_onayi(rsi, adx_val, float(ema_9 - ema_21), (1 if grid_yonu == 'LONG' else -1), atr, COIN_ID_MAP.get(symbol, 0)):
                         continue
 
-                    # Dinamik Swing Tepe/Dip Alımı
                     swing_low, swing_high = get_swing_levels(df, lookback=15)
                     taranan_sinyaller.append({
                         "symbol": symbol, "puan": temel_puan, "yon": grid_yonu, 
@@ -404,7 +398,6 @@ def otomatik_arkaplan_tarayici():
                     islem_yonu = 'buy' if sinyal["yon"] == 'LONG' else 'sell'
                     giris_fiyati = sinyal["fiyat"]
                     
-                    # Swing Tabanlı Dinamik SL ve RR=2.0 TP Hesaplama
                     swing_low = sinyal["swing_low"]
                     swing_high = sinyal["swing_high"]
 
