@@ -263,6 +263,8 @@ def otomatik_arkaplan_tarayici():
         yapay_zekayi_egit_ve_guncelle()
     except Exception: pass
     
+    onceki_aktif_semboller = set()
+    
     while True:
         try:
             if not BOT_CALISIYOR_MU:
@@ -275,6 +277,26 @@ def otomatik_arkaplan_tarayici():
             except Exception as e:
                 print(f"⚠️ Pozisyonlar çekilirken hata: {e}", flush=True)
                 aktif_borsa_map = {}
+
+            # --- BORSA TARAFINDAN KAPATILAN (TP / SL OLAN) POZİSYONLARI YAKALA ---
+            su_anki_aktif_semboller = set(aktif_borsa_map.keys())
+            kapanan_semboller = onceki_aktif_semboller - su_anki_aktif_semboller
+            
+            for kapatilan_sym in kapanan_semboller:
+                print(f"🎯 Borsa tarafında kapandı (TP/SL tetiklendi): {kapatilan_sym}", flush=True)
+                with state_lock:
+                    bas_sayi = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0)) + 1
+                    ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
+                    if kapatilan_sym in AKTIF_GRID_SISTEMLERI:
+                        del AKTIF_GRID_SISTEMLERI[kapatilan_sym]
+                    COIN_COOLDOWNLAR[kapatilan_sym] = {
+                        "zaman": float(time.time() + COOLDOWN_SURESI_SANIYE),
+                        "son_yon": ""
+                    }
+                hafizayi_kaydet()
+                telegram_mesaj_gonder(f"🎯 *İŞLEM TAMAMLANDI (TP/SL)*\n📌 `{kapatilan_sym}` pozisyonu borsa tarafından başarıyla kapatıldı.")
+
+            onceki_aktif_semboller = su_anki_aktif_semboller
 
             if aktif_borsa_map:
                 print(f"👀 [50x AÇIK POZİSYONLAR TAKİP EDİLİYOR] Toplam: {len(aktif_borsa_map)} adet", flush=True)
@@ -335,7 +357,6 @@ def otomatik_arkaplan_tarayici():
                     atr_degeri = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
                     atr_yuzde = float((atr_degeri / guncel_fiyat) * 100)
                     ema_fark = abs(ema5 - ema13)
-                    tampon_esigi = atr_degeri * 0.15
 
                     son_kapanan_close = df['close'].iloc[-2]
                     son_kapanan_open = df['open'].iloc[-2]
@@ -345,25 +366,21 @@ def otomatik_arkaplan_tarayici():
                     short_formasyon_onayi = (onceki_kapanan_close > onceki_kapanan_open) and (son_kapanan_close < son_kapanan_open)
                     long_formasyon_onayi = (onceki_kapanan_close < onceki_kapanan_open) and (son_kapanan_close > son_kapanan_open)
 
-                    # Kendi İçinde Bağımsız Yön Tayini
                     if ema5 > ema13:
                         coin_yonu = "LONG"
                     else:
                         coin_yonu = "SHORT"
 
-                    # --- OPTİMİZE EDİLMİŞ YÜKSEK PUANLAMA SİSTEMİ ---
-                    sinyal_puani = 65  # Taban puan yükseltildi
+                    sinyal_puani = 65
 
                     if coin_yonu == "LONG" and long_formasyon_onayi:
                         sinyal_puani += 15
                     elif coin_yonu == "SHORT" and short_formasyon_onayi:
                         sinyal_puani += 15
 
-                    # ADX Bonusu
                     if adx_val >= 20:
                         sinyal_puani += 10
 
-                    # Üst zaman dilimi uyum bonusu / hafif cezası (Daha esnek)
                     if coin_yonu == t_1h:
                         sinyal_puani += 5
                     else:
@@ -374,7 +391,6 @@ def otomatik_arkaplan_tarayici():
                     else:
                         sinyal_puani -= 10
 
-                    # RSI Esnek Filtre
                     if coin_yonu == "LONG" and rsi < 35:
                         sinyal_puani += 5
                     elif coin_yonu == "SHORT" and rsi > 65:
@@ -406,7 +422,7 @@ def otomatik_arkaplan_tarayici():
                         if not yapay_zeka_islem_onayi(rsi, adx_val, float(ema5 - ema13), (1 if coin_yonu == 'LONG' else -1), atr_yuzde, COIN_ID_MAP.get(symbol, 0)):
                             continue
 
-                        if sinyal_puani >= 70:  # İşlem açma eşiği 70'e çekildi
+                        if sinyal_puani >= 70:
                             taranan_sinyaller.append({
                                 "symbol": symbol, "puan": sinyal_puani, "yon": coin_yonu, 
                                 "rsi": rsi, "adx": adx_val, "ema_fark": float(ema5 - ema13), 
