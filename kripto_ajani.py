@@ -220,7 +220,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  PnL: `{pnl_val:+.2f} USDT` (`%{roe:+.2f}`)"
 
         mesaj = (
-            "📊 **HİBRİT BOT DURUMU (4h Zırhlı)**\n\n"
+            "📊 **HİBRİT BOT DURUMU (Esnetilmiş Akıllı Filtre)**\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"🟢 Anlık PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -290,7 +290,6 @@ def otomatik_arkaplan_tarayici():
                 fark = (guncel_fiyat - merkez) / merkez if yon == "LONG" else (merkez - guncel_fiyat) / merkez
                 roe = fark * 100 * kaldirac
 
-                # Borsa tarafında limit emirler dolmuşsa veya pozisyon kapanmışsa takip et
                 if roe >= 20.0:
                     print(f"🎯 Kâr al seviyesine ulaşıldı! {symbol}", flush=True)
                     pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *KÂR ALINDI (TP)*\n📌 `{symbol}` | Kâr: `+{pnl:.2f} USDT` (`%{roe:.2f}`)", basarili=True, ruzgar_dondu=False)
@@ -306,14 +305,14 @@ def otomatik_arkaplan_tarayici():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
                     
-                    # 1) Üst Zaman Dilimi (4h) Ana Trend Zırhı
+                    # 1) Üst Zaman Dilimi (4h) Ana Trend
                     ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=30)
                     df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     ema5_4h = ta.trend.ema_indicator(df_4h['close'], window=5).iloc[-1]
                     ema13_4h = ta.trend.ema_indicator(df_4h['close'], window=13).iloc[-1]
                     ana_trend_4h = "LONG" if ema5_4h > ema13_4h else "SHORT"
 
-                    # 2) Üst Zaman Dilimi (1h) Trend Filtresi
+                    # 2) Üst Zaman Dilimi (1h) Trend
                     ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=30)
                     df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     ema5_1h = ta.trend.ema_indicator(df_1h['close'], window=5).iloc[-1]
@@ -348,7 +347,6 @@ def otomatik_arkaplan_tarayici():
                     print(f"⚠️ Veri çekme hatası ({symbol}): {e}", flush=True)
                     continue
 
-                # Yönü kesin olarak 4h ve 1h ana trendine kilitliyoruz
                 grid_yonu = ana_trend_4h
 
                 if adx_val >= 25:
@@ -363,26 +361,45 @@ def otomatik_arkaplan_tarayici():
                 else:
                     sinyal_puani = temel_puan
 
-                # --- 4 KATMANLI FİLTRELEME ---
-                # 1) 1h Trend 4h Trend ile uyuşmuyorsa puanı kır
+                # --- YENİ GELİŞTİRİLMİŞ AKILLI FİLTRELER ---
+                
+                # 1) 1h Trend 4h ile uyumsuzsa puanı tamamen öldürmüyoruz, sadece hafif esnetiyoruz (-15 puan)
                 if grid_yonu != ana_trend_1h:
-                    sinyal_puani -= 25
+                    sinyal_puani -= 15
 
                 # 2) ATR Tampon Bölge Kontrolü
                 if ema_fark < tampon_esigi:
-                    sinyal_puani -= 20
+                    sinyal_puani -= 15
 
-                print(f"📊 Analiz -> {symbol} | Yön: {grid_yonu} | 4h Trend: {ana_trend_4h} | 1h Trend: {ana_trend_1h} | Puan: {sinyal_puani}", flush=True)
+                # 3) FİYAT-EMA UZAKLIK KORUMASI (Chasing / Mean Reversion)
+                # Fiyat, 15m EMA13'ten ortalamaya göre çok koptuysa (örneğin %1.5'tan fazla uzaklaştıysa) tepeye/dibe gidiyor demektir, işlem açma!
+                fiyat_ema_uzaklik_yuzdesi = abs(guncel_fiyat - ema13) / ema13
+                if fiyat_ema_uzaklik_yuzdesi > 0.015:
+                    sinyal_puani -= 30  # Çok gerildiyse puandan düş
+
+                # 4) RİSKLİ RSI BÖLGELERİNDEN DÖNÜŞ KONTROLÜ
+                # Long için RSI 30 altından yeni toparlanıyorsa ek puan ver, RSI 75'in üzerindeyse Long'u engelle
+                if grid_yonu == "LONG":
+                    if rsi > 75: 
+                        sinyal_puani -= 35 # Tepeye yakın long açma!
+                    elif rsi < 40:
+                        sinyal_puani += 10 # Dip dönüşü bonusu
+                elif grid_yonu == "SHORT":
+                    if rsi < 25: 
+                        sinyal_puani -= 35 # Dibe yakın short açma!
+                    elif rsi > 60:
+                        sinyal_puani += 10 # Tepe dönüşü bonusu
+
+                print(f"📊 Analiz -> {symbol} | Yön: {grid_yonu} | RSI: {rsi:.1f} | Uzaklık: %{fiyat_ema_uzaklik_yuzdesi*100:.2f} | Puan: {sinyal_puani}", flush=True)
 
                 if symbol in aktif_borsa_map:
                     mevcut_pos = aktif_borsa_map[symbol]
                     mevcut_yon = str(mevcut_pos.get('side', '')).upper()
                     mevcut_kontrat = float(mevcut_pos.get('contracts', 0) or mevcut_pos.get('size', 0) or 1.0)
                     
-                    # 4h Ana Trend değiştiğinde veya rüzgar tersine döndüğünde pozisyonu çevir
                     if sinyal_puani >= 70 and mevcut_yon != grid_yonu and ema_fark >= tampon_esigi:
                         print(f"🔄 [RÜZGAR DÖNDÜ] {symbol} | Eski Yön: {mevcut_yon} -> Yeni Yön: {grid_yonu}", flush=True)
-                        pozisyonu_kapat(symbol, mevcut_yon, mevcut_kontrat, f"🔄 *RÜZGAR TERSİNE DÖNDÜ (4h Zırh)*\n📌 `{symbol}` | Pozisyon kapatılıp `{grid_yonu}` yönüne dönülüyor.", basarili=False, ruzgar_dondu=True)
+                        pozisyonu_kapat(symbol, mevcut_yon, mevcut_kontrat, f"🔄 *RÜZGAR TERSİNE DÖNDÜ (Akıllı Filtre)*\n📌 `{symbol}` | Pozisyon kapatılıp `{grid_yonu}` yönüne dönülüyor.", basarili=False, ruzgar_dondu=True)
                         aktif_borsa_map.pop(symbol, None)
 
                 if symbol not in aktif_borsa_map:
@@ -441,7 +458,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     print(f"⚡ [İŞLEM AÇILDI] {sinyal['symbol']} | Yön: {sinyal['yon']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *4h ZIRHLI İŞLEM AÇILDI*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Fiyat: `{giris_fiyati}`")
+                    telegram_mesaj_gonder(f"⚡ *AKILLI FİLTRELİ İŞLEM AÇILDI*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Fiyat: `{giris_fiyati}` | RSI: `{sinyal['rsi']:.1f}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası: {e}", flush=True)
