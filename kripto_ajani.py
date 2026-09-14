@@ -16,7 +16,7 @@ os.environ['PYTHONUNBUFFERED'] = '1'
 sys.stdout.reconfigure(line_buffering=True)
 
 # ==================== AYARLAR VE ANAHTARLAR ====================
-TELEGRAM_TOKEN = "8870934003:AAGOzmO_VwYnj0Wz2hehI176rKiOkEaV0b0"
+TELEGRAM_TOKEN = "8870934003:AAGOzmO_VwYnj0Wz2hehl176rKiOkEaV0b0"
 CHAT_ID = "6929517567"
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://rllpcylzhptqwzmzehnv.supabase.co")
