@@ -103,8 +103,8 @@ AKTIF_GRID_SISTEMLERI = kalici_veri.get("aktif_sistemler", {})
 ANALitik_HAFIZA = kalici_veri.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []})
 COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
-MAKSIMUM_TOPLAM_POZISYON = 1  # Aynı anda sadece 1 sağlam işlem (Kasayı korumak için)
-COOLDOWN_SURESI_SANIYE = 30 * 60
+MAKSIMUM_TOPLAM_POZISYON = 1
+COOLDOWN_SURESI_SANIYE = 45 * 60
 HEDEF_KALDIRAC = 20
 
 ai_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
@@ -131,7 +131,7 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id):
     try:
         olasiliklar = ai_model.predict_proba(np.array([[float(rsi), float(adx), float(ema_fark), int(yon_kod), float(atr_yuzde), int(coin_id)]]))[0]
         classes = list(ai_model.classes_)
-        return (olasiliklar[classes.index(1)] if 1 in classes else 1.0) >= 0.60
+        return (olasiliklar[classes.index(1)] if 1 in classes else 1.0) >= 0.70
     except Exception:
         return True
 
@@ -175,7 +175,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         basari_orani = (basarili / toplam_islem * 100) if toplam_islem > 0 else 0.0
 
         mesaj = (
-            "🛡️ **ULTRA KORUMALI BOT (20x | TP: %15 | SL: %6)**\n\n"
+            "💎 **ELMAS KORUMALI BOT (20x | TP: %20 | SL: %5)**\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"🟢 Anlık PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n\n"
@@ -189,7 +189,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Ultra Korumalı Mod Devrede!")
+    await update.message.reply_text("🟢 Elmas Korumalı Mod Aktif (20x)!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -208,7 +208,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
-    print("🚀 Ultra Korumalı Tarayıcı Başlatıldı.", flush=True)
+    print("🚀 Elmas Korumalı Tarayıcı Başlatıldı (20x).", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -245,10 +245,10 @@ def otomatik_arkaplan_tarayici():
                 with state_lock:
                     if basarili_mi:
                         ANALitik_HAFIZA["basarili_islem_sayisi"] = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0)) + 1
-                        mesaj_str = f"🎯 *KÂR ALINDI*\n📌 `{kapatilan_sym}` kârla kapandı! (`+{pnl_cikti:.2f} USDT`)"
+                        mesaj_str = f"🎯 *KÂR ALINDI (TP)*\n📌 `{kapatilan_sym}` kârla kapandı! (`+{pnl_cikti:.2f} USDT`)"
                     else:
                         ANALitik_HAFIZA["basarisiz_islem_sayisi"] = int(ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0)) + 1
-                        mesaj_str = f"🛑 *ZARAR KESİLDİ*\n📌 `{kapatilan_sym}` stop oldu. (`{pnl_cikti:.2f} USDT`)"
+                        mesaj_str = f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{kapatilan_sym}` stop oldu. (`{pnl_cikti:.2f} USDT`)"
 
                     if kapatilan_sym in AKTIF_GRID_SISTEMLERI: del AKTIF_GRID_SISTEMLERI[kapatilan_sym]
                     COIN_COOLDOWNLAR[kapatilan_sym] = {"zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), "son_yon": ""}
@@ -257,7 +257,7 @@ def otomatik_arkaplan_tarayici():
 
             onceki_aktif_semboller = su_anki_aktif_semboller
 
-            # Pozisyon Takibi (TP: %15 | SL: %6)
+            # Pozisyon Takibi (20x | TP: %20 | SL: %5)
             for symbol, pos in list(aktif_borsa_map.items()):
                 try: guncel_fiyat = exchange.fetch_ticker(symbol)['last']
                 except Exception: continue
@@ -271,9 +271,9 @@ def otomatik_arkaplan_tarayici():
                 fark = (guncel_fiyat - merkez) / merkez if yon == "LONG" else (merkez - guncel_fiyat) / merkez
                 roe = fark * 100 * kaldirac
 
-                if roe >= 15.0:
+                if roe >= 20.0:
                     pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *HEDEF KÂR ALINDI*\n📌 `{symbol}` | Kâr: `+{pnl:.2f} USDT` (`%{roe:.2f}`)", basarili=True)
-                elif roe <= -6.0:
+                elif roe <= -5.0:
                     pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KES (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT` (`%{roe:.2f}`)", basarili=False)
 
             taranan_sinyaller = []
@@ -284,7 +284,7 @@ def otomatik_arkaplan_tarayici():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
                     
-                    # Çoklu Zaman Dilimi Filtresi (1H ve 4H Trend Uyumu Şart)
+                    # 4H, 1H ve 15M Üçlü Zaman Dilimi Kusursuz Uyum Şartı
                     ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=20)
                     df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     t_4h = "LONG" if ta.trend.ema_indicator(df_4h['close'], window=5).iloc[-1] > ta.trend.ema_indicator(df_4h['close'], window=13).iloc[-1] else "SHORT"
@@ -305,11 +305,11 @@ def otomatik_arkaplan_tarayici():
 
                     coin_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     
-                    # Filtre: ADX 28 altındaysa piyasa yataydır, işlem açma. 1H ve 4H ile yön uyuşmuyorsa asla girme.
-                    if adx_val < 28 or coin_yonu != t_4h or coin_yonu != t_1h: 
+                    # Filtre: ADX 30 altı (net trend yoksa pas geç), tüm zaman dilimleri aynı yönü göstermiyorsa girme.
+                    if adx_val < 30 or coin_yonu != t_4h or coin_yonu != t_1h: 
                         continue
 
-                    sinyal_puani = 85
+                    sinyal_puani = 90
                     if symbol not in aktif_borsa_map:
                         with state_lock:
                             cooldown_veri = COIN_COOLDOWNLAR.get(symbol)
@@ -336,8 +336,8 @@ def otomatik_arkaplan_tarayici():
                     exchange.set_leverage(HEDEF_KALDIRAC, sinyal["symbol"])
                     
                     market = exchange.market(sinyal["symbol"])
-                    # Her işlemde kasanın sadece %8'ini riske atarak patlamayı imkansızlaştırıyoruz
-                    miktar = float(exchange.amount_to_precision(sinyal["symbol"], max((toplam_bakiye * 0.08 * HEDEF_KALDIRAC) / sinyal["fiyat"] / float(market.get('contractSize', 1.0)), float(market['limits']['amount']['min'] or 1.0))))
+                    # Risk minimumda: Kasanın sadece %5'i ile 20x işlem açılır
+                    miktar = float(exchange.amount_to_precision(sinyal["symbol"], max((toplam_bakiye * 0.05 * HEDEF_KALDIRAC) / sinyal["fiyat"] / float(market.get('contractSize', 1.0)), float(market['limits']['amount']['min'] or 1.0))))
                     
                     islem_yonu = 'buy' if sinyal["yon"] == 'LONG' else 'sell'
                     giris_fiyati = sinyal["fiyat"]
@@ -345,12 +345,12 @@ def otomatik_arkaplan_tarayici():
                     exchange.create_order(sinyal["symbol"], 'market', islem_yonu, miktar)
 
                     if sinyal["yon"] == 'LONG':
-                        tp_fiyat = giris_fiyati * (1 + (0.15 / HEDEF_KALDIRAC))
-                        sl_fiyat = giris_fiyati * (1 - (0.06 / HEDEF_KALDIRAC))
+                        tp_fiyat = giris_fiyati * (1 + (0.20 / HEDEF_KALDIRAC))
+                        sl_fiyat = giris_fiyati * (1 - (0.05 / HEDEF_KALDIRAC))
                         kapat_yon = 'sell'
                     else:
-                        tp_fiyat = giris_fiyati * (1 - (0.15 / HEDEF_KALDIRAC))
-                        sl_fiyat = giris_fiyati * (1 + (0.06 / HEDEF_KALDIRAC))
+                        tp_fiyat = giris_fiyati * (1 - (0.20 / HEDEF_KALDIRAC))
+                        sl_fiyat = giris_fiyati * (1 + (0.05 / HEDEF_KALDIRAC))
                         kapat_yon = 'buy'
 
                     try:
@@ -362,9 +362,10 @@ def otomatik_arkaplan_tarayici():
                         AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {"giris_rsi": float(sinyal["rsi"])}
                     hafizayi_kaydet()
                     
-                    telegram_mesaj_gonder(f"⚡ *ULTRA KORUMALI İŞLEM*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` (20x) | TP: `%15` | SL: `%-6`")
+                    telegram_mesaj_gonder(f"💎 *ELMAS İŞLEM AÇILDI*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` (20x) | TP: `%20` | SL: `%-5`")
                     break
-                except Exception: pass
+                except Exception as e:
+                    print(f"❌ İşlem hatası: {e}", flush=True)
 
         except Exception: pass
         time.sleep(5)
@@ -379,5 +380,5 @@ if __name__ == '__main__':
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
-    print("🤖 Ultra Korumalı Bot Başlatılıyor...", flush=True)
+    print("🤖 Elmas Korumalı Bot Başlatılıyor...", flush=True)
     app_tg.run_polling()
