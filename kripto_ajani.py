@@ -15,12 +15,12 @@ from supabase import create_client, Client
 os.environ['PYTHONUNBUFFERED'] = '1'
 sys.stdout.reconfigure(line_buffering=True)
 
-# ==================== AYARLAR VE ANAHTARLAR ====================
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8870934003:AAGOzmO_VwYnj0Wz2hehl176rKiOkEaV0b0")
-CHAT_ID = os.environ.get("CHAT_ID", "6929517567")
+# ==================== DOĞRUDAN TANIMLI ANAHTARLAR ====================
+TELEGRAM_TOKEN = "8870934003:AAGOzmO_VwYnj0Wz2hehl176rKiOkEaV0b0"
+CHAT_ID = "6929517567"
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://rllpcylzhptqwzmzehnv.supabase.co")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "Sb_secret_ln9y67Ep_zCtOQ9Q2NE8KQ_nf0gKkmO")
+SUPABASE_URL = "https://rllpcylzhptqwzmzehnv.supabase.co"
+SUPABASE_KEY = "Sb_secret_ln9y67Ep_zCtOQ9Q2NE8KQ_nf0gKkmO"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 exchange = ccxt.gate({
@@ -52,7 +52,7 @@ COIN_ID_MAP = {
 
 BOT_CALISIYOR_MU = True
 STATE_LOCK = threading.Lock()
-KALDIRAC = 5  # 5x Kaldıraç aktif
+KALDIRAC = 5
 
 # ==================== SUPABASE HAFIZA ====================
 def hafizayi_yukle():
