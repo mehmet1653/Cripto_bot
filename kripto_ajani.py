@@ -118,7 +118,7 @@ COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
 MAKSIMUM_TOPLAM_POZISYON = 3
 COOLDOWN_SURESI_SANIYE = 15 * 60
-HEDEF_KALDIRAC = 50
+HEDEF_KALDIRAC = 20
 
 ai_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
 ai_model_egitildi = False
@@ -221,7 +221,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} ({kaldirac}x) | Giriş: `{giris}`\n  PnL: `{pnl_val:+.2f} USDT` (`%{roe:+.2f}`)"
 
         mesaj = (
-            "📊 **HİBRİT BOT DURUMU (TP: %20 | SL: %10)**\n\n"
+            "📊 **HİBRİT BOT DURUMU (20x | TP: %20 | SL: %10)**\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"🟢 Anlık PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -237,7 +237,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot TP:%20 SL:%10 Modda Aktif!")
+    await update.message.reply_text("🟢 Bot 20x | TP:%20 | SL:%10 Modda Aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -257,7 +257,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
-    print("🚀 Tarayıcı Döngüsü Başlatıldı (TP: %20 | SL: %10).", flush=True)
+    print("🚀 Tarayıcı Döngüsü Başlatıldı (20x | TP: %20 | SL: %10).", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -470,7 +470,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     print(f"⚡ [İŞLEM AÇILDI] {sinyal['symbol']} | Yön: {sinyal['yon']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` (50x) | Fiyat: `{giris_fiyati}` | TP: `%20` | SL: `%-10`")
+                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` (20x) | Fiyat: `{giris_fiyati}` | TP: `%20` | SL: `%-10`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası: {e}", flush=True)
@@ -489,5 +489,5 @@ if __name__ == '__main__':
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
-    print("🤖 Bot Başlatılıyor (TP:%20 | SL:%10)...", flush=True)
+    print("🤖 Bot Başlatılıyor (20x | TP:%20 | SL:%10)...", flush=True)
     app_tg.run_polling()
