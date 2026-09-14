@@ -278,15 +278,37 @@ def otomatik_arkaplan_tarayici():
                 print(f"⚠️ Pozisyonlar çekilirken hata: {e}", flush=True)
                 aktif_borsa_map = {}
 
-            # --- BORSA TARAFINDAN KAPATILAN (TP / SL OLAN) POZİSYONLARI YAKALA ---
+            # --- BORSA TARAFINDAN KAPATILAN (TP / SL OLAN) POZİSYONLARI DOĞRU TESPİT ET ---
             su_anki_aktif_semboller = set(aktif_borsa_map.keys())
             kapanan_semboller = onceki_aktif_semboller - su_anki_aktif_semboller
             
             for kapatilan_sym in kapanan_semboller:
-                print(f"🎯 Borsa tarafında kapandı (TP/SL tetiklendi): {kapatilan_sym}", flush=True)
+                print(f"🎯 Borsa tarafında kapandı (TP/SL kontrol ediliyor): {kapatilan_sym}", flush=True)
+                
+                # İşlemin kârda mı zararda mı kapandığını anlamak için son işlemlere bakalım
+                basarili_mi = True
+                pnl_cikti = 0.0
+                try:
+                    trades = exchange.fetch_my_trades(kapatilan_sym, limit=5)
+                    if trades:
+                        # Son kapatma işlemine ait kâr/zarar verisini bulmaya çalışalım
+                        son_trade = trades[-1]
+                        pnl_cikti = float(son_trade.get('info', {}).get('pnl', 0) or son_trade.get('realizedPnl', 0) or 0)
+                        if pnl_cikti < 0:
+                            basarili_mi = False
+                except Exception as ex:
+                    print(f"⚠️ Trade PnL okuma hatası: {ex}", flush=True)
+
                 with state_lock:
-                    bas_sayi = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0)) + 1
-                    ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
+                    if basarili_mi:
+                        bas_sayi = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0)) + 1
+                        ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
+                        mesaj_str = f"🎯 *KÂR ALINDI (TP)*\n📌 `{kapatilan_sym}` pozisyonu kârla kapatıldı! (PnL: `+{pnl_vaarlik_kontrol(pnl_cikti)} USDT`)"
+                    else:
+                        basarisiz_sayi = int(ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0)) + 1
+                        ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
+                        mesaj_str = f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{kapatilan_sym}` pozisyonu stop oldu. (PnL: `{pnl_cikti:.2f} USDT`)"
+
                     if kapatilan_sym in AKTIF_GRID_SISTEMLERI:
                         del AKTIF_GRID_SISTEMLERI[kapatilan_sym]
                     COIN_COOLDOWNLAR[kapatilan_sym] = {
@@ -294,7 +316,7 @@ def otomatik_arkaplan_tarayici():
                         "son_yon": ""
                     }
                 hafizayi_kaydet()
-                telegram_mesaj_gonder(f"🎯 *İŞLEM TAMAMLANDI (TP/SL)*\n📌 `{kapatilan_sym}` pozisyonu borsa tarafından başarıyla kapatıldı.")
+                telegram_mesaj_gonder(mesaj_str)
 
             onceki_aktif_semboller = su_anki_aktif_semboller
 
@@ -480,6 +502,9 @@ def otomatik_arkaplan_tarayici():
         except Exception as e:
             print(f"⚠️ Döngü hatası: {e}", flush=True)
         time.sleep(5)
+
+def pnl_vaarlik_kontrol(deger):
+    return f"{deger:.2f}"
 
 if __name__ == '__main__':
     t = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
