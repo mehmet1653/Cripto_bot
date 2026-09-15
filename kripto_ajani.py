@@ -324,7 +324,7 @@ async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     BOT_CALISIYOR_MU = False
     await update.message.reply_text("⏸️ Bot durduruldu.")
 
-async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TS if 'ContextTypes' in globals() else object):
+async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         for pos in exchange.fetch_positions():
             kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
@@ -430,9 +430,6 @@ def otomatik_arkaplan_tarayici():
                     adx_val = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx().iloc[-1]
                     atr = atr_ve_volatilite_hesapla(df)
 
-                    son_kapanan_close = df['close'].iloc[-2]
-                    son_kapanan_open = df['open'].iloc[-1] if len(df) > 1 else df['close'].iloc[-1]
-                    # Formasyon hesaplamaları için doğru indexler
                     son_kapanan_close = df['close'].iloc[-2]
                     son_kapanan_open = df['open'].iloc[-2]
                     onceki_kapanan_close = df['close'].iloc[-3]
