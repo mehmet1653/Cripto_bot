@@ -119,7 +119,7 @@ COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
 MAKSIMUM_AYNI_YON_SAYISI = 2
 MAKSIMUM_TOPLAM_POZISYON = 3
-COOLDOWN_SURESI_SANIYE = 30 * 60  # Güncelleme: 30 Dakika Cooldown
+COOLDOWN_SURESI_SANIYE = 30 * 60  # Yalnızca ters sinyal durumunda 30 dakika
 
 ai_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
 ai_model_egitildi = False
@@ -188,7 +188,7 @@ def telegram_mesaj_gonder(mesaj):
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}, timeout=5)
     except Exception: pass
 
-def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True):
+def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True, cezali_mi=False):
     kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
     try:
         try:
@@ -210,11 +210,15 @@ def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True):
         ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
         ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
 
-        # Tüm kapanışlarda (ters sinyal veya dikey bariyer fark etmeksizin) 30 dk cooldown uygulanır
-        COIN_COOLDOWNLAR[symbol] = {
-            "zaman": float(time.time() + COOLDOWN_SURESI_SANIYE),
-            "son_yon": yon
-        }
+        # SADECE ters sinyal (cezali_mi=True) durumunda 30 dk cooldown uygulanır
+        if cezali_mi:
+            COIN_COOLDOWNLAR[symbol] = {
+                "zaman": float(time.time() + COOLDOWN_SURESI_SANIYE),
+                "son_yon": yon
+            }
+        else:
+            if symbol in COIN_COOLDOWNLAR:
+                del COIN_COOLDOWNLAR[symbol]
 
         if symbol in AKTIF_GRID_SISTEMLERI:
             del AKTIF_GRID_SISTEMLERI[symbol]
@@ -326,7 +330,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for pos in exchange.fetch_positions():
             kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
             if kontrat > 0:
-                pozisyonu_kapat(pos['symbol'], str(pos.get('side', '')).upper(), kontrat, f"🛑 Manuel Kapatma - `{pos['symbol']}`", basarili=False)
+                pozisyonu_kapat(pos['symbol'], str(pos.get('side', '')).upper(), kontrat, f"🛑 Manuel Kapatma - `{pos['symbol']}`", basarili=False, cezali_mi=False)
         await update.message.reply_text("✅ Tüm pozisyonlar kapatıldı.")
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
@@ -334,7 +338,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
-    print("🚀 Tarayıcı Döngüsü Başlatıldı (30dk Cooldown & Dikey Bariyer Aktif).", flush=True)
+    print("🚀 Tarayıcı Döngüsü Başlatıldı (Sadece Ters Sinyalde 30dk Cooldown Aktif).", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -369,10 +373,10 @@ def otomatik_arkaplan_tarayici():
                 kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 1.0)
 
                 if roe >= 35.0:
-                    pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *KÂR ALINDI (TP)*\n📌 `{symbol}` | Kâr: `+{pnl:.2f} USDT`", basarili=True)
+                    pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *KÂR ALINDI (TP)*\n📌 `{symbol}` | Kâr: `+{pnl:.2f} USDT`", basarili=True, cezali_mi=False)
                     continue
                 elif roe <= -20.0:
-                    pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT`", basarili=False)
+                    pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT`", basarili=False, cezali_mi=False)
                     continue
 
                 veri_paketi = {
@@ -387,7 +391,7 @@ def otomatik_arkaplan_tarayici():
 
                 bariyer_durum = dikey_bariyer_kontrol(veri_paketi, ohlcv)
                 if bariyer_durum["kapat_ilsi"]:
-                    pozisyonu_kapat(symbol, yon, kontrat, f"⏳ *DİKEY BARIYER ÇIKIŞI*\n📌 `{symbol}`\nSebep: `{bariyer_durum['neden']}`", basarili=True)
+                    pozisyonu_kapat(symbol, yon, kontrat, f"⏳ *DİKEY BARIYER ÇIKIŞI*\n📌 `{symbol}`\nSebep: `{bariyer_durum['neden']}`", basarili=True, cezali_mi=False)
 
             taranan_sinyaller = []
 
@@ -438,7 +442,8 @@ def otomatik_arkaplan_tarayici():
                     mevcut_kontrat = float(mevcut_pos.get('contracts', 0) or mevcut_pos.get('size', 0) or 1.0)
                     
                     if sinyal_puani >= 70 and mevcut_yon != grid_yonu:
-                        pozisyonu_kapat(symbol, mevcut_yon, mevcut_kontrat, f"🔄 *RÜZGAR TERSİNE DÖNDÜ*\n📌 `{symbol}` | Pozisyon kapatılıp zıt yöne dönülüyor (30dk Cooldown Başladı).", basarili=False)
+                        # Rüzgar tersine döndü: 30 dk ceza (cooldown) uygula
+                        pozisyonu_kapat(symbol, mevcut_yon, mevcut_kontrat, f"🔄 *RÜZGAR TERSİNE DÖNDÜ*\n📌 `{symbol}` | Pozisyon kapatılıp zıt yöne dönülüyor (30dk Cooldown Başladı).", basarili=False, cezali_mi=True)
                         aktif_borsa_map.pop(symbol, None)
 
                 if symbol not in aktif_borsa_map:
