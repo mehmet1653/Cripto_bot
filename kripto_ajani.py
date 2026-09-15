@@ -256,7 +256,7 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar, exchange_komisyon_orani=0.000
     mum_govdeleri_kuculuyor_mu = (govdeler[2] < govdeler[1]) and (govdeler[1] < govdeler[0])
 
     if not (hacim_dusuyor_mu and mum_govdeleri_kuculuyor_mu):
-        return {"kapat_ilsi": False, "neden": "Momentum ve hacim güçlü, pozisyon korunuyor."}
+        return {"kapat_ilsi": False, "neden": "Momentum and hacim güçlü, pozisyon korunuyor."}
 
     if gecen_sure_dakika >= maksimum_bekleme_suresi:
         if kaldiracli_roe >= toplam_komisyon_maliyeti:
@@ -419,7 +419,16 @@ def otomatik_arkaplan_tarayici():
                 print(f"🔍 Taranıyor -> {symbol}", flush=True)
 
                 try:
-                    guncel_fiyat = exchange.fetch_ticker(symbol)['last']
+                    # 1 Saatlik (1h) Büyük Resim Trend Filtresi İçin Veri Çekme
+                    ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=30)
+                    df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    ema20_1h = ta.trend.ema_indicator(df_1h['close'], window=20).iloc[-1]
+                    fiyat_1h = df_1h['close'].iloc[-1]
+                    
+                    # 1h Trend Yönü Belirleme
+                    makro_trend = "LONG" if fiyat_1h > ema20_1h else "SHORT"
+
+                    # 15 Dakikalık Detaylı Analiz Verileri
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
@@ -442,10 +451,11 @@ def otomatik_arkaplan_tarayici():
                     print(f"⚠️ Veri çekme hatası ({symbol}): {e}", flush=True)
                     continue
 
-                if adx_val >= 25:
+                # ADX Eşiği 28'e Yükseltildi (Testere piyasalarından kaçınmak için)
+                if adx_val >= 28:
                     temel_puan = 75
                 else:
-                    temel_puan = 60
+                    temel_puan = 50  # Düşük ADX puanı aşağı çekildi
 
                 if ema5 > ema13 and long_formasyon_onayi:
                     grid_yonu = "LONG"
@@ -457,7 +467,12 @@ def otomatik_arkaplan_tarayici():
                     grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     sinyal_puani = temel_puan
 
-                print(f"   📊 Analiz [{symbol}] -> Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
+                # 1 Saatlik Makro Trend Uyumsuzluğu Kontrolü (Ana akıntıya karşı işlem açmayı engelle)
+                if grid_yonu != makro_trend:
+                    print(f"   🛑 Makro Filtre Engeli [{symbol}]: 1h Trend '{makro_trend}' iken 15m '{grid_yonu}' yönünde işlem açılamaz, puan kırıldı.", flush=True)
+                    sinyal_puani -= 30  # Puanı düşürerek 70 eşiğinin altında kalmasını sağlıyoruz
+
+                print(f"   📊 Analiz [{symbol}] -> 1h Trend: {makro_trend} | 15m Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
 
                 if symbol in aktif_borsa_map:
                     mevcut_pos = aktif_borsa_map[symbol]
