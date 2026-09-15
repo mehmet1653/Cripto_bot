@@ -324,7 +324,7 @@ async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     BOT_CALISIYOR_MU = False
     await update.message.reply_text("⏸️ Bot durduruldu.")
 
-async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TS if 'ContextTypes' in globals() else object):
     try:
         for pos in exchange.fetch_positions():
             kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
@@ -337,7 +337,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
-    print("🚀 Tarayıcı Döngüsü Başlatıldı ve Loglama Aktif.", flush=True)
+    print("🚀 Tarayıcı Döngüsü Başlatıldı ve Adım Adım Loglama Aktif.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -349,12 +349,18 @@ def otomatik_arkaplan_tarayici():
                 time.sleep(5)
                 continue
 
+            print("--------------------------------------------------", flush=True)
+            print("🔄 Yeni tarama döngüsü başladı...", flush=True)
+
             try:
                 raw_positions = exchange.fetch_positions()
                 aktif_borsa_map = {p['symbol']: p for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0}
+                print(f"📦 Borsadaki aktif pozisyon sayısı: {len(aktif_borsa_map)}", flush=True)
             except Exception as e:
                 aktif_borsa_map = {}
+                print(f"⚠️ Pozisyonlar çekilemedi: {e}", flush=True)
 
+            # Açık pozisyonları izle
             for symbol, pos in aktif_borsa_map.items():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
@@ -370,6 +376,8 @@ def otomatik_arkaplan_tarayici():
                 roe = fark * 100 * kaldirac_val
                 pnl = float(pos.get('unrealizedPnl', 0))
                 kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 1.0)
+
+                print(f"👁️ İzleniyor -> {symbol} | Yön: {yon} | Giriş: {merkez} | Güncel: {guncel_fiyat} | ROE: %{roe:.2f} | PnL: {pnl:.2f} USDT", flush=True)
 
                 if roe >= 35.0:
                     pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *KÂR ALINDI (TP)*\n📌 `{symbol}` | Kâr: `+{pnl:.2f} USDT`", basarili=True, cezali_mi=False)
@@ -394,16 +402,21 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller = []
 
+            # Coinleri tek tek tara
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
                 
-                # Cooldown kontrolü (Döngünün başında taranırken engellemek için)
+                # Cooldown kontrolü
                 with state_lock:
                     cooldown_veri = COIN_COOLDOWNLAR.get(symbol)
                     if cooldown_veri:
                         zaman_kontrol = cooldown_veri.get("zaman", 0) if isinstance(cooldown_veri, dict) else float(cooldown_veri)
-                        if time.time() < zaman_kontrol:
+                        kalan_sure = zaman_kontrol - time.time()
+                        if kalan_sure > 0:
+                            print(f"⏳ Cooldown'da atlanıyor -> {symbol} (Kalan: {int(kalan_sure/60)} dk)", flush=True)
                             continue
+
+                print(f"🔍 Taranıyor -> {symbol}", flush=True)
 
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
@@ -418,6 +431,9 @@ def otomatik_arkaplan_tarayici():
                     atr = atr_ve_volatilite_hesapla(df)
 
                     son_kapanan_close = df['close'].iloc[-2]
+                    son_kapanan_open = df['open'].iloc[-1] if len(df) > 1 else df['close'].iloc[-1]
+                    # Formasyon hesaplamaları için doğru indexler
+                    son_kapanan_close = df['close'].iloc[-2]
                     son_kapanan_open = df['open'].iloc[-2]
                     onceki_kapanan_close = df['close'].iloc[-3]
                     onceki_kapanan_open = df['open'].iloc[-3]
@@ -425,7 +441,8 @@ def otomatik_arkaplan_tarayici():
                     short_formasyon_onayi = (onceki_kapanan_close > onceki_kapanan_open) and (son_kapanan_close < son_kapanan_open)
                     long_formasyon_onayi = (onceki_kapanan_close < onceki_kapanan_open) and (son_kapanan_close > son_kapanan_open)
 
-                except Exception:
+                except Exception as e:
+                    print(f"⚠️ Veri çekme hatası ({symbol}): {e}", flush=True)
                     continue
 
                 if adx_val >= 25:
@@ -443,18 +460,24 @@ def otomatik_arkaplan_tarayici():
                     grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     sinyal_puani = temel_puan
 
+                print(f"   📊 Analiz [{symbol}] -> Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
+
                 if symbol in aktif_borsa_map:
                     mevcut_pos = aktif_borsa_map[symbol]
                     mevcut_yon = str(mevcut_pos.get('side', '')).upper()
                     mevcut_kontrat = float(mevcut_pos.get('contracts', 0) or mevcut_pos.get('size', 0) or 1.0)
                     
                     if sinyal_puani >= 70 and mevcut_yon != grid_yonu:
+                        print(f"🔄 Rüzgar Tersine Döndü! {symbol} pozisyonu kapatılıyor (30dk Cooldown)...", flush=True)
                         pozisyonu_kapat(symbol, mevcut_yon, mevcut_kontrat, f"🔄 *RÜZGAR TERSİNE DÖNDÜ*\n📌 `{symbol}` | Pozisyon kapatıldı (30dk Cooldown).", basarili=False, cezali_mi=True)
                         aktif_borsa_map.pop(symbol, None)
-                        continue # Rüzgar döndüğü için aynı turda tekrar işlem açmasını engelle
+                        continue
 
                 if symbol not in aktif_borsa_map:
-                    if not yapay_zeka_islem_onayi(rsi, adx_val, float(ema5 - ema13), (1 if grid_yonu == 'LONG' else -1), atr, COIN_ID_MAP.get(symbol, 0)):
+                    ai_onay = yapay_zeka_islem_onayi(rsi, adx_val, float(ema5 - ema13), (1 if grid_yonu == 'LONG' else -1), atr, COIN_ID_MAP.get(symbol, 0))
+                    print(f"   🤖 AI İşlem Onayı [{symbol}]: {ai_onay}", flush=True)
+                    
+                    if not ai_onay:
                         continue
 
                     taranan_sinyaller.append({
@@ -467,8 +490,12 @@ def otomatik_arkaplan_tarayici():
 
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
-                if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON: break
-                if sinyal["puan"] < 70: continue
+                if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON: 
+                    print(f"⚠️ Maksimum pozisyon sınırına ({MAKSIMUM_TOPLAM_POZISYON}) ulaşıldı, yeni işlem açılmıyor.", flush=True)
+                    break
+                if sinyal["puan"] < 70: 
+                    print(f"⚠️ Sinyal puanı ({sinyal['puan']}) 70'in altında, işlem açılmıyor.", flush=True)
+                    continue
 
                 try:
                     toplam_bakiye = float(exchange.fetch_balance()['total'].get('USDT', 0))
@@ -497,14 +524,14 @@ def otomatik_arkaplan_tarayici():
                         }
                     hafizayi_kaydet()
                     
-                    print(f"⚡ İşlem Açıldı: {sinyal['symbol']} | Yön: {sinyal['yon']}", flush=True)
+                    print(f"⚡ BAŞARILI: İşlem Açıldı -> {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
                     telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X & DİKEY BARIYER AKTİF)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
                     break
                 except Exception as e:
-                    print(f"❌ İşlem açma hatası: {e}", flush=True)
+                    print(f"❌ İşlem açma hatası ({sinyal['symbol']}): {e}", flush=True)
 
         except Exception as e:
-            print(f"⚠️ Döngü hatası: {e}", flush=True)
+            print(f"⚠️ Döngü genel hata: {e}", flush=True)
         time.sleep(5)
 
 if __name__ == '__main__':
