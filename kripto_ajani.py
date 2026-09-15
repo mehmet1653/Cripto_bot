@@ -119,7 +119,7 @@ COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
 MAKSIMUM_AYNI_YON_SAYISI = 2
 MAKSIMUM_TOPLAM_POZISYON = 3
-COOLDOWN_SURESI_SANIYE = 15 * 60
+COOLDOWN_SURESI_SANIYE = 30 * 60  # Güncelleme: 30 Dakika Cooldown
 
 ai_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
 ai_model_egitildi = False
@@ -188,7 +188,7 @@ def telegram_mesaj_gonder(mesaj):
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}, timeout=5)
     except Exception: pass
 
-def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True, ruzgar_dondu=False):
+def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True):
     kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
     try:
         try:
@@ -210,14 +210,11 @@ def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True, ruzgar_don
         ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
         ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
 
-        if not ruzgar_dondu:
-            COIN_COOLDOWNLAR[symbol] = {
-                "zaman": float(time.time() + COOLDOWN_SURESI_SANIYE),
-                "son_yon": yon
-            }
-        else:
-            if symbol in COIN_COOLDOWNLAR:
-                del COIN_COOLDOWNLAR[symbol]
+        # Tüm kapanışlarda (ters sinyal veya dikey bariyer fark etmeksizin) 30 dk cooldown uygulanır
+        COIN_COOLDOWNLAR[symbol] = {
+            "zaman": float(time.time() + COOLDOWN_SURESI_SANIYE),
+            "son_yon": yon
+        }
 
         if symbol in AKTIF_GRID_SISTEMLERI:
             del AKTIF_GRID_SISTEMLERI[symbol]
@@ -227,10 +224,6 @@ def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True, ruzgar_don
 
 # ==================== DİKEY BARIYER (ZAMAN AŞIMI) KONTROLÜ ====================
 def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar, exchange_komisyon_orani=0.0006):
-    """
-    Piyasa tıkandığında, hacim ve momentum söndüğünde komisyon maliyetini 
-    hesaba katarak erken çıkış (Dikey Bariyer) sağlayan akıllı sızıntı koruması.
-    """
     simdiki_zaman = time.time()
     giris_zamani = pozisyon.get("giris_zamani", simdiki_zaman)
     gecen_sure_dakika = (simdiki_zaman - giris_zamani) / 60
@@ -259,11 +252,9 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar, exchange_komisyon_orani=0.000
     hacim_dusuyor_mu = (hacimler[2] < hacimler[1]) and (hacimler[1] < hacimler[0])
     mum_govdeleri_kuculuyor_mu = (govdeler[2] < govdeler[1]) and (govdeler[1] < govdeler[0])
 
-    # Momentum devam ediyorsa zamana takılma
     if not (hacim_dusuyor_mu and mum_govdeleri_kuculuyor_mu):
         return {"kapat_ilsi": False, "neden": "Momentum ve hacim güçlü, pozisyon korunuyor."}
 
-    # Süre doldu VE momentum/hacim söndü (Dikey Bariyer Tetiklenmesi)
     if gecen_sure_dakika >= maksimum_bekleme_suresi:
         if kaldiracli_roe >= toplam_komisyon_maliyeti:
             return {
@@ -343,7 +334,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
-    print("🚀 Tarayıcı Döngüsü Başlatıldı (Dikey Bariyer Entegreli).", flush=True)
+    print("🚀 Tarayıcı Döngüsü Başlatıldı (30dk Cooldown & Dikey Bariyer Aktif).", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -351,7 +342,6 @@ def otomatik_arkaplan_tarayici():
     
     while True:
         try:
-            print("🔄 Döngü taraması yapılıyor...", flush=True)
             if not BOT_CALISIYOR_MU:
                 time.sleep(5)
                 continue
@@ -360,10 +350,7 @@ def otomatik_arkaplan_tarayici():
                 raw_positions = exchange.fetch_positions()
                 aktif_borsa_map = {p['symbol']: p for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0}
             except Exception as e:
-                print(f"⚠️ Pozisyonlar çekilirken hata: {e}", flush=True)
                 aktif_borsa_map = {}
-
-            print(f"📦 Borsadaki açık pozisyon sayısı: {len(aktif_borsa_map)}", flush=True)
 
             for symbol, pos in aktif_borsa_map.items():
                 try:
@@ -381,34 +368,26 @@ def otomatik_arkaplan_tarayici():
                 pnl = float(pos.get('unrealizedPnl', 0))
                 kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 1.0)
 
-                print(f"👁️ RÜZGAR KONTROLÜ -> {symbol} | Yön: {yon} | Giriş: {merkez} | Güncel: {guncel_fiyat} | ROE: %{roe:.2f} | PnL: {pnl:.2f} USDT", flush=True)
-
-                # 1. Klasik TP/SL Kontrolü
                 if roe >= 35.0:
-                    print(f"🎯 Kâr al seviyesine ulaşıldı! {symbol}", flush=True)
-                    pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *KÂR ALINDI (TP)*\n📌 `{symbol}` | Kâr: `+{pnl:.2f} USDT`", basarili=True, ruzgar_dondu=False)
+                    pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *KÂR ALINDI (TP)*\n📌 `{symbol}` | Kâr: `+{pnl:.2f} USDT`", basarili=True)
                     continue
                 elif roe <= -20.0:
-                    print(f"🛑 Zarar kes seviyesine ulaşıldı! {symbol}", flush=True)
-                    pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT`", basarili=False, ruzgar_dondu=False)
+                    pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT`", basarili=False)
                     continue
 
-                # 2. Dikey Bariyer (Zaman Aşımı / Komisyon Korumalı) Kontrolü
-                # Hafızadan veya aktif sistemden giriş zamanını bul, yoksa şu anı baz al
                 veri_paketi = {
                     "symbol": symbol,
                     "yon": yon,
                     "giris_fiyati": merkez,
                     "anlik_fiyat": guncel_fiyat,
                     "kaldirac": kaldirac_val,
-                    "giris_zamani": AKTIF_GRID_SISTEMLERI.get(symbol, {}).get("giris_zamani", time.time() - 600), # Varsayılan olarak 10 dk önce varsay
+                    "giris_zamani": AKTIF_GRID_SISTEMLERI.get(symbol, {}).get("giris_zamani", time.time() - 600),
                     "max_sure_dakika": 30
                 }
 
                 bariyer_durum = dikey_bariyer_kontrol(veri_paketi, ohlcv)
                 if bariyer_durum["kapat_ilsi"]:
-                    print(f"⏳ Dikey Bariyer Devrede -> {symbol} | {bariyer_durum['neden']}", flush=True)
-                    pozisyonu_kapat(symbol, yon, kontrat, f"⏳ *DİKEY BARIYER ÇIKIŞI*\n📌 `{symbol}`\nSebep: `{bariyer_durum['neden']}`", basarili=True, ruzgar_dondu=False)
+                    pozisyonu_kapat(symbol, yon, kontrat, f"⏳ *DİKEY BARIYER ÇIKIŞI*\n📌 `{symbol}`\nSebep: `{bariyer_durum['neden']}`", basarili=True)
 
             taranan_sinyaller = []
 
@@ -435,8 +414,7 @@ def otomatik_arkaplan_tarayici():
                     short_formasyon_onayi = (onceki_kapanan_close > onceki_kapanan_open) and (son_kapanan_close < son_kapanan_open)
                     long_formasyon_onayi = (onceki_kapanan_close < onceki_kapanan_open) and (son_kapanan_close > son_kapanan_open)
 
-                except Exception as e:
-                    print(f"⚠️ Veri çekme hatası ({symbol}): {e}", flush=True)
+                except Exception:
                     continue
 
                 if adx_val >= 25:
@@ -454,17 +432,13 @@ def otomatik_arkaplan_tarayici():
                     grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     sinyal_puani = temel_puan
 
-                print(f"📊 Analiz Ediliyor -> {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} | EMA Fark: {ema5 - ema13:.4f}", flush=True)
-
                 if symbol in aktif_borsa_map:
                     mevcut_pos = aktif_borsa_map[symbol]
                     mevcut_yon = str(mevcut_pos.get('side', '')).upper()
                     mevcut_kontrat = float(mevcut_pos.get('contracts', 0) or mevcut_pos.get('size', 0) or 1.0)
                     
-                    print(f"🌬️ Rüzgar Yönü Kıyaslama ({symbol}): Mevcut Pozisyon Yönü = {mevcut_yon} vs Hesaplanan Trend Yönü = {grid_yonu}", flush=True)
                     if sinyal_puani >= 70 and mevcut_yon != grid_yonu:
-                        print(f"🔄 [RÜZGAR DÖNDÜ] {symbol} | Eski Yön: {mevcut_yon} -> Yeni Yön: {grid_yonu}. Pozisyon ters çevriliyor!", flush=True)
-                        pozisyonu_kapat(symbol, mevcut_yon, mevcut_kontrat, f"🔄 *RÜZGAR TERSİNE DÖNDÜ*\n📌 `{symbol}` | Pozisyon kapatılıp zıt yöne dönülüyor.", basarili=False, ruzgar_dondu=True)
+                        pozisyonu_kapat(symbol, mevcut_yon, mevcut_kontrat, f"🔄 *RÜZGAR TERSİNE DÖNDÜ*\n📌 `{symbol}` | Pozisyon kapatılıp zıt yöne dönülüyor (30dk Cooldown Başladı).", basarili=False)
                         aktif_borsa_map.pop(symbol, None)
 
                 if symbol not in aktif_borsa_map:
@@ -479,7 +453,6 @@ def otomatik_arkaplan_tarayici():
                                     continue
 
                     if not yapay_zeka_islem_onayi(rsi, adx_val, float(ema5 - ema13), (1 if grid_yonu == 'LONG' else -1), atr, COIN_ID_MAP.get(symbol, 0)):
-                        print(f"🤖 Yapay zeka sinyali onaylamadı: {symbol}", flush=True)
                         continue
 
                     taranan_sinyaller.append({
@@ -512,8 +485,8 @@ def otomatik_arkaplan_tarayici():
                     try:
                         exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
                         exchange.create_order(sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
-                    except Exception as emir_hata:
-                        print(f"⚠️ TP/SL borsaya iletilirken hata oluştu: {emir_hata}", flush=True)
+                    except Exception:
+                        pass
 
                     with state_lock:
                         AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {
@@ -522,7 +495,6 @@ def otomatik_arkaplan_tarayici():
                         }
                     hafizayi_kaydet()
                     
-                    print(f"⚡ [İŞLEM AÇILDI] {sinyal['symbol']} | Yön: {sinyal['yon']} | Dikey Bariyer & Dinamik TP/SL Aktif", flush=True)
                     telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X & DİKEY BARIYER AKTİF)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
                     break
                 except Exception as e:
