@@ -432,6 +432,8 @@ def otomatik_arkaplan_tarayici():
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
+                    guncel_fiyat = df['close'].iloc[-1] # Düzeltme yapıldı
+
                     ema5 = ta.trend.ema_indicator(df['close'], window=5).iloc[-1]
                     ema13 = ta.trend.ema_indicator(df['close'], window=13).iloc[-1]
                     
