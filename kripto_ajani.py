@@ -245,15 +245,16 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar, exchange_komisyon_orani=0.000
     kaldiracli_roe = fiyat_degisim_yuzdesi * kaldirac * 100
     toplam_komisyon_maliyeti = exchange_komisyon_orani * 2 * kaldirac * 100
 
-    if len(mevcut_mumlar) < 3:
+    # 4 mumluk katılaştırılmış pencere kontrolü
+    if len(mevcut_mumlar) < 4:
         return {"kapat_ilsi": False, "neden": "Yetersiz mum verisi."}
 
-    son_mumlar = mevcut_mumlar[-3:]
+    son_mumlar = mevcut_mumlar[-4:]
     hacimler = [m[5] for m in son_mumlar]
     govdeler = [abs(m[4] - m[1]) for m in son_mumlar]
 
-    hacim_dusuyor_mu = (hacimler[2] < hacimler[1]) and (hacimler[1] < hacimler[0])
-    mum_govdeleri_kuculuyor_mu = (govdeler[2] < govdeler[1]) and (govdeler[1] < govdeler[0])
+    hacim_dusuyor_mu = (hacimler[3] < hacimler[2]) and (hacimler[2] < hacimler[1])
+    mum_govdeleri_kuculuyor_mu = (govdeler[3] < govdeler[2]) and (govdeler[2] < govdeler[1])
 
     if not (hacim_dusuyor_mu and mum_govdeleri_kuculuyor_mu):
         return {"kapat_ilsi": False, "neden": "Momentum and hacim güçlü, pozisyon korunuyor."}
@@ -432,7 +433,7 @@ def otomatik_arkaplan_tarayici():
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-                    guncel_fiyat = df['close'].iloc[-1] # Düzeltme yapıldı
+                    guncel_fiyat = df['close'].iloc[-1]
 
                     ema5 = ta.trend.ema_indicator(df['close'], window=5).iloc[-1]
                     ema13 = ta.trend.ema_indicator(df['close'], window=13).iloc[-1]
@@ -457,7 +458,7 @@ def otomatik_arkaplan_tarayici():
                 if adx_val >= 28:
                     temel_puan = 75
                 else:
-                    temel_puan = 50  # Düşük ADX puanı aşağı çekildi
+                    temel_puan = 50
 
                 if ema5 > ema13 and long_formasyon_onayi:
                     grid_yonu = "LONG"
@@ -469,10 +470,10 @@ def otomatik_arkaplan_tarayici():
                     grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     sinyal_puani = temel_puan
 
-                # 1 Saatlik Makro Trend Uyumsuzluğu Kontrolü (Ana akıntıya karşı işlem açmayı engelle)
+                # 1 Saatlik Makro Trend Uyumsuzluğu Kontrolü
                 if grid_yonu != makro_trend:
                     print(f"   🛑 Makro Filtre Engeli [{symbol}]: 1h Trend '{makro_trend}' iken 15m '{grid_yonu}' yönünde işlem açılamaz, puan kırıldı.", flush=True)
-                    sinyal_puani -= 30  # Puanı düşürerek 70 eşiğinin altında kalmasını sağlıyoruz
+                    sinyal_puani -= 30
 
                 print(f"   📊 Analiz [{symbol}] -> 1h Trend: {makro_trend} | 15m Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
 
