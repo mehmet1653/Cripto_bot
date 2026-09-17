@@ -203,13 +203,10 @@ def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True, cezali_mi=
     with state_lock:
         bas_sayi = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0))
         basarisiz_sayi = int(ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0))
-        
-        # İstatistik düzeltmesi: Başarılı değilse (SL veya Rüzgar tersine döndüyse) doğrudan başarısız sayacına eklenir
         if basarili:
             bas_sayi += 1
         else:
             basarisiz_sayi += 1
-            
         ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
         ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
 
@@ -248,15 +245,16 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar, exchange_komisyon_orani=0.000
     kaldiracli_roe = fiyat_degisim_yuzdesi * kaldirac * 100
     toplam_komisyon_maliyeti = exchange_komisyon_orani * 2 * kaldirac * 100
 
-    if len(mevcut_mumlar) < 3:
+    # 4 mumluk katılaştırılmış pencere kontrolü
+    if len(mevcut_mumlar) < 4:
         return {"kapat_ilsi": False, "neden": "Yetersiz mum verisi."}
 
-    son_mumlar = mevcut_mumlar[-3:]
+    son_mumlar = mevcut_mumlar[-4:]
     hacimler = [m[5] for m in son_mumlar]
     govdeler = [abs(m[4] - m[1]) for m in son_mumlar]
 
-    hacim_dusuyor_mu = (hacimler[2] < hacimler[1]) and (hacimler[1] < hacimler[0])
-    mum_govdeleri_kuculuyor_mu = (govdeler[2] < govdeler[1]) and (govdeler[1] < govdeler[0])
+    hacim_dusuyor_mu = (hacimler[3] < hacimler[2]) and (hacimler[2] < hacimler[1])
+    mum_govdeleri_kuculuyor_mu = (govdeler[3] < govdeler[2]) and (govdeler[2] < govdeler[1])
 
     if not (hacim_dusuyor_mu and mum_govdeleri_kuculuyor_mu):
         return {"kapat_ilsi": False, "neden": "Momentum and hacim güçlü, pozisyon korunuyor."}
@@ -304,7 +302,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  PnL: `{pnl_val:+.2f} USDT` (`%{roe:+.2f}`)"
 
         mesaj = (
-            f"📊 **HİBRİT BOT & 4H-1H-15m-1m KATMANLI SİSTEM ({KALDIRAC}X)**\n\n"
+            f"📊 **HİBRİT BOT & DİKEY BARIYER DURUMU ({KALDIRAC}X)**\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"🟢 Anlık PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -340,7 +338,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU
-    print("🚀 Tarayıcı Döngüsü Başlatıldı (4h + 1h + 15m + 1m Katmanlı Yapı Aktif).", flush=True)
+    print("🚀 Tarayıcı Döngüsü Başlatıldı ve Adım Adım Loglama Aktif.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -363,12 +361,11 @@ def otomatik_arkaplan_tarayici():
                 aktif_borsa_map = {}
                 print(f"⚠️ Pozisyonlar çekilemedi: {e}", flush=True)
 
-            # Açık pozisyonları izle (1m hızlı tetikleyici + 15m dikey bariyer kontrolü ile)
+            # Açık pozisyonları izle
             for symbol, pos in aktif_borsa_map.items():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
-                    ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=20)
-                    ohlcv_1m = exchange.fetch_ohlcv(symbol, timeframe='1m', limit=10) # 1m Kısa vade acil durum kontrolü
+                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=20)
                 except Exception: 
                     continue
 
@@ -382,19 +379,6 @@ def otomatik_arkaplan_tarayici():
                 kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 1.0)
 
                 print(f"👁️ İzleniyor -> {symbol} | Yön: {yon} | Giriş: {merkez} | Güncel: {guncel_fiyat} | ROE: %{roe:.2f} | PnL: {pnl:.2f} USDT", flush=True)
-
-                # 1 Dakikalık Ani Yıkım / Ters Akış Erken Uyarı Kontrolü
-                try:
-                    df_1m = pd.DataFrame(ohlcv_1m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    # Son 3 dakikada fiyat sert bir şekilde ters yöne mi akıyor?
-                    son_1m_yon = "LONG" if df_1m['close'].iloc[-1] > df_1m['open'].iloc[-1] else "SHORT"
-                    sert_hacim_1m = df_1m['volume'].iloc[-1] > (df_1m['volume'].rolling(5).mean().iloc[-1] * 1.8)
-                    
-                    if yon != son_1m_yon and sert_hacim_1m and roe < -5.0:
-                        pozisyonu_kapat(symbol, yon, kontrat, f"⚡ *1M ACİL TETİKLEYİCİ (ANİ TERS AKIŞ)*\n📌 `{symbol}` | Hızlı kesim yapıldı. Zarar: `{pnl:.2f} USDT`", basarili=False, cezali_mi=True)
-                        continue
-                except Exception:
-                    pass
 
                 if roe >= 35.0:
                     pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *KÂR ALINDI (TP)*\n📌 `{symbol}` | Kâr: `+{pnl:.2f} USDT`", basarili=True, cezali_mi=False)
@@ -413,13 +397,13 @@ def otomatik_arkaplan_tarayici():
                     "max_sure_dakika": 30
                 }
 
-                bariyer_durum = dikey_bariyer_kontrol(veri_paketi, ohlcv_15m)
+                bariyer_durum = dikey_bariyer_kontrol(veri_paketi, ohlcv)
                 if bariyer_durum["kapat_ilsi"]:
                     pozisyonu_kapat(symbol, yon, kontrat, f"⏳ *DİKEY BARIYER ÇIKIŞI*\n📌 `{symbol}`\nSebep: `{bariyer_durum['neden']}`", basarili=True, cezali_mi=True)
 
             taranan_sinyaller = []
 
-            # Coinleri tek tek tara (4h + 1h + 15m hiyerarşisiyle)
+            # Coinleri tek tek tara
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
                 
@@ -436,21 +420,16 @@ def otomatik_arkaplan_tarayici():
                 print(f"🔍 Taranıyor -> {symbol}", flush=True)
 
                 try:
-                    # 1. 4 Saatlik (4h) Mega Trend Filtresi
-                    ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=30)
-                    df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    ema20_4h = ta.trend.ema_indicator(df_4h['close'], window=20).iloc[-1]
-                    fiyat_4h = df_4h['close'].iloc[-1]
-                    mega_trend = "LONG" if fiyat_4h > ema20_4h else "SHORT"
-
-                    # 2. 1 Saatlik (1h) Makro Trend Filtresi
+                    # 1 Saatlik (1h) Büyük Resim Trend Filtresi İçin Veri Çekme
                     ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=30)
                     df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     ema20_1h = ta.trend.ema_indicator(df_1h['close'], window=20).iloc[-1]
                     fiyat_1h = df_1h['close'].iloc[-1]
+                    
+                    # 1h Trend Yönü Belirleme
                     makro_trend = "LONG" if fiyat_1h > ema20_1h else "SHORT"
 
-                    # 3. 15 Dakikalık (15m) Orta Vade Sinyal Yapısı
+                    # 15 Dakikalık Detaylı Analiz Verileri
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
@@ -475,6 +454,7 @@ def otomatik_arkaplan_tarayici():
                     print(f"⚠️ Veri çekme hatası ({symbol}): {e}", flush=True)
                     continue
 
+                # ADX Eşiği 28'e Yükseltildi (Testere piyasalarından kaçınmak için)
                 if adx_val >= 28:
                     temel_puan = 75
                 else:
@@ -490,16 +470,12 @@ def otomatik_arkaplan_tarayici():
                     grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     sinyal_puani = temel_puan
 
-                # Mega Trend (4h) ve Makro Trend (1h) Uyumsuzluğu Cezası
-                if grid_yonu != mega_trend:
-                    print(f"   🛑 4h Mega Trend Engeli [{symbol}]: 4h '{mega_trend}' iken 15m '{grid_yonu}' yönünde işlem açılamaz, puan kırıldı.", flush=True)
-                    sinyal_puani -= 35
-
+                # 1 Saatlik Makro Trend Uyumsuzluğu Kontrolü
                 if grid_yonu != makro_trend:
-                    print(f"   🛑 1h Makro Filtre Engeli [{symbol}]: 1h Trend '{makro_trend}' iken 15m '{grid_yonu}' yönünde işlem açılamaz, puan kırıldı.", flush=True)
+                    print(f"   🛑 Makro Filtre Engeli [{symbol}]: 1h Trend '{makro_trend}' iken 15m '{grid_yonu}' yönünde işlem açılamaz, puan kırıldı.", flush=True)
                     sinyal_puani -= 30
 
-                print(f"   📊 Analiz [{symbol}] -> 4h Mega: {mega_trend} | 1h Makro: {makro_trend} | 15m Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
+                print(f"   📊 Analiz [{symbol}] -> 1h Trend: {makro_trend} | 15m Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
 
                 if symbol in aktif_borsa_map:
                     mevcut_pos = aktif_borsa_map[symbol]
@@ -564,7 +540,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     print(f"⚡ BAŞARILI: İşlem Açıldı -> {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (4H-1H-15M-1M KATMANLI SİSTEM)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
+                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X & DİKEY BARIYER AKTİF)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası ({sinyal['symbol']}): {e}", flush=True)
