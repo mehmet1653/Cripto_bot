@@ -187,10 +187,6 @@ def dinamik_tp_sl_hesapla(df, giris_fiyati, yon):
             return giris_fiyati * 0.965, giris_fiyati * 1.02, 'buy', 17.5
 
 def acik_pozisyon_oi_kontrolu(symbol):
-    """
-    Borsadaki açık pozisyon (Open Interest) miktarını ve değişim hızını kontrol eder.
-    Ani ve aşırı OI artışları piyasanın patlamaya hazır (sıkışık) olduğunu gösterir.
-    """
     try:
         oi_data = exchange.fetch_open_interest(symbol)
         current_oi = float(oi_data.get('openInterestAmount', 0) or oi_data.get('openInterest', 0) or 0)
@@ -200,7 +196,6 @@ def acik_pozisyon_oi_kontrolu(symbol):
             onceki_veri = COIN_OI_TAKIP[symbol]
             eski_oi = onceki_veri["oi"]
             
-            # Eğer açık pozisyonlar kısa sürede %15'ten fazla patlama yaptıysa tehlike sinyali!
             if eski_oi > 0:
                 oi_degisim_yuzdesi = ((current_oi - eski_oi) / eski_oi) * 100
                 COIN_OI_TAKIP[symbol] = {"oi": current_oi, "zaman": simdiki_zaman}
@@ -343,7 +338,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  PnL: `{pnl_val:+.2f} USDT` (`%{roe:+.2f}`)"
 
         mesaj = (
-            f"📊 **HİBRİT BOT & MAKRÖ + OI KİLİDİ ({KALDIRAC}X)**\n\n"
+            f"📊 **HİBRİT BOT & ESNEK MAKRO + OI KİLİDİ ({KALDIRAC}X)**\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"🟢 Anlık PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"🛡️ Genel Sigorta: `{global_durum}`\n"
@@ -361,7 +356,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
     BOT_CALISIYOR_MU = True
     GLOBAL_COOLDOWN_BITIS = 0.0
-    await update.message.reply_text("🟢 Bot Aktif, Makro ve Açık Pozisyon (OI) Kalkanı Devrede!")
+    await update.message.reply_text("🟢 Bot Aktif, Esnek Makro ve Açık Pozisyon (OI) Kalkanı Devrede!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -381,7 +376,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
-    print("🚀 Tarayıcı Döngüsü Başlatıldı (Makro + Açık Pozisyon Koruma Aktif).", flush=True)
+    print("🚀 Tarayıcı Döngüsü Başlatıldı (Esnek Makro + Açık Pozisyon Koruma Aktif).", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -410,7 +405,6 @@ def otomatik_arkaplan_tarayici():
                 aktif_borsa_map = {}
                 print(f"⚠️ Pozisyonlar çekilemedi: {e}", flush=True)
 
-            # Açık pozisyonları izle
             for symbol, pos in aktif_borsa_map.items():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
@@ -481,10 +475,8 @@ def otomatik_arkaplan_tarayici():
                 print(f"🔍 Taranıyor -> {symbol}", flush=True)
 
                 try:
-                    # Açık Pozisyon (Open Interest) kontrolü
                     oi_degeri, oi_degisim = acik_pozisyon_oi_kontrolu(symbol)
                     
-                    # Eğer açık pozisyonlar ani bir şekilde çok sert yükseldiyse, piyasa manipülasyona veya tasfiyeye açık demektir.
                     if oi_degisim > 20.0:
                         print(f"   🛑 AÇIK POZİSYON (OI) UYARISI [{symbol}]: OI çok hızlı şişti (%%{oi_degisim:.1f}). İşlem askıya alındı.", flush=True)
                         continue
@@ -535,10 +527,13 @@ def otomatik_arkaplan_tarayici():
                     grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     sinyal_puani = temel_puan
 
-                # --- KESİN MAKRO TREND KİLİDİ ---
+                # --- ESNEK MAKRO TREND KİLİDİ (YÜKSEK SKORLU TERS YÖN ONAYI) ---
                 if grid_yonu != makro_trend:
-                    print(f"   🛑 MAKRO TREND KİLİDİ [{symbol}]: 1h Trend '{makro_trend}' olduğu için '{grid_yonu}' yönünde işlem engellendi.", flush=True)
-                    continue
+                    if sinyal_puani < 85:
+                        print(f"   🛑 MAKRO TREND KİLİDİ [{symbol}]: 1h Trend '{makro_trend}' iken '{grid_yonu}' yönü için puan yetersiz ({sinyal_puani}/85).", flush=True)
+                        continue
+                    else:
+                        print(f"   🔥 GÜÇLÜ TERS YÖN FIRSATI [{symbol}]: 1h Trend '{makro_trend}' olmasına rağmen puan çok yüksek ({sinyal_puani}), işleme onay verildi!", flush=True)
 
                 print(f"   📊 Analiz [{symbol}] -> 1h Trend: {makro_trend} | 15m Yön: {grid_yonu} | Puan: {sinyal_puani} | OI: {oi_degeri:.1f} | RSI: {rsi:.1f}", flush=True)
 
@@ -601,7 +596,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     print(f"⚡ BAŞARILI: İşlem Açıldı -> {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X, MAKRÖ & OI KİLİDİ AKTİF)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
+                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X, ESNEK MAKRO & OI KİLİDİ)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası ({sinyal['symbol']}): {e}", flush=True)
