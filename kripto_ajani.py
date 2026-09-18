@@ -231,7 +231,7 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar, exchange_komisyon_orani=0.000
     giris_zamani = pozisyon.get("giris_zamani", simdiki_zaman)
     gecen_sure_dakika = (simdiki_zaman - giris_zamani) / 60
 
-    maksimum_bekleme_suresi = pozisyon.get("max_sure_dakika", 30)
+    maksimum_bekleme_suresi = pozisyon.get("max_sure_dakika", 45)
     islem_yonu = pozisyon.get("yon", "LONG")
     giris_fiyati = pozisyon.get("giris_fiyati", 0)
     anlik_fiyat = pozisyon.get("anlik_fiyat", giris_fiyati)
@@ -245,30 +245,29 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar, exchange_komisyon_orani=0.000
     kaldiracli_roe = fiyat_degisim_yuzdesi * kaldirac * 100
     toplam_komisyon_maliyeti = exchange_komisyon_orani * 2 * kaldirac * 100
 
-    # 4 mumluk katılaştırılmış pencere kontrolü
-    if len(mevcut_mumlar) < 4:
+    if len(mevcut_mumlar) < 5:
         return {"kapat_ilsi": False, "neden": "Yetersiz mum verisi."}
 
-    son_mumlar = mevcut_mumlar[-4:]
+    son_mumlar = mevcut_mumlar[-5:]
     hacimler = [m[5] for m in son_mumlar]
     govdeler = [abs(m[4] - m[1]) for m in son_mumlar]
 
-    hacim_dusuyor_mu = (hacimler[3] < hacimler[2]) and (hacimler[2] < hacimler[1])
-    mum_govdeleri_kuculuyor_mu = (govdeler[3] < govdeler[2]) and (govdeler[2] < govdeler[1])
+    hacim_dusuyor_mu = (hacimler[4] < hacimler[3]) and (hacimler[3] < hacimler[2])
+    mum_govdeleri_kuculuyor_mu = (govdeler[4] < govdeler[3]) and (govdeler[3] < govdeler[2])
 
     if not (hacim_dusuyor_mu and mum_govdeleri_kuculuyor_mu):
-        return {"kapat_ilsi": False, "neden": "Momentum and hacim güçlü, pozisyon korunuyor."}
+        return {"kapat_ilsi": False, "neden": "Momentum ve hacim hala canlı, pozisyon korunuyor."}
 
     if gecen_sure_dakika >= maksimum_bekleme_suresi:
-        if kaldiracli_roe >= toplam_komisyon_maliyeti:
+        if kaldiracli_roe >= (toplam_komisyon_maliyeti * 1.5):
             return {
                 "kapat_ilsi": True,
-                "neden": f"Dikey Bariyer Tetiklendi: Momentum bitti ve net kâr komisyonu karşılıyor (ROE: %{kaldiracli_roe:.2f})"
+                "neden": f"Dikey Bariyer Tetiklendi: Momentum bitti ve net kâr tatmin edici (ROE: %{kaldiracli_roe:.2f})"
             }
         else:
             return {
                 "kapat_ilsi": False,
-                "neden": "Süre doldu ancak net getiri komisyondan düşük."
+                "neden": "Süre doldu ancak kâr hedeflenen marjın altında."
             }
 
     return {"kapat_ilsi": False, "neden": "Bekleme süresi henüz dolmadı."}
@@ -366,6 +365,9 @@ def otomatik_arkaplan_tarayici():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=20)
+                    
+                    # 1 Dakikalık (1m) Acil Durum Verisi Çekiliyor
+                    ohlcv_1m = exchange.fetch_ohlcv(symbol, timeframe='1m', limit=10)
                 except Exception: 
                     continue
 
@@ -379,6 +381,21 @@ def otomatik_arkaplan_tarayici():
                 kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 1.0)
 
                 print(f"👁️ İzleniyor -> {symbol} | Yön: {yon} | Giriş: {merkez} | Güncel: {guncel_fiyat} | ROE: %{roe:.2f} | PnL: {pnl:.2f} USDT", flush=True)
+
+                # 1 Dakikalık Acil Durum Kalkanı (Ani Çöküş ve Hacim Patlaması Kontrolü)
+                try:
+                    if len(ohlcv_1m) >= 6 and roe <= -5.0:
+                        df_1m = pd.DataFrame(ohlcv_1m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                        son_hacim = df_1m['volume'].iloc[-1]
+                        ortalama_hacim = df_1m['volume'].iloc[-6:-1].mean()
+                        
+                        son_mum_yonu = "LONG" if df_1m['close'].iloc[-1] > df_1m['open'].iloc[-1] else "SHORT"
+                        
+                        if son_hacim > (ortalama_hacim * 1.8) and son_mum_yonu != yon:
+                            pozisyonu_kapat(symbol, yon, kontrat, f"🚨 *1M ACİL DURUM KALKANI AKTİF*\n📌 `{symbol}` | Ani çöküş/hacim patlaması yakalandı! Zarar Kesildi (ROE: %{roe:.2f})", basarili=False, cezali_mi=True)
+                            continue
+                except Exception as e:
+                    print(f"⚠️ 1m acil kalkan hatası ({symbol}): {e}", flush=True)
 
                 if roe >= 35.0:
                     pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *KÂR ALINDI (TP)*\n📌 `{symbol}` | Kâr: `+{pnl:.2f} USDT`", basarili=True, cezali_mi=False)
@@ -394,7 +411,7 @@ def otomatik_arkaplan_tarayici():
                     "anlik_fiyat": guncel_fiyat,
                     "kaldirac": kaldirac_val,
                     "giris_zamani": AKTIF_GRID_SISTEMLERI.get(symbol, {}).get("giris_zamani", time.time() - 600),
-                    "max_sure_dakika": 30
+                    "max_sure_dakika": 45
                 }
 
                 bariyer_durum = dikey_bariyer_kontrol(veri_paketi, ohlcv)
@@ -407,7 +424,6 @@ def otomatik_arkaplan_tarayici():
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
                 
-                # Cooldown kontrolü
                 with state_lock:
                     cooldown_veri = COIN_COOLDOWNLAR.get(symbol)
                     if cooldown_veri:
@@ -420,16 +436,13 @@ def otomatik_arkaplan_tarayici():
                 print(f"🔍 Taranıyor -> {symbol}", flush=True)
 
                 try:
-                    # 1 Saatlik (1h) Büyük Resim Trend Filtresi İçin Veri Çekme
                     ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=30)
                     df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     ema20_1h = ta.trend.ema_indicator(df_1h['close'], window=20).iloc[-1]
                     fiyat_1h = df_1h['close'].iloc[-1]
                     
-                    # 1h Trend Yönü Belirleme
                     makro_trend = "LONG" if fiyat_1h > ema20_1h else "SHORT"
 
-                    # 15 Dakikalık Detaylı Analiz Verileri
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
@@ -454,7 +467,6 @@ def otomatik_arkaplan_tarayici():
                     print(f"⚠️ Veri çekme hatası ({symbol}): {e}", flush=True)
                     continue
 
-                # ADX Eşiği 28'e Yükseltildi (Testere piyasalarından kaçınmak için)
                 if adx_val >= 28:
                     temel_puan = 75
                 else:
@@ -470,7 +482,6 @@ def otomatik_arkaplan_tarayici():
                     grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     sinyal_puani = temel_puan
 
-                # 1 Saatlik Makro Trend Uyumsuzluğu Kontrolü
                 if grid_yonu != makro_trend:
                     print(f"   🛑 Makro Filtre Engeli [{symbol}]: 1h Trend '{makro_trend}' iken 15m '{grid_yonu}' yönünde işlem açılamaz, puan kırıldı.", flush=True)
                     sinyal_puani -= 30
