@@ -56,7 +56,7 @@ KALDIRAC = 5
 
 GLOBAL_COOLDOWN_BITIS = 0.0
 SON_ZARAR_ZAMANLARI = []
-COIN_OI_TAKIP = {} # Açık pozisyon (Open Interest) değişimlerini izlemek için
+COIN_OI_TAKIP = {} 
 
 # ==================== SUPABASE HAFIZA ====================
 def hafizayi_yukle():
@@ -121,7 +121,6 @@ AKTIF_GRID_SISTEMLERI = kalici_veri.get("aktif_sistemler", {})
 ANALitik_HAFIZA = kalici_veri.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []})
 COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
-MAKSIMUM_AYNI_YON_SAYISI = 2
 MAKSIMUM_TOPLAM_POZISYON = 3
 COOLDOWN_SURESI_SANIYE = 30 * 60
 
@@ -338,7 +337,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  PnL: `{pnl_val:+.2f} USDT` (`%{roe:+.2f}`)"
 
         mesaj = (
-            f"📊 **HİBRİT BOT & ESNEK MAKRO + OI KİLİDİ ({KALDIRAC}X)**\n\n"
+            f"📊 **ANLIK FİYAT TAKİBİ & DİKEY KORUMA ({KALDIRAC}X)**\n\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"🟢 Anlık PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"🛡️ Genel Sigorta: `{global_durum}`\n"
@@ -356,7 +355,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
     BOT_CALISIYOR_MU = True
     GLOBAL_COOLDOWN_BITIS = 0.0
-    await update.message.reply_text("🟢 Bot Aktif, Esnek Makro ve Açık Pozisyon (OI) Kalkanı Devrede!")
+    await update.message.reply_text("🟢 Bot Aktif, Anlık Fiyat & Hacim Takibi + Dikey Bariyer Devrede!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -376,7 +375,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
-    print("🚀 Tarayıcı Döngüsü Başlatıldı (Esnek Makro + Açık Pozisyon Koruma Aktif).", flush=True)
+    print("🚀 Anlık Takip Döngüsü Başlatıldı (Tick-Level Hacim Patlaması Aktif).", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -395,7 +394,7 @@ def otomatik_arkaplan_tarayici():
                 continue
 
             print("--------------------------------------------------", flush=True)
-            print("🔄 Yeni tarama döngüsü başladı...", flush=True)
+            print("🔄 Anlık tarama döngüsü başladı...", flush=True)
 
             try:
                 raw_positions = exchange.fetch_positions()
@@ -472,7 +471,7 @@ def otomatik_arkaplan_tarayici():
                             print(f"⏳ Cooldown'da atlanıyor -> {symbol} (Kalan: {int(kalan_sure/60)} dk)", flush=True)
                             continue
 
-                print(f"🔍 Taranıyor -> {symbol}", flush=True)
+                print(f"🔍 Anlık Taranıyor -> {symbol}", flush=True)
 
                 try:
                     oi_degeri, oi_degisim = acik_pozisyon_oi_kontrolu(symbol)
@@ -481,17 +480,13 @@ def otomatik_arkaplan_tarayici():
                         print(f"   🛑 AÇIK POZİSYON (OI) UYARISI [{symbol}]: OI çok hızlı şişti (%%{oi_degisim:.1f}). İşlem askıya alındı.", flush=True)
                         continue
 
-                    ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=30)
-                    df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    ema20_1h = ta.trend.ema_indicator(df_1h['close'], window=20).iloc[-1]
-                    fiyat_1h = df_1h['close'].iloc[-1]
-                    
-                    makro_trend = "LONG" if fiyat_1h > ema20_1h else "SHORT"
+                    # Anlık ticker verisini al (Tick-level anlık fiyat & değişim)
+                    ticker = exchange.fetch_ticker(symbol)
+                    anlik_fiyat = float(ticker['last'])
+                    anlik_hacim_24h = float(ticker.get('quoteVolume', 0) or ticker.get('baseVolume', 0) or 0)
 
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-
-                    guncel_fiyat = df['close'].iloc[-1]
 
                     ema5 = ta.trend.ema_indicator(df['close'], window=5).iloc[-1]
                     ema13 = ta.trend.ema_indicator(df['close'], window=13).iloc[-1]
@@ -517,25 +512,23 @@ def otomatik_arkaplan_tarayici():
                 else:
                     temel_puan = 50
 
-                if ema5 > ema13 and long_formasyon_onayi:
+                # ANLIK FİYAT & HACİM TETİKLEMESİ (TICK-LEVEL BOOST)
+                # Anlık fiyat son mumun üstüne çıktıysa veya altına sarktığı an momentumu yakala
+                anlik_momentum_bonus = 0
+                if anlik_fiyat > son_kapanan_close:
+                    anlik_momentum_bonus = 5
+
+                if ema5 > ema13 and (long_formasyon_onayi or anlik_fiyat > ema5):
                     grid_yonu = "LONG"
-                    sinyal_puani = temel_puan + 10
-                elif ema5 < ema13 and short_formasyon_onayi:
+                    sinyal_puani = temel_puan + 10 + anlik_momentum_bonus
+                elif ema5 < ema13 and (short_formasyon_onayi or anlik_fiyat < ema5):
                     grid_yonu = "SHORT"
-                    sinyal_puani = temel_puan + 10
+                    sinyal_puani = temel_puan + 10 + anlik_momentum_bonus
                 else:
                     grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     sinyal_puani = temel_puan
 
-                # --- ESNEK MAKRO TREND KİLİDİ (YÜKSEK SKORLU TERS YÖN ONAYI) ---
-                if grid_yonu != makro_trend:
-                    if sinyal_puani < 85:
-                        print(f"   🛑 MAKRO TREND KİLİDİ [{symbol}]: 1h Trend '{makro_trend}' iken '{grid_yonu}' yönü için puan yetersiz ({sinyal_puani}/85).", flush=True)
-                        continue
-                    else:
-                        print(f"   🔥 GÜÇLÜ TERS YÖN FIRSATI [{symbol}]: 1h Trend '{makro_trend}' olmasına rağmen puan çok yüksek ({sinyal_puani}), işleme onay verildi!", flush=True)
-
-                print(f"   📊 Analiz [{symbol}] -> 1h Trend: {makro_trend} | 15m Yön: {grid_yonu} | Puan: {sinyal_puani} | OI: {oi_degeri:.1f} | RSI: {rsi:.1f}", flush=True)
+                print(f"   📊 Anlık Analiz [{symbol}] -> Yön: {grid_yonu} | Puan: {sinyal_puani} | Anlık Fiyat: {anlik_fiyat} | OI: {oi_degeri:.1f} | RSI: {rsi:.1f}", flush=True)
 
                 if symbol in aktif_borsa_map:
                     mevcut_pos = aktif_borsa_map[symbol]
@@ -558,7 +551,7 @@ def otomatik_arkaplan_tarayici():
                     taranan_sinyaller.append({
                         "symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, 
                         "rsi": rsi, "adx": adx_val, "ema_fark": float(ema5 - ema13), 
-                        "fiyat": guncel_fiyat, "atr": atr, "df": df
+                        "fiyat": anlik_fiyat, "atr": atr, "df": df
                     })
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
@@ -596,7 +589,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     print(f"⚡ BAŞARILI: İşlem Açıldı -> {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X, ESNEK MAKRO & OI KİLİDİ)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
+                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X, ANLIK FİYAT & DİKEY KORUMA)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası ({sinyal['symbol']}): {e}", flush=True)
