@@ -185,6 +185,26 @@ def dinamik_tp_sl_hesapla(df, giris_fiyati, yon):
         else:
             return giris_fiyati * 0.965, giris_fiyati * 1.02, 'buy', 17.5
 
+def btc_trend_kontrolu():
+    """BTC ana yönünü kontrol eder: 'LONG', 'SHORT' veya 'NOTR' döner."""
+    try:
+        ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=30)
+        df_btc = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        
+        ema5_btc = ta.trend.ema_indicator(df_btc['close'], window=5).iloc[-1]
+        ema13_btc = ta.trend.ema_indicator(df_btc['close'], window=13).iloc[-1]
+        adx_btc = ta.trend.ADXIndicator(df_btc['high'], df_btc['low'], df_btc['close'], window=14).adx().iloc[-1]
+        
+        # Eğer ADX güçlü ve EMA'lar net bir yön gösteriyorsa trend vardır
+        if adx_btc >= 25:
+            if ema5_btc > ema13_btc:
+                return "LONG"
+            elif ema5_btc < ema13_btc:
+                return "SHORT"
+        return "NOTR"
+    except Exception:
+        return "NOTR"
+
 def acik_pozisyon_oi_kontrolu(symbol):
     try:
         oi_data = exchange.fetch_open_interest(symbol)
@@ -336,8 +356,11 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  PnL: `{pnl_val:+.2f} USDT` (`%{roe:+.2f}`)"
 
+        btc_durum = btc_trend_kontrolu()
+
         mesaj = (
-            f"📊 **ANLIK FİYAT TAKİBİ & DİKEY KORUMA ({KALDIRAC}X)**\n\n"
+            f"📊 **ANLIK FİYAT + BTC TREND FİLTRESİ ({KALDIRAC}X)**\n\n"
+            f"👑 BTC Ana Yönü: `{btc_durum}`\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"🟢 Anlık PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"🛡️ Genel Sigorta: `{global_durum}`\n"
@@ -355,7 +378,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
     BOT_CALISIYOR_MU = True
     GLOBAL_COOLDOWN_BITIS = 0.0
-    await update.message.reply_text("🟢 Bot Aktif, Anlık Fiyat & Hacim Takibi + Dikey Bariyer Devrede!")
+    await update.message.reply_text("🟢 Bot Aktif, BTC Trend Filtresi + Anlık Fiyat Takibi Devrede!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -375,7 +398,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
-    print("🚀 Anlık Takip Döngüsü Başlatıldı (Tick-Level Hacim Patlaması Aktif).", flush=True)
+    print("🚀 Anlık Takip ve BTC Filtre Döngüsü Başlatıldı.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -396,10 +419,13 @@ def otomatik_arkaplan_tarayici():
             print("--------------------------------------------------", flush=True)
             print("🔄 Anlık tarama döngüsü başladı...", flush=True)
 
+            # BTC Trendini Anlık Olarak Kontrol Et
+            btc_yonu = btc_trend_kontrolu()
+            print(f"👑 BTC Anlık Trend Durumu: {btc_yonu}", flush=True)
+
             try:
                 raw_positions = exchange.fetch_positions()
                 aktif_borsa_map = {p['symbol']: p for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0}
-                print(f"📦 Borsadaki aktif pozisyon sayısı: {len(aktif_borsa_map)}", flush=True)
             except Exception as e:
                 aktif_borsa_map = {}
                 print(f"⚠️ Pozisyonlar çekilemedi: {e}", flush=True)
@@ -480,10 +506,8 @@ def otomatik_arkaplan_tarayici():
                         print(f"   🛑 AÇIK POZİSYON (OI) UYARISI [{symbol}]: OI çok hızlı şişti (%%{oi_degisim:.1f}). İşlem askıya alındı.", flush=True)
                         continue
 
-                    # Anlık ticker verisini al (Tick-level anlık fiyat & değişim)
                     ticker = exchange.fetch_ticker(symbol)
                     anlik_fiyat = float(ticker['last'])
-                    anlik_hacim_24h = float(ticker.get('quoteVolume', 0) or ticker.get('baseVolume', 0) or 0)
 
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -512,11 +536,7 @@ def otomatik_arkaplan_tarayici():
                 else:
                     temel_puan = 50
 
-                # ANLIK FİYAT & HACİM TETİKLEMESİ (TICK-LEVEL BOOST)
-                # Anlık fiyat son mumun üstüne çıktıysa veya altına sarktığı an momentumu yakala
-                anlik_momentum_bonus = 0
-                if anlik_fiyat > son_kapanan_close:
-                    anlik_momentum_bonus = 5
+                anlik_momentum_bonus = 5 if anlik_fiyat > son_kapanan_close else 0
 
                 if ema5 > ema13 and (long_formasyon_onayi or anlik_fiyat > ema5):
                     grid_yonu = "LONG"
@@ -528,7 +548,16 @@ def otomatik_arkaplan_tarayici():
                     grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     sinyal_puani = temel_puan
 
-                print(f"   📊 Anlık Analiz [{symbol}] -> Yön: {grid_yonu} | Puan: {sinyal_puani} | Anlık Fiyat: {anlik_fiyat} | OI: {oi_degeri:.1f} | RSI: {rsi:.1f}", flush=True)
+                # 👑 BTC TREND KONTROLÜ VE FİLTRESİ
+                # Eğer BTC net bir yöne (LONG veya SHORT) gidiyorsa, altcoin'in sinyali buna tersse iptal et!
+                if btc_yonu == "LONG" and grid_yonu == "SHORT":
+                    print(f"   🛡️ BTC FİLTRESİ ENGelledİ: BTC long akarken [{symbol}] için SHORT sinyali reddedildi.", flush=True)
+                    continue
+                elif btc_yonu == "SHORT" and grid_yonu == "LONG":
+                    print(f"   🛡️ BTC FİLTRESİ ENGELLEDİ: BTC short akarken [{symbol}] için LONG sinyali reddedildi.", flush=True)
+                    continue
+
+                print(f"   📊 Anlık Analiz [{symbol}] -> Yön: {grid_yonu} | Puan: {sinyal_puani} | Fiyat: {anlik_fiyat} | BTC Uyumlu: {btc_yonu}", flush=True)
 
                 if symbol in aktif_borsa_map:
                     mevcut_pos = aktif_borsa_map[symbol]
@@ -589,7 +618,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     print(f"⚡ BAŞARILI: İşlem Açıldı -> {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X, ANLIK FİYAT & DİKEY KORUMA)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
+                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X, BTC FİLTRELİ)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası ({sinyal['symbol']}): {e}", flush=True)
