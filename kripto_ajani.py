@@ -304,6 +304,7 @@ def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True, cezali_mi=
     print(f"📌 Pozisyon Kapatıldı: {symbol} - Sebep: {sebep_mesaji}", flush=True)
     if sebep_mesaji: telegram_mesaj_gonder(sebep_mesaji)
 
+# ==================== AKILLI İĞNE VE LİKİDİTE DİKEY BARİYERİ ====================
 def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar):
     try:
         islem_yonu = pozisyon.get("yon", "LONG")
@@ -314,6 +315,7 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar):
         fiyat_degisim_yuzdesi = (anlik_fiyat - giris_fiyati) / giris_fiyati if islem_yonu == "LONG" else (giris_fiyati - anlik_fiyat) / giris_fiyati
         kaldiracli_roe = fiyat_degisim_yuzdesi * kaldirac * 100
 
+        # 1. Ana TP Seviyesi
         if kaldiracli_roe >= 32.0:
             return {"kapat_ilsi": True, "neden": f"Ana TP Patlatıldı! (ROE: %{kaldiracli_roe:.2f})"}
 
@@ -321,9 +323,26 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar):
 
         son_mumlar = mevcut_mumlar[-5:]
         hacimler = [m[5] for m in son_mumlar]
+        
+        ust_iğneler = [m[2] - max(m[1], m[4]) for m in son_mumlar]
+        alt_iğneler = [min(m[1], m[4]) - m[3] for m in son_mumlar]
         govdeler = [abs(m[4] - m[1]) for m in son_mumlar]
+        ortalama_govde = sum(govdeler) / len(govdeler) if govdeler else 1e-8
 
-        if (hacimler[4] < hacimler[3] < hacimler[2]) and (govdeler[4] < govdeler[3] < govdeler[2]) and kaldiracli_roe >= 8.0:
+        # 2. İSTEDİĞİN KROPTOGRAFİK MANTIK (Hızlı çıkış / İğne atıp tıkanma tespiti)
+        if islem_yonu == "LONG":
+            son_ust_igne = ust_iğneler[-1]
+            # Fiyat hızla yukarı iğne atıp hacim düşürdüyse ve kârda/başa baştaysa (>%2.5 ROE) hemen çık!
+            if son_ust_igne > (ortalama_govde * 1.5) and hacimler[-1] < hacimler[-2] and kaldiracli_roe >= 2.5:
+                return {"kapat_ilsi": True, "neden": f"⚠️ Likidite İğnesi / Hacim Söndü, Kâr Kaçmadan Alındı (ROE: %{kaldiracli_roe:.2f})"}
+        
+        elif islem_yonu == "SHORT":
+            son_alt_igne = alt_iğneler[-1]
+            if son_alt_igne > (ortalama_govde * 1.5) and hacimler[-1] < hacimler[-2] and kaldiracli_roe >= 2.5:
+                return {"kapat_ilsi": True, "neden": f"⚠️ Düşüş İğnesi Tükendi, Erken Kâr Alındı (ROE: %{kaldiracli_roe:.2f})"}
+
+        # 3. Klasik Hacim Sönmesi Kontrolü
+        if (hacimler[4] < hacimler[3] < hacimler[2]) and (govdeler[4] < govdeler[3] < govdeler[2]) and kaldiracli_roe >= 6.0:
             return {"kapat_ilsi": True, "neden": f"Hacim Söndü, Erken Kâr Alındı (ROE: %{kaldiracli_roe:.2f})"}
 
         return {"kapat_ilsi": False, "neden": "Devam."}
@@ -452,7 +471,7 @@ def otomatik_arkaplan_tarayici():
                 veri_paketi = {"symbol": symbol, "yon": yon, "giris_fiyati": merkez, "anlik_fiyat": guncel_fiyat, "kaldirac": kaldirac_val}
                 bariyer_durum = dikey_bariyer_kontrol(veri_paketi, ohlcv)
                 if bariyer_durum["kapat_ilsi"]:
-                    pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *HACİM / ESNEK ÇIKIŞ*\n📌 `{symbol}`\nSebep: `{bariyer_durum['neden']}`", basarili=True, cezali_mi=True)
+                    pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *HACİM / LİKİDİTE İĞNE ÇIKIŞI*\n📌 `{symbol}`\nSebep: `{bariyer_durum['neden']}`", basarili=True, cezali_mi=True)
 
             taranan_sinyaller = []
 
@@ -509,19 +528,23 @@ def otomatik_arkaplan_tarayici():
                 else:
                     grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
 
-                # BTC Trend Filtresi Kontrolü
-                if btc_yonu == "LONG" and grid_yonu == "SHORT": 
-                    print(f"🚫 BTC Filtresi: {symbol} için LONG istendi ama BTC LONG (Reddedildi)", flush=True)
-                    continue
-                elif btc_yonu == "SHORT" and grid_yonu == "LONG": 
-                    print(f"🚫 BTC Filtresi: {symbol} için SHORT istendi ama BTC SHORT (Reddedildi)", flush=True)
-                    continue
+                # 💡 AKILLI FİLTRE OVERRIDE (Ters Köşe / Likidite Uyum Süzgeci)
+                # Eğer açık pozisyonda aşırı OI patlaması veya ani iğne hareketi seziliyorsa standart filtresi esnetilir.
+                # Ancak normal döngüde BTC filtresi korumaya devam eder:
+                is_override = (oi_degisim > 10.0) 
 
-                # 1 Saatlik MTF Kontrolü
-                mtf_onay, mtf_mesaj = coklu_zaman_dilimi_trend_kontrolu(symbol, grid_yonu)
-                if not mtf_onay:
-                    print(f"🚫 MTF Filtresi: {symbol} reddedildi ({mtf_mesaj})", flush=True)
-                    continue
+                if not is_override:
+                    if btc_yonu == "LONG" and grid_yonu == "SHORT": 
+                        print(f"🚫 BTC Filtresi: {symbol} için LONG istendi ama BTC LONG (Reddedildi)", flush=True)
+                        continue
+                    elif btc_yonu == "SHORT" and grid_yonu == "LONG": 
+                        print(f"🚫 BTC Filtresi: {symbol} için SHORT istendi ama BTC SHORT (Reddedildi)", flush=True)
+                        continue
+
+                    mtf_onay, mtf_mesaj = coklu_zaman_dilimi_trend_kontrolu(symbol, grid_yonu)
+                    if not mtf_onay:
+                        print(f"🚫 MTF Filtresi: {symbol} reddedildi ({mtf_mesaj})", flush=True)
+                        continue
 
                 fonlama_puani, fonlama_mesaji = fonlama_orani_analizi(symbol, grid_yonu)
                 if fonlama_puani == 0:
@@ -594,7 +617,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     print(f"⚡ BAŞARILI: İşlem Açıldı -> {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X, BTC + MTF + 75+ ONAYLI)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}`")
+                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X, Akıllı Likidite Süzgeci)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası ({sinyal['symbol']}): {e}", flush=True)
