@@ -152,6 +152,60 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id):
     except Exception:
         return True
 
+# ==================== 30 KADEME DERİNLİK VE HİBRİT ANALİZ ====================
+def emir_defteri_derinlik_analizi(symbol, limit=30):
+    try:
+        order_book = exchange.fetch_order_book(symbol, limit=limit)
+        bids = order_book.get('bids', []) # Alışlar [fiyat, miktar]
+        asks = order_book.get('asks', []) # Satışlar [fiyat, miktar]
+
+        if not bids or not asks:
+            return "NEUTRAL", 50.0, "NORMAL", None, None
+
+        toplam_alis_hacmi = sum([item[1] for item in bids])
+        toplam_satis_hacmi = sum([item[1] for item in asks])
+        toplam_hacim = toplam_alis_hacmi + toplam_satis_hacmi
+
+        if toplam_hacim == 0:
+            return "NEUTRAL", 50.0, "NORMAL", None, None
+
+        alis_yuzdesi = (toplam_alis_hacmi / toplam_hacim) * 100
+        
+        ortalama_kademe_hacmi = toplam_hacim / (len(bids) + len(asks))
+
+        # Balina Duvarı Tespiti (Ortalamanın 4 katı ve üzeri)
+        duvar_esigi = ortalama_kademe_hacmi * 4
+        
+        en_ yakin_satis_duvari = None
+        for ask_fiyat, ask_hacim in asks:
+            if ask_hacim >= duvar_esigi:
+                en_yakin_satis_duvari = ask_fiyat
+                break
+
+        en_yakin_alis_duvari = None
+        for bid_fiyat, bid_hacim in bids:
+            if bid_hacim >= duvar_esigi:
+                en_yakin_alis_duvari = bid_fiyat
+                break
+
+        duvar_durumu = "NORMAL"
+        if en_yakin_satis_duvari:
+            duvar_durumu = "SATIS_DUVARI_VAR"
+        elif en_yakin_alis_duvari:
+            duvar_durumu = "ALIS_DUVARI_VAR"
+
+        if alis_yuzdesi > 58.0:
+            book_durum = "BUY_PRESSURE"
+        elif alis_yuzdesi < 42.0:
+            book_durum = "SELL_PRESSURE"
+        else:
+            book_durum = "BALANCED"
+
+        return book_durum, alis_yuzdesi, duvar_durumu, en_yakin_satis_duvari, en_yakin_alis_duvari
+    except Exception as e:
+        print(f"⚠️ Derinlik analizi hatası ({symbol}): {e}", flush=True)
+        return "NEUTRAL", 50.0, "NORMAL", None, None
+
 def atr_ve_volatilite_hesapla(df):
     try:
         atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
@@ -203,7 +257,8 @@ def btc_trend_kontrolu():
     except Exception:
         return "NOTR"
 
-def dinamik_tp_sl_hesapla(df, giris_fiyati, yon):
+# ==================== HİBRİT (DESTEK/DİRENÇ & ATR) TP/SL HESAPLAMA ====================
+def hibrit_tp_sl_hesapla(df, giris_fiyati, yon, satis_duvari, alis_duvari):
     try:
         df['body'] = abs(df['close'] - df['open'])
         ortalama_mum_boyu_yuzde = (df['body'].rolling(window=10).mean().iloc[-1] / giris_fiyati) * 100
@@ -214,19 +269,64 @@ def dinamik_tp_sl_hesapla(df, giris_fiyati, yon):
         hacim_carpani = 1.3 if son_hacim > (ortalama_hacim * 1.5) else 1.0
 
         faktor = max(1.0, min(3.5, (ortalama_mum_boyu_yuzde + atr_yuzde) / 1.5))
-        tp_yuzde = max(0.025, 0.030 * faktor * hacim_carpani)
-        sl_yuzde = max(0.015, 0.018 * faktor)
+        atr_tp_yuzde = max(0.025, 0.030 * faktor * hacim_carpani)
+        atr_sl_yuzde = max(0.015, 0.018 * faktor)
         
         if yon == 'LONG':
-            tp_fiyat = giris_fiyati * (1 + tp_yuzde)
-            sl_fiyat = giris_fiyati * (1 - sl_yuzde)
+            # --- HİBRİT TP (Satış Duvarı Kuralı) ---
+            if satis_duvari and satis_duvari > giris_fiyati:
+                # Duvar fiyata çok yakınsa (%0.4'ten yakın) güvenli marj bırak, değilse duvarın hemen altı
+                duvar_tp_fiyat = satis_duvari * 0.999
+                min_mantikli_tp = giris_fiyati * 1.012 # En az %1.2 hedef
+                if duvar_tp_fiyat > min_mantikli_tp:
+                    tp_fiyat = duvar_tp_fiyat
+                else:
+                    tp_fiyat = giris_fiyati * (1 + atr_tp_yuzde)
+            else:
+                tp_fiyat = giris_fiyati * (1 + atr_tp_yuzde)
+
+            # --- HİBRİT SL (Alış Duvarı / Destek Kuralı) ---
+            if alis_duvari and alis_duvari < giris_fiyati:
+                # Destek duvarının biraz altı güvenli stop noktasıdır
+                duvar_sl_fiyat = alis_duvari * 0.997
+                max_mantikli_sl = giris_fiyati * 0.985 # Çok derinse ATR'ye dön
+                if duvar_sl_fiyat > max_mantikli_sl:
+                    sl_fiyat = duvar_sl_fiyat
+                else:
+                    sl_fiyat = giris_fiyati * (1 - atr_sl_yuzde)
+            else:
+                sl_fiyat = giris_fiyati * (1 - atr_sl_yuzde)
+
             kapat_yon = 'sell'
-        else:
-            tp_fiyat = giris_fiyati * (1 - tp_yuzde)
-            sl_fiyat = giris_fiyati * (1 + sl_yuzde)
+            hedef_roe = ((tp_fiyat - giris_fiyati) / giris_fiyati) * 100 * KALDIRAC
+
+        else: # SHORT
+            # --- HİBRİT TP (Alış Duvarı Kuralı) ---
+            if alis_duvari and alis_duvari < giris_fiyati:
+                duvar_tp_fiyat = alis_duvari * 1.001
+                max_mantikli_tp = giris_fiyati * 0.988
+                if duvar_tp_fiyat < max_mantikli_tp:
+                    tp_fiyat = duvar_tp_fiyat
+                else:
+                    tp_fiyat = giris_fiyati * (1 - atr_tp_yuzde)
+            else:
+                tp_fiyat = giris_fiyati * (1 - atr_tp_yuzde)
+
+            # --- HİBRİT SL (Satış Duvarı / Direnç Kuralı) ---
+            if satis_duvari and satis_duvari > giris_fiyati:
+                duvar_sl_fiyat = satis_duvari * 1.003
+                min_mantikli_sl = giris_fiyati * 1.015
+                if duvar_sl_fiyat < min_mantikli_sl:
+                    sl_fiyat = duvar_sl_fiyat
+                else:
+                    sl_fiyat = giris_fiyati * (1 + atr_sl_yuzde)
+            else:
+                sl_fiyat = giris_fiyati * (1 + atr_sl_yuzde)
+
             kapat_yon = 'buy'
+            hedef_roe = ((giris_fiyati - tp_fiyat) / giris_fiyati) * 100 * KALDIRAC
             
-        return tp_fiyat, sl_fiyat, kapat_yon, tp_yuzde * 100 * KALDIRAC
+        return tp_fiyat, sl_fiyat, kapat_yon, hedef_roe
     except Exception:
         if yon == 'LONG':
             return giris_fiyati * 1.035, giris_fiyati * 0.98, 'sell', 17.5
@@ -304,7 +404,6 @@ def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True, cezali_mi=
     print(f"📌 Pozisyon Kapatıldı: {symbol} - Sebep: {sebep_mesaji}", flush=True)
     if sebep_mesaji: telegram_mesaj_gonder(sebep_mesaji)
 
-# ==================== AKILLI İĞNE VE LİKİDİTE DİKEY BARİYERİ ====================
 def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar):
     try:
         islem_yonu = pozisyon.get("yon", "LONG")
@@ -315,7 +414,6 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar):
         fiyat_degisim_yuzdesi = (anlik_fiyat - giris_fiyati) / giris_fiyati if islem_yonu == "LONG" else (giris_fiyati - anlik_fiyat) / giris_fiyati
         kaldiracli_roe = fiyat_degisim_yuzdesi * kaldirac * 100
 
-        # 1. Ana TP Seviyesi
         if kaldiracli_roe >= 32.0:
             return {"kapat_ilsi": True, "neden": f"Ana TP Patlatıldı! (ROE: %{kaldiracli_roe:.2f})"}
 
@@ -329,19 +427,15 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar):
         govdeler = [abs(m[4] - m[1]) for m in son_mumlar]
         ortalama_govde = sum(govdeler) / len(govdeler) if govdeler else 1e-8
 
-        # 2. İSTEDİĞİN KROPTOGRAFİK MANTIK (Hızlı çıkış / İğne atıp tıkanma tespiti)
         if islem_yonu == "LONG":
             son_ust_igne = ust_iğneler[-1]
-            # Fiyat hızla yukarı iğne atıp hacim düşürdüyse ve kârda/başa baştaysa (>%2.5 ROE) hemen çık!
             if son_ust_igne > (ortalama_govde * 1.5) and hacimler[-1] < hacimler[-2] and kaldiracli_roe >= 2.5:
-                return {"kapat_ilsi": True, "neden": f"⚠️ Likidite İğnesi / Hacim Söndü, Kâr Kaçmadan Alındı (ROE: %{kaldiracli_roe:.2f})"}
-        
+                return {"kapat_ilsi": True, "neden": f"⚠️ Likidite İğnesi / Hacim Söndü, Kâr Alındı (ROE: %{kaldiracli_roe:.2f})"}
         elif islem_yonu == "SHORT":
             son_alt_igne = alt_iğneler[-1]
             if son_alt_igne > (ortalama_govde * 1.5) and hacimler[-1] < hacimler[-2] and kaldiracli_roe >= 2.5:
                 return {"kapat_ilsi": True, "neden": f"⚠️ Düşüş İğnesi Tükendi, Erken Kâr Alındı (ROE: %{kaldiracli_roe:.2f})"}
 
-        # 3. Klasik Hacim Sönmesi Kontrolü
         if (hacimler[4] < hacimler[3] < hacimler[2]) and (govdeler[4] < govdeler[3] < govdeler[2]) and kaldiracli_roe >= 6.0:
             return {"kapat_ilsi": True, "neden": f"Hacim Söndü, Erken Kâr Alındı (ROE: %{kaldiracli_roe:.2f})"}
 
@@ -349,7 +443,6 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar):
     except Exception:
         return {"kapat_ilsi": False, "neden": "Hata."}
 
-# ==================== TELEGRAM KOMUTLARI ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         balance = exchange.fetch_balance()
@@ -379,7 +472,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  PnL: `{pnl_val:+.2f} USDT` (`%{roe:+.2f}`)"
 
         mesaj = (
-            f"📊 **BOT DURUM RAPORU**\n\n"
+            f"📊 **BOT DURUM RAPORU (HİBRİT TP/SL)**\n\n"
             f"👑 BTC Yönü: `{btc_trend_kontrolu()}`\n"
             f"💰 Kasa: `{total:.2f} USDT` | PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"🛡️ Sigorta: `{global_durum}`\n"
@@ -396,7 +489,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
     BOT_CALISIYOR_MU = True
     GLOBAL_COOLDOWN_BITIS = 0.0
-    await update.message.reply_text("🟢 Bot Aktif!")
+    await update.message.reply_text("🟢 Bot Aktif (Hibrit Mod)!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -413,10 +506,9 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
 
-# ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
-    print("🚀 Bot Arka Plan Döngüsü Aktif ve Çalışıyor...", flush=True)
+    print("🚀 Bot Arka Plan Döngüsü Aktif (Hibrit Emir Defteri Modu)...", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -426,28 +518,21 @@ def otomatik_arkaplan_tarayici():
     while True:
         try:
             if not BOT_CALISIYOR_MU:
-                print("⏸️ Bot durduruldu konumunda, bekleniyor...", flush=True)
                 time.sleep(5)
                 continue
 
             if time.time() < GLOBAL_COOLDOWN_BITIS:
-                kalan_dk = int((GLOBAL_COOLDOWN_BITIS - time.time()) / 60)
-                print(f"🛡️ Genel sigorta aktif, kalan süre: {kalan_dk} dakika.", flush=True)
                 time.sleep(15)
                 continue
 
             btc_yonu = btc_trend_kontrolu()
-            print(f"🔍 [Döngü Başladı] BTC Trend Yönü: {btc_yonu}", flush=True)
 
             try:
                 raw_positions = exchange.fetch_positions()
                 aktif_borsa_map = {p['symbol']: p for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0}
-                print(f"📊 Aktif Borsa Pozisyon Sayısı: {len(aktif_borsa_map)}", flush=True)
-            except Exception as e:
+            except Exception:
                 aktif_borsa_map = {}
-                print(f"⚠️ Pozisyonlar çekilemedi: {e}", flush=True)
 
-            # Mevcut pozisyonları denetle
             for symbol, pos in aktif_borsa_map.items():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
@@ -462,8 +547,6 @@ def otomatik_arkaplan_tarayici():
                 pnl = float(pos.get('unrealizedPnl', 0))
                 kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 1.0)
 
-                print(f"   -> İzlenen Poz: {symbol} | {yon} | Giriş: {merkez} | Güncel: {guncel_fiyat} | ROE: %{roe:+.2f} | PnL: {pnl:+.2f}", flush=True)
-
                 if roe <= -20.0:
                     pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT`", basarili=False, cezali_mi=True)
                     continue
@@ -475,7 +558,6 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller = []
 
-            # Coinleri tara
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
                 
@@ -483,15 +565,14 @@ def otomatik_arkaplan_tarayici():
                     cooldown_veri = COIN_COOLDOWNLAR.get(symbol)
                     if cooldown_veri:
                         zaman_kontrol = cooldown_veri.get("zaman", 0) if isinstance(cooldown_veri, dict) else float(cooldown_veri)
-                        if (zaman_kontrol - time.time()) > 0:
-                            print(f"⏳ Cooldown'da: {symbol}", flush=True)
-                            continue
+                        if (zaman_kontrol - time.time()) > 0: continue
 
                 try:
                     oi_degeri, oi_degisim = acik_pozisyon_oi_kontrolu(symbol)
-                    if oi_degisim > 20.0:
-                        print(f"⚠️ OI Değişimi çok yüksek ({symbol}: %{oi_degisim:.1f}), atlandı.", flush=True)
-                        continue
+                    if oi_degisim > 20.0: continue
+
+                    # 💡 30 KADEME DERİNLİK VE DUVAR TESPİTİ
+                    book_durum, alis_orani, duvar_tipi, satis_duvari, alis_duvari = emir_defteri_derinlik_analizi(symbol, limit=30)
 
                     ticker = exchange.fetch_ticker(symbol)
                     anlik_fiyat = float(ticker['last'])
@@ -499,9 +580,7 @@ def otomatik_arkaplan_tarayici():
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-                    if not zamana_entegre_hacim_ve_egilim_kontrolu(df):
-                        print(f"⚠️ Hacim anomalisi var ({symbol}), atlandı.", flush=True)
-                        continue
+                    if not zamana_entegre_hacim_ve_egilim_kontrolu(df): continue
 
                     ema5 = ta.trend.ema_indicator(df['close'], window=5).iloc[-1]
                     ema13 = ta.trend.ema_indicator(df['close'], window=13).iloc[-1]
@@ -510,15 +589,13 @@ def otomatik_arkaplan_tarayici():
                     atr = atr_ve_volatilite_hesapla(df)
 
                     son_kapanan_close = df['close'].iloc[-2]
-                    son_kapanan_open = df['open'].iloc[-1]
                     onceki_kapanan_close = df['close'].iloc[-3]
                     onceki_kapanan_open = df['open'].iloc[-3]
 
-                    short_formasyon_onayi = (onceki_kapanan_close > onceki_kapanan_open) and (son_kapanan_close < son_kapanan_open)
-                    long_formasyon_onayi = (onceki_kapanan_close < onceki_kapanan_open) and (son_kapanan_close > son_kapanan_open)
+                    short_formasyon_onayi = (onceki_kapanan_close > onceki_kapanan_open) and (son_kapanan_close < df['open'].iloc[-1])
+                    long_formasyon_onayi = (onceki_kapanan_close < onceki_kapanan_open) and (son_kapanan_close > df['open'].iloc[-1])
 
                 except Exception as e:
-                    print(f"⚠️ Veri çekme hatası ({symbol}): {e}", flush=True)
                     continue
 
                 if ema5 > ema13 and (long_formasyon_onayi or anlik_fiyat > ema5):
@@ -528,72 +605,50 @@ def otomatik_arkaplan_tarayici():
                 else:
                     grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
 
-                # 💡 AKILLI FİLTRE OVERRIDE (Ters Köşe / Likidite Uyum Süzgeci)
-                # Eğer açık pozisyonda aşırı OI patlaması veya ani iğne hareketi seziliyorsa standart filtresi esnetilir.
-                # Ancak normal döngüde BTC filtresi korumaya devam eder:
+                if grid_yonu == "LONG" and (duvar_tipi == "SATIS_DUVARI_VAR" or book_durum == "SELL_PRESSURE"):
+                    print(f"🚫 Derinlik Engeli: {symbol} için LONG istendi ama tahtada güçlü satıcı duvarı/baskısı var.", flush=True)
+                    continue
+                elif grid_yonu == "SHORT" and (duvar_tipi == "ALIS_DUVARI_VAR" or book_durum == "BUY_PRESSURE"):
+                    print(f"🚫 Derinlik Engeli: {symbol} için SHORT istendi ama tahtada güçlü alıcı duvarı/baskısı var.", flush=True)
+                    continue
+
                 is_override = (oi_degisim > 10.0) 
 
                 if not is_override:
-                    if btc_yonu == "LONG" and grid_yonu == "SHORT": 
-                        print(f"🚫 BTC Filtresi: {symbol} için LONG istendi ama BTC LONG (Reddedildi)", flush=True)
-                        continue
-                    elif btc_yonu == "SHORT" and grid_yonu == "LONG": 
-                        print(f"🚫 BTC Filtresi: {symbol} için SHORT istendi ama BTC SHORT (Reddedildi)", flush=True)
-                        continue
+                    if btc_yonu == "LONG" and grid_yonu == "SHORT": continue
+                    elif btc_yonu == "SHORT" and grid_yonu == "LONG": continue
 
                     mtf_onay, mtf_mesaj = coklu_zaman_dilimi_trend_kontrolu(symbol, grid_yonu)
-                    if not mtf_onay:
-                        print(f"🚫 MTF Filtresi: {symbol} reddedildi ({mtf_mesaj})", flush=True)
-                        continue
+                    if not mtf_onay: continue
 
                 fonlama_puani, fonlama_mesaji = fonlama_orani_analizi(symbol, grid_yonu)
-                if fonlama_puani == 0:
-                    print(f"🚫 Fonlama Filtresi: {symbol} reddedildi ({fonlama_mesaji})", flush=True)
-                    continue
+                if fonlama_puani == 0: continue
 
                 temel_puan = 70 if adx_val >= 28 else 40
                 anlik_momentum_bonus = 5 if anlik_fiyat > son_kapanan_close else 0
                 formasyon_bonus = 10
+                derinlik_bonus = 5 if (grid_yonu == "LONG" and book_durum == "BUY_PRESSURE") or (grid_yonu == "SHORT" and book_durum == "SELL_PRESSURE") else 0
 
-                sinyal_puani = temel_puan + formasyon_bonus + anlik_momentum_bonus + fonlama_puani
-                print(f"💡 Sinyal Analizi -> {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} (Eşik: 75)", flush=True)
-
-                if symbol in aktif_borsa_map:
-                    mevcut_pos = aktif_borsa_map[symbol]
-                    mevcut_yon = str(mevcut_pos.get('side', '')).upper()
-                    mevcut_kontrat = float(mevcut_pos.get('contracts', 0) or mevcut_pos.get('size', 0) or 1.0)
-                    
-                    son_iki_mum_ters_mi = (df['close'].iloc[-2] < df['open'].iloc[-2]) and (df['close'].iloc[-3] < df['open'].iloc[-3]) if mevcut_yon == "LONG" else (df['close'].iloc[-2] > df['open'].iloc[-2]) and (df['close'].iloc[-3] > df['open'].iloc[-3])
-                    ema_makas_kesin_tersi = (ema5 < ema13) if mevcut_yon == "LONG" else (ema5 > ema13)
-                    
-                    if sinyal_puani >= 90 and mevcut_yon != grid_yonu and ema_makas_kesin_tersi and son_iki_mum_ters_mi:
-                        pozisyonu_kapat(symbol, mevcut_yon, mevcut_kontrat, f"🔄 *RÜZGAR KESİN TERSİNE DÖNDÜ*\n📌 `{symbol}` | Pozisyon kapatıldı.", basarili=False, cezali_mi=True)
-                        aktif_borsa_map.pop(symbol, None)
-                        continue
+                sinyal_puani = temel_puan + formasyon_bonus + anlik_momentum_bonus + fonlama_puani + derinlik_bonus
+                print(f"💡 Sinyal Analizi -> {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} (Hibrit Duvar Taraması Aktif)", flush=True)
 
                 if symbol not in aktif_borsa_map:
                     ai_onay = yapay_zeka_islem_onayi(rsi, adx_val, float(ema5 - ema13), (1 if grid_yonu == 'LONG' else -1), atr, COIN_ID_MAP.get(symbol, 0))
-                    if not ai_onay:
-                        print(f"🤖 Yapay Zeka Onay Vermedi: {symbol}", flush=True)
-                        continue
+                    if not ai_onay: continue
 
                     taranan_sinyaller.append({
                         "symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, 
                         "rsi": rsi, "adx": adx_val, "ema_fark": float(ema5 - ema13), 
-                        "fiyat": anlik_fiyat, "atr": atr, "df": df
+                        "fiyat": anlik_fiyat, "atr": atr, "df": df,
+                        "satis_duvari": satis_duvari, "alis_duvari": alis_duvari
                     })
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
-                if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON: 
-                    print(f"🛑 Maksimum pozisyon sınırına ulaşıldı ({MAKSIMUM_TOPLAM_POZISYON}).", flush=True)
-                    break
-                
-                if sinyal["puan"] < 75: 
-                    print(f"⚠️ Puan yetersiz ({sinyal['symbol']} -> {sinyal['puan']} < 75)", flush=True)
-                    continue
+                if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON: break
+                if sinyal["puan"] < 75: continue
 
                 try:
                     toplam_bakiye = float(exchange.fetch_balance()['total'].get('USDT', 0))
@@ -605,7 +660,12 @@ def otomatik_arkaplan_tarayici():
                     giris_fiyati = sinyal["fiyat"]
                     
                     exchange.create_order(sinyal["symbol"], 'market', islem_yonu, miktar)
-                    tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = dinamik_tp_sl_hesapla(sinyal["df"], giris_fiyati, sinyal["yon"])
+                    
+                    # 💡 HİBRİT TP VE SL HESAPLAMA ÇAĞRISI
+                    tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = hibrit_tp_sl_hesapla(
+                        sinyal["df"], giris_fiyati, sinyal["yon"], 
+                        sinyal["satis_duvari"], sinyal["alis_duvari"]
+                    )
 
                     try:
                         exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
@@ -616,8 +676,8 @@ def otomatik_arkaplan_tarayici():
                         AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {"giris_rsi": float(sinyal["rsi"]), "giris_zamani": time.time()}
                     hafizayi_kaydet()
                     
-                    print(f"⚡ BAŞARILI: İşlem Açıldı -> {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X, Akıllı Likidite Süzgeci)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}`")
+                    print(f"⚡ BAŞARILI: İşlem Açıldı -> {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']} | Hedef ROE: %{hedef_roe:.1f}", flush=True)
+                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X, Hibrit Duvar TP/SL)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}`\n🎯 Hedef ROE: `%{hedef_roe:.1f}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası ({sinyal['symbol']}): {e}", flush=True)
@@ -625,7 +685,6 @@ def otomatik_arkaplan_tarayici():
         except Exception as e:
             print(f"⚠️ Döngü genel hata: {e}", flush=True)
         
-        print("💤 Döngü tamamlandı, 10 saniye bekleniyor...\n", flush=True)
         time.sleep(10)
 
 if __name__ == '__main__':
