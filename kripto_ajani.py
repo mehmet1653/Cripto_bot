@@ -165,8 +165,12 @@ def dinamik_tp_sl_hesapla(df, giris_fiyati, yon):
         ortalama_mum_boyu_yuzde = (df['body'].rolling(window=10).mean().iloc[-1] / giris_fiyati) * 100
         atr_yuzde = atr_ve_volatilite_hesapla(df)
         
+        son_hacim = df['volume'].iloc[-1]
+        ortalama_hacim = df['volume'].rolling(window=10).mean().iloc[-1]
+        hacim_carpani = 1.3 if son_hacim > (ortalama_hacim * 1.5) else 1.0
+
         faktor = max(1.0, min(3.5, (ortalama_mum_boyu_yuzde + atr_yuzde) / 1.5))
-        tp_yuzde = max(0.025, 0.030 * faktor)
+        tp_yuzde = max(0.025, 0.030 * faktor * hacim_carpani)
         sl_yuzde = max(0.015, 0.018 * faktor)
         
         if yon == 'LONG':
@@ -184,6 +188,26 @@ def dinamik_tp_sl_hesapla(df, giris_fiyati, yon):
             return giris_fiyati * 1.035, giris_fiyati * 0.98, 'sell', 17.5
         else:
             return giris_fiyati * 0.965, giris_fiyati * 1.02, 'buy', 17.5
+
+def zamana_entegre_hacim_ve_egilim_kontrolu(df):
+    """Zamana bağlı hacim sürekliliği ve ani hareket süzgeci"""
+    try:
+        if len(df) < 5:
+            return True
+        
+        # Son 3 mumun hacim ortalaması ile genel ortalamayı kıyasla (Zamana yayılan güç)
+        hacimler = df['volume'].iloc[-5:]
+        son_3_hacim_ort = hacimler.iloc[-3:].mean()
+        genel_hacim_ort = hacimler.mean()
+        
+        # Eğer hacim tek bir mumda devasa patlayıp diğerlerinde ölüyorsa suni iğnedir (False döndür)
+        tek_mum_anormal_patlama = (hacimler.iloc[-1] > (genel_hacim_ort * 3.5)) and (hacimler.iloc[-2] < genel_hacim_ort)
+        if tek_mum_anormal_patlama:
+            return False
+            
+        return True
+    except Exception:
+        return True
 
 def btc_trend_kontrolu():
     try:
@@ -314,22 +338,22 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar, exchange_komisyon_orani=0.000
     if hacim_dusuyor_mu and mum_govdeleri_kuculuyor_mu and kaldiracli_roe >= 8.0:
         return {
             "kapat_ilsi": True,
-            "neden": f"Momentum Bitti, Erken TP / Kâr Alındı (ROE: %{kaldiracli_roe:.2f})"
+            "neden": f"Hacim Söndü, Erken TP / Kâr Alındı (ROE: %{kaldiracli_roe:.2f})"
         }
 
     if not (hacim_dusuyor_mu and mum_govdeleri_kuculuyor_mu):
-        return {"kapat_ilsi": False, "neden": "Momentum ve hacim hala canlı, pozisyon korunuyor."}
+        return {"kapat_ilsi": False, "neden": "Hacim ve momentum canlı, pozisyon tutuluyor."}
 
     if gecen_sure_dakika >= maksimum_bekleme_suresi:
         if kaldiracli_roe >= (toplam_komisyon_maliyeti * 1.5):
             return {
                 "kapat_ilsi": True,
-                "neden": f"Dikey Bariyer Tetiklendi: Süre doldu ve net kâr tatmin edici (ROE: %{kaldiracli_roe:.2f})"
+                "neden": f"Dikey Bariyer Tetiklendi: Süre doldu, net kâr alındı (ROE: %{kaldiracli_roe:.2f})"
             }
         else:
             return {
                 "kapat_ilsi": False,
-                "neden": "Süre doldu ancak kâr hedeflenen marjın altında."
+                "neden": "Süre doldu ancak kâr hedefin altında."
             }
 
     return {"kapat_ilsi": False, "neden": "Bekleme süresi henüz dolmadı."}
@@ -369,7 +393,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         btc_durum = btc_trend_kontrolu()
 
         mesaj = (
-            f"📊 **ANLIK FİYAT + BTC TREND FİLTRESİ ({KALDIRAC}X)**\n\n"
+            f"📊 **ANLIK FİYAT + ZAMANA ENTEGRE FİLTRE ({KALDIRAC}X)**\n\n"
             f"👑 BTC Ana Yönü: `{btc_durum}`\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"🟢 Anlık PnL: `{toplam_pnl:+.2f} USDT`\n"
@@ -388,7 +412,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
     BOT_CALISIYOR_MU = True
     GLOBAL_COOLDOWN_BITIS = 0.0
-    await update.message.reply_text("🟢 Bot Aktif, Esnek TP + Kararlı Rüzgar Filtresi Devrede!")
+    await update.message.reply_text("🟢 Bot Aktif, Zamana Entegre Hacim Filtresi ve Esnek TP Devrede!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -408,7 +432,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
-    print("🚀 Anlık Takip ve Kararlı Filtre Döngüsü Başlatıldı.", flush=True)
+    print("🚀 Zamana Entegre Filtreleme Döngüsü Başlatıldı.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -427,7 +451,7 @@ def otomatik_arkaplan_tarayici():
                 continue
 
             print("--------------------------------------------------", flush=True)
-            print("🔄 Anlık tarama döngüsü başladı...", flush=True)
+            print("🔄 Zamana entegre tarama döngüsü başladı...", flush=True)
 
             btc_yonu = btc_trend_kontrolu()
             print(f"👑 BTC Anlık Trend Durumu: {btc_yonu}", flush=True)
@@ -443,7 +467,6 @@ def otomatik_arkaplan_tarayici():
                 try:
                     guncel_fiyat = exchange.fetch_ticker(symbol)['last']
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=20)
-                    ohlcv_1m = exchange.fetch_ohlcv(symbol, timeframe='1m', limit=10)
                 except Exception: 
                     continue
 
@@ -457,19 +480,6 @@ def otomatik_arkaplan_tarayici():
                 kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 1.0)
 
                 print(f"👁️ İzleniyor -> {symbol} | Yön: {yon} | Giriş: {merkez} | Güncel: {guncel_fiyat} | ROE: %{roe:.2f} | PnL: {pnl:.2f} USDT", flush=True)
-
-                try:
-                    if len(ohlcv_1m) >= 6 and roe <= -5.0:
-                        df_1m = pd.DataFrame(ohlcv_1m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                        son_hacim = df_1m['volume'].iloc[-1]
-                        ortalama_hacim = df_1m['volume'].iloc[-6:-1].mean()
-                        son_mum_yonu = "LONG" if df_1m['close'].iloc[-1] > df_1m['open'].iloc[-1] else "SHORT"
-                        
-                        if son_hacim > (ortalama_hacim * 1.8) and son_mum_yonu != yon:
-                            pozisyonu_kapat(symbol, yon, kontrat, f"🚨 *1M ACİL DURUM KALKANI AKTİF*\n📌 `{symbol}` | Zarar Kesildi (ROE: %{roe:.2f})", basarili=False, cezali_mi=True)
-                            continue
-                except Exception as e:
-                    print(f"⚠️ 1m acil kalkan hatası ({symbol}): {e}", flush=True)
 
                 if roe <= -20.0:
                     pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT`", basarili=False, cezali_mi=True)
@@ -487,7 +497,7 @@ def otomatik_arkaplan_tarayici():
 
                 bariyer_durum = dikey_bariyer_kontrol(veri_paketi, ohlcv)
                 if bariyer_durum["kapat_ilsi"]:
-                    pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *ESNEK ÇIKIŞ / TP*\n📌 `{symbol}`\nSebep: `{bariyer_durum['neden']}`", basarili=True, cezali_mi=True)
+                    pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *HACİM / ESNEK ÇIKIŞ*\n📌 `{symbol}`\nSebep: `{bariyer_durum['neden']}`", basarili=True, cezali_mi=True)
 
             taranan_sinyaller = []
 
@@ -517,6 +527,11 @@ def otomatik_arkaplan_tarayici():
 
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+
+                    # ZAMANA ENTEGRE HACİM VE İĞNE SÜZGECİ
+                    if not zamana_entegre_hacim_ve_egilim_kontrolu(df):
+                        print(f"   🛡️ ZAMANA ENTEGRE FİLTRE [{symbol}]: Suni mum hareketi / ani iğne tespit edildi, es geçildi.", flush=True)
+                        continue
 
                     ema5 = ta.trend.ema_indicator(df['close'], window=5).iloc[-1]
                     ema13 = ta.trend.ema_indicator(df['close'], window=13).iloc[-1]
@@ -568,7 +583,6 @@ def otomatik_arkaplan_tarayici():
                     mevcut_yon = str(mevcut_pos.get('side', '')).upper()
                     mevcut_kontrat = float(mevcut_pos.get('contracts', 0) or mevcut_pos.get('size', 0) or 1.0)
                     
-                    # KARARLI RÜZGAR FİLTRESİ: Sadece skor yetmez, EMA makası ve 85+ puan şartı aranır.
                     ema_makas_tersi = (ema5 < ema13) if mevcut_yon == "LONG" else (ema5 > ema13)
                     
                     if sinyal_puani >= 85 and mevcut_yon != grid_yonu and ema_makas_tersi:
@@ -625,7 +639,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     print(f"⚡ BAŞARILI: İşlem Açıldı -> {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X, BTC FİLTRELİ)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
+                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X, ZAMANA ENTEGRE)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası ({sinyal['symbol']}): {e}", flush=True)
