@@ -195,7 +195,6 @@ def btc_trend_kontrolu():
         ema13_btc = ta.trend.ema_indicator(df_btc['close'], window=13).iloc[-1]
         adx_btc = ta.trend.ADXIndicator(df_btc['high'], df_btc['low'], df_btc['close'], window=14).adx().iloc[-1]
         
-        # Eğer ADX güçlü ve EMA'lar net bir yön gösteriyorsa trend vardır
         if adx_btc >= 25:
             if ema5_btc > ema13_btc:
                 return "LONG"
@@ -279,6 +278,12 @@ def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True, cezali_mi=
     if sebep_mesaji: telegram_mesaj_gonder(sebep_mesaji)
 
 def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar, exchange_komisyon_orani=0.0006):
+    """
+    ESNEK TP (HEDEF FİYAT) VE MOMENTUM BAZLI ÇIKIŞ KONTROLÜ:
+    1. Güçlü trendde %32+ Ana TP hedefini zorlar.
+    2. Hedefe varılamasa bile momentum erkenden bittiyse ve kâr %8+ ise erken kâr alarak çıkar.
+    3. Momentum çok zayıfsa güvenli çıkış sağlar.
+    """
     simdiki_zaman = time.time()
     giris_zamani = pozisyon.get("giris_zamani", simdiki_zaman)
     gecen_sure_dakika = (simdiki_zaman - giris_zamani) / 60
@@ -297,6 +302,13 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar, exchange_komisyon_orani=0.000
     kaldiracli_roe = fiyat_degisim_yuzdesi * kaldirac * 100
     toplam_komisyon_maliyeti = exchange_komisyon_orani * 2 * kaldirac * 100
 
+    # 1. Ana TP (Take Profit / Hedef Fiyat) Tavanı
+    if kaldiracli_roe >= 32.0:
+        return {
+            "kapat_ilsi": True,
+            "neden": f"Ana TP (Hedef Fiyat) Patlatıldı! (ROE: %{kaldiracli_roe:.2f})"
+        }
+
     if len(mevcut_mumlar) < 5:
         return {"kapat_ilsi": False, "neden": "Yetersiz mum verisi."}
 
@@ -307,6 +319,13 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar, exchange_komisyon_orani=0.000
     hacim_dusuyor_mu = (hacimler[4] < hacimler[3]) and (hacimler[3] < hacimler[2])
     mum_govdeleri_kuculuyor_mu = (govdeler[4] < govdeler[3]) and (govdeler[3] < govdeler[2])
 
+    # 2. Erken Momentum Bitişi / Esnek TP (%8+ kâr ve momentum kaybı)
+    if hacim_dusuyor_mu and mum_govdeleri_kuculuyor_mu and kaldiracli_roe >= 8.0:
+        return {
+            "kapat_ilsi": True,
+            "neden": f"Momentum Bitti, Erken TP / Kâr Alındı (ROE: %{kaldiracli_roe:.2f})"
+        }
+
     if not (hacim_dusuyor_mu and mum_govdeleri_kuculuyor_mu):
         return {"kapat_ilsi": False, "neden": "Momentum ve hacim hala canlı, pozisyon korunuyor."}
 
@@ -314,7 +333,7 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar, exchange_komisyon_orani=0.000
         if kaldiracli_roe >= (toplam_komisyon_maliyeti * 1.5):
             return {
                 "kapat_ilsi": True,
-                "neden": f"Dikey Bariyer Tetiklendi: Momentum bitti ve net kâr tatmin edici (ROE: %{kaldiracli_roe:.2f})"
+                "neden": f"Dikey Bariyer Tetiklendi: Süre doldu ve net kâr tatmin edici (ROE: %{kaldiracli_roe:.2f})"
             }
         else:
             return {
@@ -378,7 +397,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
     BOT_CALISIYOR_MU = True
     GLOBAL_COOLDOWN_BITIS = 0.0
-    await update.message.reply_text("🟢 Bot Aktif, BTC Trend Filtresi + Anlık Fiyat Takibi Devrede!")
+    await update.message.reply_text("🟢 Bot Aktif, Esnek TP + BTC Trend Filtresi Devrede!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -398,7 +417,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
-    print("🚀 Anlık Takip ve BTC Filtre Döngüsü Başlatıldı.", flush=True)
+    print("🚀 Anlık Takip ve Esnek TP Döngüsü Başlatıldı.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -419,7 +438,6 @@ def otomatik_arkaplan_tarayici():
             print("--------------------------------------------------", flush=True)
             print("🔄 Anlık tarama döngüsü başladı...", flush=True)
 
-            # BTC Trendini Anlık Olarak Kontrol Et
             btc_yonu = btc_trend_kontrolu()
             print(f"👑 BTC Anlık Trend Durumu: {btc_yonu}", flush=True)
 
@@ -462,10 +480,8 @@ def otomatik_arkaplan_tarayici():
                 except Exception as e:
                     print(f"⚠️ 1m acil kalkan hatası ({symbol}): {e}", flush=True)
 
-                if roe >= 35.0:
-                    pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *KÂR ALINDI (TP)*\n📌 `{symbol}` | Kâr: `+{pnl:.2f} USDT`", basarili=True, cezali_mi=False)
-                    continue
-                elif roe <= -20.0:
+                # Katı %35 yerine esnek dikey bariyer/TP kontrolü devrede
+                if roe <= -20.0:
                     pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT`", basarili=False, cezali_mi=True)
                     continue
 
@@ -481,7 +497,7 @@ def otomatik_arkaplan_tarayici():
 
                 bariyer_durum = dikey_bariyer_kontrol(veri_paketi, ohlcv)
                 if bariyer_durum["kapat_ilsi"]:
-                    pozisyonu_kapat(symbol, yon, kontrat, f"⏳ *DİKEY BARIYER ÇIKIŞI*\n📌 `{symbol}`\nSebep: `{bariyer_durum['neden']}`", basarili=True, cezali_mi=True)
+                    pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *ESNEK ÇIKIŞ / TP*\n📌 `{symbol}`\nSebep: `{bariyer_durum['neden']}`", basarili=True, cezali_mi=True)
 
             taranan_sinyaller = []
 
@@ -548,8 +564,6 @@ def otomatik_arkaplan_tarayici():
                     grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
                     sinyal_puani = temel_puan
 
-                # 👑 BTC TREND KONTROLÜ VE FİLTRESİ
-                # Eğer BTC net bir yöne (LONG veya SHORT) gidiyorsa, altcoin'in sinyali buna tersse iptal et!
                 if btc_yonu == "LONG" and grid_yonu == "SHORT":
                     print(f"   🛡️ BTC FİLTRESİ ENGelledİ: BTC long akarken [{symbol}] için SHORT sinyali reddedildi.", flush=True)
                     continue
