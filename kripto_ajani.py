@@ -156,8 +156,8 @@ def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id):
 def emir_defteri_derinlik_analizi(symbol, limit=30):
     try:
         order_book = exchange.fetch_order_book(symbol, limit=limit)
-        bids = order_book.get('bids', []) # Alışlar [fiyat, miktar]
-        asks = order_book.get('asks', []) # Satışlar [fiyat, miktar]
+        bids = order_book.get('bids', [])
+        asks = order_book.get('asks', [])
 
         if not bids or not asks:
             return "NEUTRAL", 50.0, "NORMAL", None, None
@@ -170,13 +170,10 @@ def emir_defteri_derinlik_analizi(symbol, limit=30):
             return "NEUTRAL", 50.0, "NORMAL", None, None
 
         alis_yuzdesi = (toplam_alis_hacmi / toplam_hacim) * 100
-        
         ortalama_kademe_hacmi = toplam_hacim / (len(bids) + len(asks))
-
-        # Balina Duvarı Tespiti (Ortalamanın 4 katı ve üzeri)
         duvar_esigi = ortalama_kademe_hacmi * 4
         
-        en_ yakin_satis_duvari = None
+        en_yakin_satis_duvari = None
         for ask_fiyat, ask_hacim in asks:
             if ask_hacim >= duvar_esigi:
                 en_yakin_satis_duvari = ask_fiyat
@@ -273,11 +270,9 @@ def hibrit_tp_sl_hesapla(df, giris_fiyati, yon, satis_duvari, alis_duvari):
         atr_sl_yuzde = max(0.015, 0.018 * faktor)
         
         if yon == 'LONG':
-            # --- HİBRİT TP (Satış Duvarı Kuralı) ---
             if satis_duvari and satis_duvari > giris_fiyati:
-                # Duvar fiyata çok yakınsa (%0.4'ten yakın) güvenli marj bırak, değilse duvarın hemen altı
                 duvar_tp_fiyat = satis_duvari * 0.999
-                min_mantikli_tp = giris_fiyati * 1.012 # En az %1.2 hedef
+                min_mantikli_tp = giris_fiyati * 1.012
                 if duvar_tp_fiyat > min_mantikli_tp:
                     tp_fiyat = duvar_tp_fiyat
                 else:
@@ -285,11 +280,9 @@ def hibrit_tp_sl_hesapla(df, giris_fiyati, yon, satis_duvari, alis_duvari):
             else:
                 tp_fiyat = giris_fiyati * (1 + atr_tp_yuzde)
 
-            # --- HİBRİT SL (Alış Duvarı / Destek Kuralı) ---
             if alis_duvari and alis_duvari < giris_fiyati:
-                # Destek duvarının biraz altı güvenli stop noktasıdır
                 duvar_sl_fiyat = alis_duvari * 0.997
-                max_mantikli_sl = giris_fiyati * 0.985 # Çok derinse ATR'ye dön
+                max_mantikli_sl = giris_fiyati * 0.985
                 if duvar_sl_fiyat > max_mantikli_sl:
                     sl_fiyat = duvar_sl_fiyat
                 else:
@@ -300,8 +293,7 @@ def hibrit_tp_sl_hesapla(df, giris_fiyati, yon, satis_duvari, alis_duvari):
             kapat_yon = 'sell'
             hedef_roe = ((tp_fiyat - giris_fiyati) / giris_fiyati) * 100 * KALDIRAC
 
-        else: # SHORT
-            # --- HİBRİT TP (Alış Duvarı Kuralı) ---
+        else:
             if alis_duvari and alis_duvari < giris_fiyati:
                 duvar_tp_fiyat = alis_duvari * 1.001
                 max_mantikli_tp = giris_fiyati * 0.988
@@ -312,7 +304,6 @@ def hibrit_tp_sl_hesapla(df, giris_fiyati, yon, satis_duvari, alis_duvari):
             else:
                 tp_fiyat = giris_fiyati * (1 - atr_tp_yuzde)
 
-            # --- HİBRİT SL (Satış Duvarı / Direnç Kuralı) ---
             if satis_duvari and satis_duvari > giris_fiyati:
                 duvar_sl_fiyat = satis_duvari * 1.003
                 min_mantikli_sl = giris_fiyati * 1.015
@@ -571,7 +562,6 @@ def otomatik_arkaplan_tarayici():
                     oi_degeri, oi_degisim = acik_pozisyon_oi_kontrolu(symbol)
                     if oi_degisim > 20.0: continue
 
-                    # 💡 30 KADEME DERİNLİK VE DUVAR TESPİTİ
                     book_durum, alis_orani, duvar_tipi, satis_duvari, alis_duvari = emir_defteri_derinlik_analizi(symbol, limit=30)
 
                     ticker = exchange.fetch_ticker(symbol)
@@ -661,7 +651,6 @@ def otomatik_arkaplan_tarayici():
                     
                     exchange.create_order(sinyal["symbol"], 'market', islem_yonu, miktar)
                     
-                    # 💡 HİBRİT TP VE SL HESAPLAMA ÇAĞRISI
                     tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = hibrit_tp_sl_hesapla(
                         sinyal["df"], giris_fiyati, sinyal["yon"], 
                         sinyal["satis_duvari"], sinyal["alis_duvari"]
