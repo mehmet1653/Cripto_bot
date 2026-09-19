@@ -297,63 +297,47 @@ def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True, cezali_mi=
     if sebep_mesaji: telegram_mesaj_gonder(sebep_mesaji)
 
 def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar, exchange_komisyon_orani=0.0006):
-    simdiki_zaman = time.time()
-    giris_zamani = pozisyon.get("giris_zamani", simdiki_zaman)
-    gecen_sure_dakika = (simdiki_zaman - giris_zamani) / 60
+    """Süre sınırlaması tamamen kaldırıldı. Sadece Ana TP ve Hacim Sönmesi/Momentum Bitmesi kontrol edilir."""
+    try:
+        islem_yonu = pozisyon.get("yon", "LONG")
+        giris_fiyati = pozisyon.get("giris_fiyati", 0)
+        anlik_fiyat = pozisyon.get("anlik_fiyat", giris_fiyati)
+        kaldirac = pozisyon.get("kaldirac", KALDIRAC)
 
-    # Süreyi 45 dakikadan 180 dakikaya (3 saate) çıkardık
-    maksimum_bekleme_suresi = pozisyon.get("max_sure_dakika", 180)
-    islem_yonu = pozisyon.get("yon", "LONG")
-    giris_fiyati = pozisyon.get("giris_fiyati", 0)
-    anlik_fiyat = pozisyon.get("anlik_fiyat", giris_fiyati)
-    kaldirac = pozisyon.get("kaldirac", KALDIRAC)
+        if islem_yonu == "LONG":
+            fiyat_degisim_yuzdesi = (anlik_fiyat - giris_fiyati) / giris_fiyati
+        else:
+            fiyat_degisim_yuzdesi = (giris_fiyati - anlik_fiyat) / giris_fiyati
 
-    if islem_yonu == "LONG":
-        fiyat_degisim_yuzdesi = (anlik_fiyat - giris_fiyati) / giris_fiyati
-    else:
-        fiyat_degisim_yuzdesi = (giris_fiyati - anlik_fiyat) / giris_fiyati
+        kaldiracli_roe = fiyat_degisim_yuzdesi * kaldirac * 100
 
-    kaldiracli_roe = fiyat_degisim_yuzdesi * kaldirac * 100
-    toplam_komisyon_maliyeti = exchange_komisyon_orani * 2 * kaldirac * 100
-
-    if kaldiracli_roe >= 32.0:
-        return {
-            "kapat_ilsi": True,
-            "neden": f"Ana TP (Hedef Fiyat) Patlatıldı! (ROE: %{kaldiracli_roe:.2f})"
-        }
-
-    if len(mevcut_mumlar) < 5:
-        return {"kapat_ilsi": False, "neden": "Yetersiz mum verisi."}
-
-    son_mumlar = mevcut_mumlar[-5:]
-    hacimler = [m[5] for m in son_mumlar]
-    govdeler = [abs(m[4] - m[1]) for m in son_mumlar]
-
-    hacim_dusuyor_mu = (hacimler[4] < hacimler[3]) and (hacimler[3] < hacimler[2])
-    mum_govdeleri_kuculuyor_mu = (govdeler[4] < govdeler[3]) and (govdeler[3] < govdeler[2])
-
-    if hacim_dusuyor_mu and mum_govdeleri_kuculuyor_mu and kaldiracli_roe >= 8.0:
-        return {
-            "kapat_ilsi": True,
-            "neden": f"Hacim Söndü, Erken TP / Kâr Alındı (ROE: %{kaldiracli_roe:.2f})"
-        }
-
-    if not (hacim_dusuyor_mu and mum_govdeleri_kuculuyor_mu):
-        return {"kapat_ilsi": False, "neden": "Hacim ve momentum canlı, pozisyon tutuluyor."}
-
-    if gecen_sure_dakika >= maksimum_bekleme_suresi:
-        if kaldiracli_roe >= (toplam_komisyon_maliyeti * 1.5):
+        # 1. Ana Hedef (TP) Kontrolü
+        if kaldiracli_roe >= 32.0:
             return {
                 "kapat_ilsi": True,
-                "neden": f"Dikey Bariyer Tetiklendi: 3 saatlik süre doldu, net kâr alındı (ROE: %{kaldiracli_roe:.2f})"
-            }
-        else:
-            return {
-                "kapat_ilsi": False,
-                "neden": "Süre doldu ancak kâr hedefin altında."
+                "neden": f"Ana TP (Hedef Fiyat) Patlatıldı! (ROE: %{kaldiracli_roe:.2f})"
             }
 
-    return {"kapat_ilsi": False, "neden": "Bekleme süresi henüz dolmadı."}
+        if len(mevcut_mumlar) < 5:
+            return {"kapat_ilsi": False, "neden": "Yetersiz mum verisi."}
+
+        son_mumlar = mevcut_mumlar[-5:]
+        hacimler = [m[5] for m in son_mumlar]
+        govdeler = [abs(m[4] - m[1]) for m in son_mumlar]
+
+        hacim_dusuyor_mu = (hacimler[4] < hacimler[3]) and (hacimler[3] < hacimler[2])
+        mum_govdeleri_kuculuyor_mu = (govdeler[4] < govdeler[3]) and (govdeler[3] < govdeler[2])
+
+        # 2. Hacim Sönmesi / Momentum Bitmesi Kontrolü (Yalnızca kârdayken)
+        if hacim_dusuyor_mu and mum_govdeleri_kuculuyor_mu and kaldiracli_roe >= 8.0:
+            return {
+                "kapat_ilsi": True,
+                "neden": f"Hacim Söndü, Erken TP / Kâr Alındı (ROE: %{kaldiracli_roe:.2f})"
+            }
+
+        return {"kapat_ilsi": False, "neden": "Trend ve hacim devam ediyor, pozisyon korunuyor."}
+    except Exception:
+        return {"kapat_ilsi": False, "neden": "Kontrol hatası."}
 
 # ==================== TELEGRAM KOMUTLARI ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -390,7 +374,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         btc_durum = btc_trend_kontrolu()
 
         mesaj = (
-            f"📊 **ANLIK FİYAT + 3 SAATLİK SABIR FİLTRESİ ({KALDIRAC}X)**\n\n"
+            f"📊 **ANLIK FİYAT + SÜRESİZ TREND TAKİBİ ({KALDIRAC}X)**\n\n"
             f"👑 BTC Ana Yönü: `{btc_durum}`\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"🟢 Anlık PnL: `{toplam_pnl:+.2f} USDT`\n"
@@ -409,7 +393,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
     BOT_CALISIYOR_MU = True
     GLOBAL_COOLDOWN_BITIS = 0.0
-    await update.message.reply_text("🟢 Bot Aktif, 3 Saatlik Sabır ve Katı Rüzgar Filtresi Devrede!")
+    await update.message.reply_text("🟢 Bot Aktif, Süresiz Trend Takibi ve Katı Rüzgar Filtresi Devrede!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -429,7 +413,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
-    print("🚀 3 Saatlik Sabır Filtresi Döngüsü Başlatıldı.", flush=True)
+    print("🚀 Süresiz Trend Takip Döngüsü Başlatıldı.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -448,7 +432,7 @@ def otomatik_arkaplan_tarayici():
                 continue
 
             print("--------------------------------------------------", flush=True)
-            print("🔄 3 saatlik sabır tarama döngüsü başladı...", flush=True)
+            print("🔄 Süresiz trend tarama döngüsü başladı...", flush=True)
 
             btc_yonu = btc_trend_kontrolu()
             print(f"👑 BTC Anlık Trend Durumu: {btc_yonu}", flush=True)
@@ -487,9 +471,7 @@ def otomatik_arkaplan_tarayici():
                     "yon": yon,
                     "giris_fiyati": merkez,
                     "anlik_fiyat": guncel_fiyat,
-                    "kaldirac": kaldirac_val,
-                    "giris_zamani": AKTIF_GRID_SISTEMLERI.get(symbol, {}).get("giris_zamani", time.time() - 600),
-                    "max_sure_dakika": 180
+                    "kaldirac": kaldirac_val
                 }
 
                 bariyer_durum = dikey_bariyer_kontrol(veri_paketi, ohlcv)
@@ -636,7 +618,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     print(f"⚡ BAŞARILI: İşlem Açıldı -> {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X, 3 SAAT SABIRLI)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
+                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X, SÜRESİZ TREND)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası ({sinyal['symbol']}): {e}", flush=True)
