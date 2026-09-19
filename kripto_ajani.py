@@ -190,17 +190,13 @@ def dinamik_tp_sl_hesapla(df, giris_fiyati, yon):
             return giris_fiyati * 0.965, giris_fiyati * 1.02, 'buy', 17.5
 
 def zamana_entegre_hacim_ve_egilim_kontrolu(df):
-    """Zamana bağlı hacim sürekliliği ve ani hareket süzgeci"""
     try:
         if len(df) < 5:
             return True
         
-        # Son 3 mumun hacim ortalaması ile genel ortalamayı kıyasla (Zamana yayılan güç)
         hacimler = df['volume'].iloc[-5:]
-        son_3_hacim_ort = hacimler.iloc[-3:].mean()
         genel_hacim_ort = hacimler.mean()
         
-        # Eğer hacim tek bir mumda devasa patlayıp diğerlerinde ölüyorsa suni iğnedir (False döndür)
         tek_mum_anormal_patlama = (hacimler.iloc[-1] > (genel_hacim_ort * 3.5)) and (hacimler.iloc[-2] < genel_hacim_ort)
         if tek_mum_anormal_patlama:
             return False
@@ -333,7 +329,7 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar, exchange_komisyon_orani=0.000
     govdeler = [abs(m[4] - m[1]) for m in son_mumlar]
 
     hacim_dusuyor_mu = (hacimler[4] < hacimler[3]) and (hacimler[3] < hacimler[2])
-    mum_govdeleri_kuculuyor_mu = (govdeler[4] < govdeler[3]) and (govdeler[3] < govdeler[2])
+    mum_govdeleri_kuculuyor_mu = (govdeler[4] < govdeler[3]) and (gourdeler[3] < govdeler[2] if 'gourdeler' in locals() else govdeler[3] < govdeler[2])
 
     if hacim_dusuyor_mu and mum_govdeleri_kuculuyor_mu and kaldiracli_roe >= 8.0:
         return {
@@ -393,7 +389,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         btc_durum = btc_trend_kontrolu()
 
         mesaj = (
-            f"📊 **ANLIK FİYAT + ZAMANA ENTEGRE FİLTRE ({KALDIRAC}X)**\n\n"
+            f"📊 **ANLIK FİYAT + KATILAŞTIRILMIŞ RÜZGAR FİLTRESİ ({KALDIRAC}X)**\n\n"
             f"👑 BTC Ana Yönü: `{btc_durum}`\n"
             f"💰 Toplam Kasa: `{total:.2f} USDT`\n"
             f"🟢 Anlık PnL: `{toplam_pnl:+.2f} USDT`\n"
@@ -412,7 +408,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
     BOT_CALISIYOR_MU = True
     GLOBAL_COOLDOWN_BITIS = 0.0
-    await update.message.reply_text("🟢 Bot Aktif, Zamana Entegre Hacim Filtresi ve Esnek TP Devrede!")
+    await update.message.reply_text("🟢 Bot Aktif, Katı Rüzgar Filtresi ve Esnek TP Devrede!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -432,7 +428,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
-    print("🚀 Zamana Entegre Filtreleme Döngüsü Başlatıldı.", flush=True)
+    print("🚀 Katılaştırılmış Rüzgar Filtresi Döngüsü Başlatıldı.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -451,7 +447,7 @@ def otomatik_arkaplan_tarayici():
                 continue
 
             print("--------------------------------------------------", flush=True)
-            print("🔄 Zamana entegre tarama döngüsü başladı...", flush=True)
+            print("🔄 Katı filtreleme tarama döngüsü başladı...", flush=True)
 
             btc_yonu = btc_trend_kontrolu()
             print(f"👑 BTC Anlık Trend Durumu: {btc_yonu}", flush=True)
@@ -528,7 +524,6 @@ def otomatik_arkaplan_tarayici():
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-                    # ZAMANA ENTEGRE HACİM VE İĞNE SÜZGECİ
                     if not zamana_entegre_hacim_ve_egilim_kontrolu(df):
                         print(f"   🛡️ ZAMANA ENTEGRE FİLTRE [{symbol}]: Suni mum hareketi / ani iğne tespit edildi, es geçildi.", flush=True)
                         continue
@@ -583,11 +578,14 @@ def otomatik_arkaplan_tarayici():
                     mevcut_yon = str(mevcut_pos.get('side', '')).upper()
                     mevcut_kontrat = float(mevcut_pos.get('contracts', 0) or mevcut_pos.get('size', 0) or 1.0)
                     
-                    ema_makas_tersi = (ema5 < ema13) if mevcut_yon == "LONG" else (ema5 > ema13)
+                    # KATILAŞTIRILMIŞ RÜZGAR TERSİNE DÖNDÜ FİLTRESİ:
+                    # Artık sadece EMA kesişmesi yetmez; kesin tersine dönüş için skorun 90+ olması ve son 2 mumun tam ters yönü kapatması şart!
+                    son_iki_mum_ters_mi = (df['close'].iloc[-2] < df['open'].iloc[-2]) and (df['close'].iloc[-3] < df['open'].iloc[-3]) if mevcut_yon == "LONG" else (df['close'].iloc[-2] > df['open'].iloc[-2]) and (df['close'].iloc[-3] > df['open'].iloc[-3])
+                    ema_makas_kesin_tersi = (ema5 < ema13) if mevcut_yon == "LONG" else (ema5 > ema13)
                     
-                    if sinyal_puani >= 85 and mevcut_yon != grid_yonu and ema_makas_tersi:
-                        print(f"🔄 Rüzgar Kesin Olarak Tersine Döndü! {symbol} pozisyonu kapatılıyor...", flush=True)
-                        pozisyonu_kapat(symbol, mevcut_yon, mevcut_kontrat, f"🔄 *RÜZGAR TERSİNE DÖNDÜ*\n📌 `{symbol}` | Pozisyon kapatıldı.", basarili=False, cezali_mi=True)
+                    if sinyal_puani >= 90 and mevcut_yon != grid_yonu and ema_makas_kesin_tersi and son_iki_mum_ters_mi:
+                        print(f"🔄 Rüzgar Kesin Olarak Tersine Döndü (Katı Onay)! {symbol} pozisyonu kapatılıyor...", flush=True)
+                        pozisyonu_kapat(symbol, mevcut_yon, mevcut_kontrat, f"🔄 *RÜZGAR KESİN TERSİNE DÖNDÜ*\n📌 `{symbol}` | Pozisyon kapatıldı.", basarili=False, cezali_mi=True)
                         aktif_borsa_map.pop(symbol, None)
                         continue
 
@@ -639,7 +637,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     print(f"⚡ BAŞARILI: İşlem Açıldı -> {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X, ZAMANA ENTEGRE)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
+                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X, KATI FİLTRELİ)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası ({sinyal['symbol']}): {e}", flush=True)
