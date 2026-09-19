@@ -186,7 +186,6 @@ def dinamik_tp_sl_hesapla(df, giris_fiyati, yon):
             return giris_fiyati * 0.965, giris_fiyati * 1.02, 'buy', 17.5
 
 def btc_trend_kontrolu():
-    """BTC ana yönünü kontrol eder: 'LONG', 'SHORT' veya 'NOTR' döner."""
     try:
         ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=30)
         df_btc = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -278,12 +277,6 @@ def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True, cezali_mi=
     if sebep_mesaji: telegram_mesaj_gonder(sebep_mesaji)
 
 def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar, exchange_komisyon_orani=0.0006):
-    """
-    ESNEK TP (HEDEF FİYAT) VE MOMENTUM BAZLI ÇIKIŞ KONTROLÜ:
-    1. Güçlü trendde %32+ Ana TP hedefini zorlar.
-    2. Hedefe varılamasa bile momentum erkenden bittiyse ve kâr %8+ ise erken kâr alarak çıkar.
-    3. Momentum çok zayıfsa güvenli çıkış sağlar.
-    """
     simdiki_zaman = time.time()
     giris_zamani = pozisyon.get("giris_zamani", simdiki_zaman)
     gecen_sure_dakika = (simdiki_zaman - giris_zamani) / 60
@@ -302,7 +295,6 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar, exchange_komisyon_orani=0.000
     kaldiracli_roe = fiyat_degisim_yuzdesi * kaldirac * 100
     toplam_komisyon_maliyeti = exchange_komisyon_orani * 2 * kaldirac * 100
 
-    # 1. Ana TP (Take Profit / Hedef Fiyat) Tavanı
     if kaldiracli_roe >= 32.0:
         return {
             "kapat_ilsi": True,
@@ -319,7 +311,6 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar, exchange_komisyon_orani=0.000
     hacim_dusuyor_mu = (hacimler[4] < hacimler[3]) and (hacimler[3] < hacimler[2])
     mum_govdeleri_kuculuyor_mu = (govdeler[4] < govdeler[3]) and (govdeler[3] < govdeler[2])
 
-    # 2. Erken Momentum Bitişi / Esnek TP (%8+ kâr ve momentum kaybı)
     if hacim_dusuyor_mu and mum_govdeleri_kuculuyor_mu and kaldiracli_roe >= 8.0:
         return {
             "kapat_ilsi": True,
@@ -397,7 +388,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
     BOT_CALISIYOR_MU = True
     GLOBAL_COOLDOWN_BITIS = 0.0
-    await update.message.reply_text("🟢 Bot Aktif, Esnek TP + BTC Trend Filtresi Devrede!")
+    await update.message.reply_text("🟢 Bot Aktif, Esnek TP + Kararlı Rüzgar Filtresi Devrede!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -417,7 +408,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
-    print("🚀 Anlık Takip ve Esnek TP Döngüsü Başlatıldı.", flush=True)
+    print("🚀 Anlık Takip ve Kararlı Filtre Döngüsü Başlatıldı.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -480,7 +471,6 @@ def otomatik_arkaplan_tarayici():
                 except Exception as e:
                     print(f"⚠️ 1m acil kalkan hatası ({symbol}): {e}", flush=True)
 
-                # Katı %35 yerine esnek dikey bariyer/TP kontrolü devrede
                 if roe <= -20.0:
                     pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | Zarar: `{pnl:.2f} USDT`", basarili=False, cezali_mi=True)
                     continue
@@ -536,7 +526,7 @@ def otomatik_arkaplan_tarayici():
                     atr = atr_ve_volatilite_hesapla(df)
 
                     son_kapanan_close = df['close'].iloc[-2]
-                    son_kapanan_open = df['open'].iloc[-2]
+                    son_kapanan_open = df['open'].iloc[-1]
                     onceki_kapanan_close = df['close'].iloc[-3]
                     onceki_kapanan_open = df['open'].iloc[-3]
 
@@ -576,10 +566,13 @@ def otomatik_arkaplan_tarayici():
                 if symbol in aktif_borsa_map:
                     mevcut_pos = aktif_borsa_map[symbol]
                     mevcut_yon = str(mevcut_pos.get('side', '')).upper()
-                    mevcut_kontrat = float(mevcut_pos.get('contracts', 0) or mevut_pos.get('size', 0) or 1.0)
+                    mevcut_kontrat = float(mevcut_pos.get('contracts', 0) or mevcut_pos.get('size', 0) or 1.0)
                     
-                    if sinyal_puani >= 70 and mevcut_yon != grid_yonu:
-                        print(f"🔄 Rüzgar Tersine Döndü! {symbol} pozisyonu kapatılıyor...", flush=True)
+                    # KARARLI RÜZGAR FİLTRESİ: Sadece skor yetmez, EMA makası ve 85+ puan şartı aranır.
+                    ema_makas_tersi = (ema5 < ema13) if mevcut_yon == "LONG" else (ema5 > ema13)
+                    
+                    if sinyal_puani >= 85 and mevcut_yon != grid_yonu and ema_makas_tersi:
+                        print(f"🔄 Rüzgar Kesin Olarak Tersine Döndü! {symbol} pozisyonu kapatılıyor...", flush=True)
                         pozisyonu_kapat(symbol, mevcut_yon, mevcut_kontrat, f"🔄 *RÜZGAR TERSİNE DÖNDÜ*\n📌 `{symbol}` | Pozisyon kapatıldı.", basarili=False, cezali_mi=True)
                         aktif_borsa_map.pop(symbol, None)
                         continue
