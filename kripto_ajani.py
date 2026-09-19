@@ -172,7 +172,6 @@ def fonlama_orani_analizi(symbol, yon):
         return 2, "Fonlama okunamadı"
 
 def coklu_zaman_dilimi_trend_kontrolu(symbol, yon):
-    """1 saatlik (1h) büyük resmin sinyal yönümüzü destekleyip desteklemediğini kontrol eder."""
     try:
         ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=20)
         df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -188,6 +187,22 @@ def coklu_zaman_dilimi_trend_kontrolu(symbol, yon):
         return True, "1h büyük resim onaylandı"
     except Exception:
         return True, "1h kontrolü atlandı (hata)"
+
+def btc_trend_kontrolu():
+    """Kritik BTC Ana Yön Filtresi"""
+    try:
+        ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=30)
+        df_btc = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        ema5_btc = ta.trend.ema_indicator(df_btc['close'], window=5).iloc[-1]
+        ema13_btc = ta.trend.ema_indicator(df_btc['close'], window=13).iloc[-1]
+        adx_btc = ta.trend.ADXIndicator(df_btc['high'], df_btc['low'], df_btc['close'], window=14).adx().iloc[-1]
+        
+        if adx_btc >= 25:
+            if ema5_btc > ema13_btc: return "LONG"
+            elif ema5_btc < ema13_btc: return "SHORT"
+        return "NOTR"
+    except Exception:
+        return "NOTR"
 
 def dinamik_tp_sl_hesapla(df, giris_fiyati, yon):
     try:
@@ -229,20 +244,6 @@ def zamana_entegre_hacim_ve_egilim_kontrolu(df):
         return True
     except Exception:
         return True
-
-def btc_trend_kontrolu():
-    try:
-        ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=30)
-        df_btc = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        ema5_btc = ta.trend.ema_indicator(df_btc['close'], window=5).iloc[-1]
-        ema13_btc = ta.trend.ema_indicator(df_btc['close'], window=13).iloc[-1]
-        adx_btc = ta.trend.ADXIndicator(df_btc['high'], df_btc['low'], df_btc['close'], window=14).adx().iloc[-1]
-        if adx_btc >= 25:
-            if ema5_btc > ema13_btc: return "LONG"
-            elif ema5_btc < ema13_btc: return "SHORT"
-        return "NOTR"
-    except Exception:
-        return "NOTR"
 
 def acik_pozisyon_oi_kontrolu(symbol):
     try:
@@ -360,7 +361,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  PnL: `{pnl_val:+.2f} USDT` (`%{roe:+.2f}`)"
 
         mesaj = (
-            f"📊 **MTF + FONLAMA + 75 PUAN FİLTRELİ ({KALDIRAC}X)**\n\n"
+            f"📊 **BTC FİLTRELİ + MTF + 75 PUAN ({KALDIRAC}X)**\n\n"
             f"👑 BTC Yönü: `{btc_trend_kontrolu()}`\n"
             f"💰 Kasa: `{total:.2f} USDT` | PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"🛡️ Sigorta: `{global_durum}`\n"
@@ -377,7 +378,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
     BOT_CALISIYOR_MU = True
     GLOBAL_COOLDOWN_BITIS = 0.0
-    await update.message.reply_text("🟢 Bot Aktif, 1h MTF ve 75 Puan Eşiği Devrede!")
+    await update.message.reply_text("🟢 Bot Aktif, BTC Trend Koruması, 1h MTF ve 75 Puan Eşiği Devrede!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -397,7 +398,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ARKA PLAN TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
-    print("🚀 MTF Destekli Süresiz Trend Döngüsü Başlatıldı.", flush=True)
+    print("🚀 BTC Filtreli & MTF Destekli Süresiz Trend Döngüsü Başlatıldı.", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -413,6 +414,7 @@ def otomatik_arkaplan_tarayici():
                 time.sleep(15)
                 continue
 
+            # BTC Ana Trend Kontrolü
             btc_yonu = btc_trend_kontrolu()
 
             try:
@@ -490,16 +492,20 @@ def otomatik_arkaplan_tarayici():
                 else:
                     grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
 
-                # 1. Saatlik MTF (Büyük Resim) Filtresi
+                # 👑 BTC Trend Filtresi (Akıntıya Karşı İşlem Engeli)
+                if btc_yonu == "LONG" and grid_yonu == "SHORT": 
+                    continue
+                elif btc_yonu == "SHORT" and grid_yonu == "LONG": 
+                    continue
+
+                # 1 Saatlik MTF (Büyük Resim) Filtresi
                 mtf_onay, mtf_mesaj = coklu_zaman_dilimi_trend_kontrolu(symbol, grid_yonu)
                 if not mtf_onay:
-                    print(f"   🛡️ MTF FİLTRESİ ENGELLEDİ [{symbol}]: {mtf_mesaj}", flush=True)
                     continue
 
                 # Fonlama Oranı Analizi
                 fonlama_puani, fonlama_mesaji = fonlama_orani_analizi(symbol, grid_yonu)
                 if fonlama_puani == 0:
-                    print(f"   🛡️ FONLAMA FİLTRESİ ENGELLEDİ [{symbol}]: {fonlama_mesaji}", flush=True)
                     continue
 
                 temel_puan = 70 if adx_val >= 28 else 40
@@ -507,9 +513,6 @@ def otomatik_arkaplan_tarayici():
                 formasyon_bonus = 10
 
                 sinyal_puani = temel_puan + formasyon_bonus + anlik_momentum_bonus + fonlama_puani
-
-                if btc_yonu == "LONG" and grid_yonu == "SHORT": continue
-                elif btc_yonu == "SHORT" and grid_yonu == "LONG": continue
 
                 if symbol in aktif_borsa_map:
                     mevcut_pos = aktif_borsa_map[symbol]
@@ -567,7 +570,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     print(f"⚡ BAŞARILI: İşlem Açıldı -> {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X, MTF & 75+ ONAYLI)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}`")
+                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X, BTC + MTF + 75+ ONAYLI)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası ({sinyal['symbol']}): {e}", flush=True)
