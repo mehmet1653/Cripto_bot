@@ -532,6 +532,7 @@ def otomatik_arkaplan_tarayici():
                     if cooldown_veri:
                         zaman_kontrol = cooldown_veri.get("zaman", 0) if isinstance(cooldown_veri, dict) else float(cooldown_veri)
                         if (zaman_kontrol - time.time()) > 0:
+                            print(f"⏳ Cooldown Aktif: {symbol} (Kalan: {int(zaman_kontrol - time.time())} sn)", flush=True)
                             continue
 
                 try:
@@ -576,6 +577,9 @@ def otomatik_arkaplan_tarayici():
                     derinlik_bonus = 5 if (grid_yonu == "LONG" and book_durum == "BUY_PRESSURE") or (grid_yonu == "SHORT" and book_durum == "SELL_PRESSURE") else 0
 
                     sinyal_puani = temel_puan + anlik_momentum_bonus + fonlama_puani + derinlik_bonus - ceza_puani
+
+                    # HER COİNİN ANALİZ SONUCUNU LOGA BAS
+                    print(f"🔍 [ANALİZ] {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} (Temel: {temel_puan}, Ceza: {ceza_puani}) | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
 
                     taranan_sinyaller.append({
                         "symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, 
