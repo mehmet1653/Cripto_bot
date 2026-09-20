@@ -143,15 +143,6 @@ def yapay_zekayi_egit_ve_guncelle():
     except Exception:
         ai_model_egitildi = False
 
-def yapay_zeka_islem_onayi(rsi, adx, ema_fark, yon_kod, atr_yuzde, coin_id):
-    if not ai_model_egitildi: return True
-    try:
-        olasiliklar = ai_model.predict_proba(np.array([[float(rsi), float(adx), float(ema_fark), int(yon_kod), float(atr_yuzde), int(coin_id)]]))[0]
-        classes = list(ai_model.classes_)
-        return (olasiliklar[classes.index(1)] if 1 in classes else 1.0) >= 0.50
-    except Exception:
-        return True
-
 def emir_defteri_derinlik_analizi(symbol, limit=30):
     try:
         order_book = exchange.fetch_order_book(symbol, limit=limit)
@@ -648,7 +639,7 @@ def otomatik_arkaplan_tarayici():
                     continue
 
             # ========================================================
-            # 3. YENİ İŞLEM AÇMA (ÇİFT POZİSYON VE SPAM KİLİTLİ)
+            # 3. YENİ İŞLEM AÇMA (ESNEK ESNEK BÜTÇE & SPAM / ÇİFT POZİSYON KİLİTLİ)
             # ========================================================
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
@@ -665,10 +656,26 @@ def otomatik_arkaplan_tarayici():
                 if sinyal["puan"] < 50: continue
 
                 try:
-                    toplam_bakiye = float(exchange.fetch_balance()['total'].get('USDT', 0))
+                    bakiye_bilgisi = exchange.fetch_balance()
+                    toplam_bakiye = float(bakiye_bilgisi['total'].get('USDT', 0))
+                    serbest_bakiye = float(bakiye_bilgisi.get('free', {}).get('USDT', 0) or bakiye_bilgisi.get('USDT', {}).get('free', 0) or toplam_bakiye)
+
                     exchange.set_leverage(KALDIRAC, sinyal["symbol"])
                     market = exchange.market(sinyal["symbol"])
-                    miktar = float(exchange.amount_to_precision(sinyal["symbol"], max((toplam_bakiye * 0.20 * KALDIRAC) / sinyal["fiyat"] / float(market.get('contractSize', 1.0)), float(market['limits']['amount']['min'] or 1.0))))
+                    
+                    # Hedef %20 ama serbest bakiye durumuna göre esnek (%20 ila kalan serbest paranın tamamı)
+                    hedef_butce = toplam_bakiye * 0.20
+                    kullanilacak_tutar = min(max(hedef_butce, serbest_bakiye * 0.95), serbest_bakiye)
+                    
+                    if kullanilacak_tutar < 1.0:
+                        print(f"⚠️ Serbest bakiye işlem için çok düşük ({kullanilacak_tutar:.2f} USDT), pas geçiliyor.", flush=True)
+                        continue
+
+                    miktar = float(exchange.amount_to_precision(
+                        sinyal["symbol"], 
+                        max((kullanilacak_tutar * KALDIRAC) / sinyal["fiyat"] / float(market.get('contractSize', 1.0)), 
+                        float(market['limits']['amount']['min'] or 1.0))
+                    ))
                     
                     islem_yonu = 'buy' if sinyal["yon"] == 'LONG' else 'sell'
                     giris_fiyati = sinyal["fiyat"]
