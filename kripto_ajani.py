@@ -477,13 +477,27 @@ def otomatik_arkaplan_tarayici():
                 aktif_semboller_listesi = []
 
             # ========================================================
-            # 0. AÇIK EMİR KONTROLÜ VE SENKRODİZASYON
+            # 0. AÇIK EMİR KONTROLÜ VE TP/SL GERÇEKLEŞME TAKİBİ
             # ========================================================
             try:
+                anlik_aktif_semboller = [p['symbol'] for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
+                
+                for eski_sym in list(AKTIF_GRID_SISTEMLERI.keys()):
+                    if eski_sym not in anlik_aktif_semboller:
+                        print(f"🎯 Pozisyon kapanışı algılandı (TP/SL tetiklenmiş olabilir) -> {eski_sym}", flush=True)
+                        with state_lock:
+                            bas_sayi = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0))
+                            ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi + 1
+                            COIN_COOLDOWNLAR[eski_sym] = {"zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), "son_yon": "LONG"}
+                            if eski_sym in AKTIF_GRID_SISTEMLERI:
+                                del AKTIF_GRID_SISTEMLERI[eski_sym]
+                        hafizayi_kaydet()
+                        telegram_mesaj_gonder(f"✅ *POZİSYON KAPANDI (TP/SL Tetiklendi)*\n📌 `{eski_sym}` | Cooldown süresi başlatıldı.")
+                        
                 tum_acik_emirler = exchange.fetch_open_orders()
                 for emir in tum_acik_emirler:
                     emir_sembol = emir.get('symbol')
-                    if emir_sembol and emir_sembol not in aktif_semboller_listesi:
+                    if emir_sembol and emir_sembol not in anlik_aktif_semboller:
                         try:
                             exchange.cancel_order(emir['id'], emir_sembol)
                             print(f"🧹 Asılı/Sahipsiz açık emir temizlendi -> {emir_sembol} (ID: {emir['id']})", flush=True)
