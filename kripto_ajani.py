@@ -235,30 +235,24 @@ def coklu_zaman_dilimi_trend_kontrolu(symbol, yon):
 
 def btc_trend_kontrolu():
     try:
-        # GÜÇLENDİRİLMİŞ UZUN VADELİ BTC FİLTRESİ (1 Saatlik Ana Trend + 15m Teyit + ADX Gücü)
-        # 1. 1 Saatlik (1h) Büyük Resim Trendi
         ohlcv_btc_1h = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=30)
         df_btc_1h = pd.DataFrame(ohlcv_btc_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         ema9_1h = ta.trend.ema_indicator(df_btc_1h['close'], window=9).iloc[-1]
         ema21_1h = ta.trend.ema_indicator(df_btc_1h['close'], window=21).iloc[-1]
         adx_1h = ta.trend.ADXIndicator(df_btc_1h['high'], df_btc_1h['low'], df_btc_1h['close'], window=14).adx().iloc[-1]
 
-        # 2. 15 Dakikalık (15m) Kısa Resim Teyidi
         ohlcv_btc_15m = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=20)
         df_btc_15m = pd.DataFrame(ohlcv_btc_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         ema5_15m = ta.trend.ema_indicator(df_btc_15m['close'], window=5).iloc[-1]
         ema13_15m = ta.trend.ema_indicator(df_btc_15m['close'], window=13).iloc[-1]
 
-        # Kesin Long / Short Kararı İçin Şartlar:
-        # - 1h ADX 22'nin üzerindeyse piyasada net bir trend vardır (testereden kaçınmak için).
-        # - Hem 1h EMA'lar hem de 15m EMA'lar aynı yönü kesin olarak desteklemelidir.
         if adx_1h >= 22:
             if ema9_1h > ema21_1h and ema5_15m > ema13_15m:
                 return "LONG"
             elif ema9_1h < ema21_1h and ema5_15m < ema13_15m:
                 return "SHORT"
                 
-        return "NOTR" # Kararsız, yatay veya testere piyasa (emin olana kadar sinyal verilmez/kapatılmaz)
+        return "NOTR"
     except Exception:
         return "NOTR"
 
@@ -343,7 +337,6 @@ def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True, cezali_mi=
         ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
         ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
 
-        # Her kapanışta coin kesinlikle cooldown'a alınır
         COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), "son_yon": yon}
 
         if symbol in AKTIF_GRID_SISTEMLERI: del AKTIF_GRID_SISTEMLERI[symbol]
@@ -547,16 +540,14 @@ def otomatik_arkaplan_tarayici():
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
                 
+                # --- KATI COOLDOWN KONTROLÜ (İstisnasız) ---
                 with state_lock:
                     cooldown_veri = COIN_COOLDOWNLAR.get(symbol)
                     if cooldown_veri:
                         zaman_kontrol = cooldown_veri.get("zaman", 0) if isinstance(cooldown_veri, dict) else float(cooldown_veri)
                         if (zaman_kontrol - time.time()) > 0:
-                            devam_et_izni = False
-                        else:
-                            devam_et_izni = True
-                    else:
-                        devam_et_izni = True
+                            print(f"⏳ {symbol} cooldown süresinde, puanı ne olursa olsun atlanıyor.", flush=True)
+                            continue
 
                 try:
                     print(f"🔍 Taranıyor: {symbol}", flush=True)
@@ -602,10 +593,6 @@ def otomatik_arkaplan_tarayici():
 
                     sinyal_puani = temel_puan + anlik_momentum_bonus + fonlama_puani + derinlik_bonus - ceza_puani
                     print(f"📊 {symbol} Puanı: {sinyal_puani} (Yön: {grid_yonu})", flush=True)
-
-                    if not devam_et_izni and sinyal_puani < 95:
-                        print(f"⏳ Cooldown süresinde ve puanı (<95) yetersiz: {symbol}", flush=True)
-                        continue
 
                     if symbol not in aktif_borsa_map:
                         ai_onay = yapay_zeka_islem_onayi(rsi, adx_val, float(ema5 - ema13), (1 if grid_yonu == 'LONG' else -1), atr, COIN_ID_MAP.get(symbol, 0))
