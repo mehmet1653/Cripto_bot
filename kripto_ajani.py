@@ -122,7 +122,7 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {"basarili_islem_sayisi": 0, "basa
 COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
 MAKSIMUM_TOPLAM_POZISYON = 3
-COOLDOWN_SURESI_SANIYE = 20 * 60
+COOLDOWN_SURESI_SANIYE = 25 * 60  # 25 Dakika Bekleme Süresi
 
 ai_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
 ai_model_egitildi = False
@@ -506,50 +506,10 @@ def otomatik_arkaplan_tarayici():
             except Exception as eo_err:
                 print(f"⚠️ Açık emirler kontrol edilirken hata: {eo_err}", flush=True)
 
-            # ========================================================
-            # 1. ÖNCELİKLİ ANLIK POZİSYON YÖNETİMİ & BREAK-EVEN KORUMA
-            # ========================================================
-            for symbol, pos in list(aktif_borsa_map.items()):
-                try:
-                    yon = str(pos.get('side', '')).upper()
-                    if not yon:
-                        size_val = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
-                        yon = "LONG" if size_val > 0 else "SHORT"
-
-                    merkez = float(pos.get('entryPrice', 0) or 0)
-                    if merkez <= 0: continue
-
-                    kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 1.0)
-                    kaldirac_val = int(pos.get('leverage', KALDIRAC))
-                    
-                    guncel_fiyat = float(exchange.fetch_ticker(symbol)['last'])
-                    
-                    if yon == "LONG":
-                        fark_yuzdesi = (guncel_fiyat - merkez) / merkez
-                    else:
-                        fark_yuzdesi = (merkez - guncel_fiyat) / merkez
-                        
-                    roe = fark_yuzdesi * 100 * kaldirac_val
-
-                    if roe <= -18.0:
-                        pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | ROE: `%{roe:.2f}`", basarili=False, cezali_mi=True)
-                        continue
-
-                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=20)
-                    veri_paketi = {"symbol": symbol, "yon": yon, "giris_fiyati": merkez, "anlik_fiyat": guncel_fiyat, "kaldirac": kaldirac_val}
-                    bariyer_durum = dikey_bariyer_kontrol(veri_paketi, ohlcv)
-                    
-                    if bariyer_durum["kapat_ilsi"] and roe < -4.0:
-                        pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *ACİL ÇIKIŞ / KÂR AL*\n📌 `{symbol}`\nSebep: `{bariyer_durum['neden']}`", basarili=(roe > 0), cezali_mi=True)
-                        
-                except Exception as e:
-                    print(f"⚠️ Pozisyon yönetimi hata ({symbol}): {e}", flush=True)
-                    continue
-
             taranan_sinyaller = []
 
             # ========================================================
-            # 2. 5 DAKİKALIK HIZLI COİN TARAMA VE GİRİŞ ANALİZİ
+            # 2. 5 DAKİKALIK HIZLI COİN TARAMA VE GİRİŞ ANALİZİ (Önce Taranıyor)
             # ========================================================
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
@@ -608,20 +568,71 @@ def otomatik_arkaplan_tarayici():
                     sinyal_puani = temel_puan + anlik_momentum_bonus + fonlama_puani + derinlik_bonus - ceza_puani
                     print(f"📊 {symbol} Puanı: {sinyal_puani} (Yön: {grid_yonu})", flush=True)
 
-                    if symbol not in aktif_borsa_map:
-                        ai_onay = yapay_zeka_islem_onayi(rsi, adx_val, float(ema5 - ema13), (1 if grid_yonu == 'LONG' else -1), atr, COIN_ID_MAP.get(symbol, 0))
-                        if not ai_onay: sinyal_puani -= 10
-
-                        taranan_sinyaller.append({
-                            "symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, 
-                            "rsi": rsi, "adx": adx_val, "ema_fark": float(ema5 - ema13), 
-                            "fiyat": anlik_fiyat, "atr": atr, "df": df,
-                            "satis_duvari": satis_duvari, "alis_duvari": alis_duvari
-                        })
+                    # Taranan sinyallere ekliyoruz (aktif pozisyon kontrolünde kullanmak üzere)
+                    taranan_sinyaller.append({
+                        "symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, 
+                        "rsi": rsi, "adx": adx_val, "ema_fark": float(ema5 - ema13), 
+                        "fiyat": anlik_fiyat, "atr": atr, "df": df,
+                        "satis_duvari": satis_duvari, "alis_duvari": alis_duvari
+                    })
                 except Exception as ex:
                     print(f"⚠️ Coin tarama hatası ({symbol}): {ex}", flush=True)
                     continue
 
+            # ========================================================
+            # 1. ANLIK POZİSYON YÖNETİMİ & BTC NÖTR + GÜÇLÜ TERS SİNYAL KONTROLÜ
+            # ========================================================
+            for symbol, pos in list(aktif_borsa_map.items()):
+                try:
+                    yon = str(pos.get('side', '')).upper()
+                    if not yon:
+                        size_val = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
+                        yon = "LONG" if size_val > 0 else "SHORT"
+
+                    merkez = float(pos.get('entryPrice', 0) or 0)
+                    if merkez <= 0: continue
+
+                    kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 1.0)
+                    kaldirac_val = int(pos.get('leverage', KALDIRAC))
+                    guncel_fiyat = float(exchange.fetch_ticker(symbol)['last'])
+                    
+                    if yon == "LONG":
+                        fark_yuzdesi = (guncel_fiyat - merkez) / merkez
+                    else:
+                        fark_yuzdesi = (merkez - guncel_fiyat) / merkez
+                        
+                    roe = fark_yuzdesi * 100 * kaldirac_val
+
+                    # Klasik SL kontrolü
+                    if roe <= -18.0:
+                        pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | ROE: `%{roe:.2f}`", basarili=False, cezali_mi=True)
+                        continue
+
+                    # --- YENİ EKLENEN KURAL: BTC NÖTR + GÜÇLÜ TERS SİNYAL (>=70 PUAN) ---
+                    if btc_yonu == "NOTR" and yon == "LONG":
+                        # Bu coin için az önce taranan sinyaller arasında güçlü bir SHORT sinyali var mı bakalım
+                        ilgili_sinyal = next((s for s in taranan_sinyaller if s["symbol"] == symbol and s["yon"] == "SHORT" and s["puan"] >= 70), None)
+                        if ilgili_sinyal:
+                            if roe >= 0.0:  # Kârda veya başa baş ise hemen kapat ve cooldown başlat
+                                pozisyonu_kapat(symbol, yon, kontrat, f"🛡️ *BTC NÖTR + GÜÇLÜ TERS SİNYAL KORUMASI*\n📌 `{symbol}` | Yön: `LONG` kapatıldı.\nSebep: BTC Nötrken `>=70` puanlık Short sinyali geldi.\n💰 Kapatıldığı Anki ROE: `%{roe:.2f}`", basarili=True, cezali_mi=False)
+                                continue
+
+                    # Dikey bariyer ve mum kırılım kontrolleri
+                    current_coin_df = next((s["df"] for s in taranan_sinyaller if s["symbol"] == symbol), None)
+                    if current_coin_df is not None:
+                        veri_paketi = {"symbol": symbol, "yon": yon, "giris_fiyati": merkez, "anlik_fiyat": guncel_fiyat, "kaldirac": kaldirac_val}
+                        bariyer_durum = dikey_bariyer_kontrol(veri_paketi, current_coin_df)
+                        
+                        if bariyer_durum["kapat_ilsi"] and roe < -4.0:
+                            pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *ACİL ÇIKIŞ / KÂR AL*\n📌 `{symbol}`\nSebep: `{bariyer_durum['neden']}`", basarili=(roe > 0), cezali_mi=True)
+                        
+                except Exception as e:
+                    print(f"⚠️ Pozisyon yönetimi hata ({symbol}): {e}", flush=True)
+                    continue
+
+            # ========================================================
+            # 3. YENİ İŞLEM AÇMA MANTIĞI
+            # ========================================================
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
             for sinyal in taranan_sinyaller:
