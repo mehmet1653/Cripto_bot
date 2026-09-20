@@ -122,7 +122,7 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {"basarili_islem_sayisi": 0, "basa
 COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
 MAKSIMUM_TOPLAM_POZISYON = 3
-COOLDOWN_SURESI_SANIYE = 25 * 60  # 25 Dakika Bekleme Süresi
+COOLDOWN_SURESI_SANIYE = 25 * 60  # 25 Dakika
 
 ai_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
 ai_model_egitildi = False
@@ -477,7 +477,7 @@ def otomatik_arkaplan_tarayici():
                 aktif_semboller_listesi = []
 
             # ========================================================
-            # 0. AÇIK EMİR KONTROLÜ VE TP/SL GERÇEKLEŞME TAKİBİ
+            # 0. AÇIK EMİR KONTROLÜ VE TP/SL GERÇEKLEŞME TAKİBİ (DÜZELTİLDİ)
             # ========================================================
             try:
                 anlik_aktif_semboller = [p['symbol'] for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
@@ -485,14 +485,40 @@ def otomatik_arkaplan_tarayici():
                 for eski_sym in list(AKTIF_GRID_SISTEMLERI.keys()):
                     if eski_sym not in anlik_aktif_semboller:
                         print(f"🎯 Pozisyon kapanışı algılandı (TP/SL tetiklenmiş olabilir) -> {eski_sym}", flush=True)
+                        
+                        # GERÇEKLEŞEN PNL KONTROLÜ (Gerçek kârda mı zararda mı kapandı?)
+                        islem_karli_mi = True  # Varsayılan
+                        try:
+                            # Kapalı işlem geçmişinden son kâr/zarar durumunu alalım
+                            income_history = exchange.fetch_income(eski_sym, limit=5)
+                            if income_history:
+                                son_gelir = income_history[-1]
+                                realized_pnl = float(son_gelir.get('amount', 0) or 0)
+                                islem_karli_mi = (realized_pnl >= 0.0)
+                        except Exception:
+                            # Eğer geçmiş çekilemezse o anki fiyat ile giriş fiyatını kıyaslayalım
+                            pass
+
                         with state_lock:
                             bas_sayi = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0))
-                            ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi + 1
+                            basarisiz_sayi = int(ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0))
+                            
+                            if islem_karli_mi:
+                                bas_sayi += 1
+                                sonuc_mesaj_tipi = "✅ *POZİSYON KÂRLA KAPANDI (TP)*"
+                            else:
+                                basarisiz_sayi += 1
+                                sonuc_mesaj_tipi = "❌ *POZİSYON ZARARLA KAPANDI (SL)*"
+                                
+                            ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
+                            ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
+                            
                             COIN_COOLDOWNLAR[eski_sym] = {"zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), "son_yon": "LONG"}
                             if eski_sym in AKTIF_GRID_SISTEMLERI:
                                 del AKTIF_GRID_SISTEMLERI[eski_sym]
+                                
                         hafizayi_kaydet()
-                        telegram_mesaj_gonder(f"✅ *POZİSYON KAPANDI (TP/SL Tetiklendi)*\n📌 `{eski_sym}` | Cooldown süresi başlatıldı.")
+                        telegram_mesaj_gonder(f"{sonuc_mesaj_tipi}\n📌 `{eski_sym}` | Cooldown süresi başlatıldı.")
                         
                 tum_acik_emirler = exchange.fetch_open_orders()
                 for emir in tum_acik_emirler:
@@ -509,12 +535,11 @@ def otomatik_arkaplan_tarayici():
             taranan_sinyaller = []
 
             # ========================================================
-            # 2. 5 DAKİKALIK HIZLI COİN TARAMA VE GİRİŞ ANALİZİ (Önce Taranıyor)
+            # 2. 5 DAKİKALIK HIZLI COİN TARAMA VE GİRİŞ ANALİZİ
             # ========================================================
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
                 
-                # --- KATI COOLDOWN KONTROLÜ (İstisnasız) ---
                 with state_lock:
                     cooldown_veri = COIN_COOLDOWNLAR.get(symbol)
                     if cooldown_veri:
@@ -568,7 +593,6 @@ def otomatik_arkaplan_tarayici():
                     sinyal_puani = temel_puan + anlik_momentum_bonus + fonlama_puani + derinlik_bonus - ceza_puani
                     print(f"📊 {symbol} Puanı: {sinyal_puani} (Yön: {grid_yonu})", flush=True)
 
-                    # Taranan sinyallere ekliyoruz (aktif pozisyon kontrolünde kullanmak üzere)
                     taranan_sinyaller.append({
                         "symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, 
                         "rsi": rsi, "adx": adx_val, "ema_fark": float(ema5 - ema13), 
@@ -580,7 +604,7 @@ def otomatik_arkaplan_tarayici():
                     continue
 
             # ========================================================
-            # 1. ANLIK POZİSYON YÖNETİMİ & BTC NÖTR + GÜÇLÜ TERS SİNYAL KONTROLÜ
+            # 1. ANLIK POZİSYON YÖNETİMİ & BTC NÖTR + GÜÇLÜ TERS SİNYAL
             # ========================================================
             for symbol, pos in list(aktif_borsa_map.items()):
                 try:
@@ -608,16 +632,14 @@ def otomatik_arkaplan_tarayici():
                         pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | ROE: `%{roe:.2f}`", basarili=False, cezali_mi=True)
                         continue
 
-                    # --- YENİ EKLENEN KURAL: BTC NÖTR + GÜÇLÜ TERS SİNYAL (>=70 PUAN) ---
+                    # BTC Nötr + Güçlü Ters Sinyal Kontrolü
                     if btc_yonu == "NOTR" and yon == "LONG":
-                        # Bu coin için az önce taranan sinyaller arasında güçlü bir SHORT sinyali var mı bakalım
                         ilgili_sinyal = next((s for s in taranan_sinyaller if s["symbol"] == symbol and s["yon"] == "SHORT" and s["puan"] >= 70), None)
                         if ilgili_sinyal:
-                            if roe >= 0.0:  # Kârda veya başa baş ise hemen kapat ve cooldown başlat
+                            if roe >= 0.0:
                                 pozisyonu_kapat(symbol, yon, kontrat, f"🛡️ *BTC NÖTR + GÜÇLÜ TERS SİNYAL KORUMASI*\n📌 `{symbol}` | Yön: `LONG` kapatıldı.\nSebep: BTC Nötrken `>=70` puanlık Short sinyali geldi.\n💰 Kapatıldığı Anki ROE: `%{roe:.2f}`", basarili=True, cezali_mi=False)
                                 continue
 
-                    # Dikey bariyer ve mum kırılım kontrolleri
                     current_coin_df = next((s["df"] for s in taranan_sinyaller if s["symbol"] == symbol), None)
                     if current_coin_df is not None:
                         veri_paketi = {"symbol": symbol, "yon": yon, "giris_fiyati": merkez, "anlik_fiyat": guncel_fiyat, "kaldirac": kaldirac_val}
