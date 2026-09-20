@@ -1,4 +1,3 @@
-
 import os
 import time
 import threading
@@ -330,10 +329,8 @@ def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True, cezali_mi=
         ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
         ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
 
-        if cezali_mi:
-            COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), "son_yon": yon}
-        else:
-            if symbol in COIN_COOLDOWNLAR: del COIN_COOLDOWNLAR[symbol]
+        # Her kapanışta coin kesinlikle cooldown'a alınır
+        COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), "son_yon": yon}
 
         if symbol in AKTIF_GRID_SISTEMLERI: del AKTIF_GRID_SISTEMLERI[symbol]
             
@@ -541,8 +538,12 @@ def otomatik_arkaplan_tarayici():
                     if cooldown_veri:
                         zaman_kontrol = cooldown_veri.get("zaman", 0) if isinstance(cooldown_veri, dict) else float(cooldown_veri)
                         if (zaman_kontrol - time.time()) > 0:
-                            print(f"⏳ Cooldown'da: {symbol}", flush=True)
-                            continue
+                            # Cooldown süresi bitmediyse, aşağıda puan hesaplaması yapılıp kontrol edilecek.
+                            devam_et_izni = False
+                        else:
+                            devam_et_izni = True
+                    else:
+                        devam_et_izni = True
 
                 try:
                     print(f"🔍 Taranıyor: {symbol}", flush=True)
@@ -588,6 +589,11 @@ def otomatik_arkaplan_tarayici():
 
                     sinyal_puani = temel_puan + anlik_momentum_bonus + fonlama_puani + derinlik_bonus - ceza_puani
                     print(f"📊 {symbol} Puanı: {sinyal_puani} (Yön: {grid_yonu})", flush=True)
+
+                    # COOLDOWN & 95 PUAN KONTROLÜ: Süre bitmediyse ancak puanı 95 ve üzerindeyse işlem açılmasına izin ver
+                    if not devam_et_izni and sinyal_puani < 95:
+                        print(f"⏳ Cooldown süresinde ve puanı (<95) yetersiz: {symbol}", flush=True)
+                        continue
 
                     if symbol not in aktif_borsa_map:
                         ai_onay = yapay_zeka_islem_onayi(rsi, adx_val, float(ema5 - ema13), (1 if grid_yonu == 'LONG' else -1), atr, COIN_ID_MAP.get(symbol, 0))
@@ -655,7 +661,6 @@ if __name__ == '__main__':
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     
-    # Webhook çakışmasını engellemek için başlatmadan önce temizliyoruz
     try:
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
         print("🧹 Aktif Telegram webhook temizlendi.", flush=True)
