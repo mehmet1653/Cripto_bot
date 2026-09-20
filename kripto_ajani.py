@@ -477,26 +477,23 @@ def otomatik_arkaplan_tarayici():
                 aktif_semboller_listesi = []
 
             # ========================================================
-            # 0. AÇIK EMİR KONTROLÜ VE TP/SL GERÇEKLEŞME TAKİBİ (DÜZELTİLDİ)
+            # 0. AÇIK EMİR KONTROLÜ VE TP/SL GERÇEKLEŞME TAKİBİ
             # ========================================================
             try:
                 anlik_aktif_semboller = [p['symbol'] for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                 
                 for eski_sym in list(AKTIF_GRID_SISTEMLERI.keys()):
                     if eski_sym not in anlik_aktif_semboller:
-                        print(f"🎯 Pozisyon kapanışı algılandı (TP/SL tetiklenmiş olabilir) -> {eski_sym}", flush=True)
+                        print(f"🎯 Pozisyon kapanışı algılandı -> {eski_sym}", flush=True)
                         
-                        # GERÇEKLEŞEN PNL KONTROLÜ (Gerçek kârda mı zararda mı kapandı?)
-                        islem_karli_mi = True  # Varsayılan
+                        islem_karli_mi = True
                         try:
-                            # Kapalı işlem geçmişinden son kâr/zarar durumunu alalım
                             income_history = exchange.fetch_income(eski_sym, limit=5)
                             if income_history:
                                 son_gelir = income_history[-1]
                                 realized_pnl = float(son_gelir.get('amount', 0) or 0)
-                                islem_karli_mi = (realized_pnl >= 0.0)
+                                islem_karli_mi = (realized_pnl > 0.0)
                         except Exception:
-                            # Eğer geçmiş çekilemezse o anki fiyat ile giriş fiyatını kıyaslayalım
                             pass
 
                         with state_lock:
@@ -526,7 +523,6 @@ def otomatik_arkaplan_tarayici():
                     if emir_sembol and emir_sembol not in anlik_aktif_semboller:
                         try:
                             exchange.cancel_order(emir['id'], emir_sembol)
-                            print(f"🧹 Asılı/Sahipsiz açık emir temizlendi -> {emir_sembol} (ID: {emir['id']})", flush=True)
                         except Exception:
                             pass
             except Exception as eo_err:
@@ -545,11 +541,9 @@ def otomatik_arkaplan_tarayici():
                     if cooldown_veri:
                         zaman_kontrol = cooldown_veri.get("zaman", 0) if isinstance(cooldown_veri, dict) else float(cooldown_veri)
                         if (zaman_kontrol - time.time()) > 0:
-                            print(f"⏳ {symbol} cooldown süresinde, puanı ne olursa olsun atlanıyor.", flush=True)
                             continue
 
                 try:
-                    print(f"🔍 Taranıyor: {symbol}", flush=True)
                     oi_degeri, oi_degisim = acik_pozisyon_oi_kontrolu(symbol)
                     book_durum, alis_orani, duvar_tipi, satis_duvari, alis_duvari = emir_defteri_derinlik_analizi(symbol, limit=30)
                     
@@ -591,7 +585,6 @@ def otomatik_arkaplan_tarayici():
                     derinlik_bonus = 5 if (grid_yonu == "LONG" and book_durum == "BUY_PRESSURE") or (grid_yonu == "SHORT" and book_durum == "SELL_PRESSURE") else 0
 
                     sinyal_puani = temel_puan + anlik_momentum_bonus + fonlama_puani + derinlik_bonus - ceza_puani
-                    print(f"📊 {symbol} Puanı: {sinyal_puani} (Yön: {grid_yonu})", flush=True)
 
                     taranan_sinyaller.append({
                         "symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, 
@@ -604,7 +597,7 @@ def otomatik_arkaplan_tarayici():
                     continue
 
             # ========================================================
-            # 1. ANLIK POZİSYON YÖNETİMİ & BTC NÖTR + GÜÇLÜ TERS SİNYAL
+            # 1. ANLIK POZİSYON YÖNETİMİ (KOMİSYON DÂHİL NET KÂR KORUMALI)
             # ========================================================
             for symbol, pos in list(aktif_borsa_map.items()):
                 try:
@@ -632,13 +625,15 @@ def otomatik_arkaplan_tarayici():
                         pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | ROE: `%{roe:.2f}`", basarili=False, cezali_mi=True)
                         continue
 
-                    # BTC Nötr + Güçlü Ters Sinyal Kontrolü
+                    # BTC Nötr + Güçlü Ters Sinyal (SADECE KOMİSYON PAYI ÇIKILACAK NET KÂRDA İSE)
                     if btc_yonu == "NOTR" and yon == "LONG":
                         ilgili_sinyal = next((s for s in taranan_sinyaller if s["symbol"] == symbol and s["yon"] == "SHORT" and s["puan"] >= 70), None)
                         if ilgili_sinyal:
-                            if roe >= 0.0:
-                                pozisyonu_kapat(symbol, yon, kontrat, f"🛡️ *BTC NÖTR + GÜÇLÜ TERS SİNYAL KORUMASI*\n📌 `{symbol}` | Yön: `LONG` kapatıldı.\nSebep: BTC Nötrken `>=70` puanlık Short sinyali geldi.\n💰 Kapatıldığı Anki ROE: `%{roe:.2f}`", basarili=True, cezali_mi=False)
+                            if roe >= 0.6:  # Komisyonu telafi edecek minimum artı net kâr eşiği
+                                pozisyonu_kapat(symbol, yon, kontrat, f"🛡️ *BTC NÖTR + TERS SİNYAL (KÂRLI KAPANIŞ)*\n📌 `{symbol}` | Yön: `LONG` kapatıldı.\n💰 Net Kârlı ROE: `%{roe:.2f}`", basarili=True, cezali_mi=False)
                                 continue
+                            else:
+                                print(f"ℹ️ {symbol} ters sinyal aldı ancak henüz komisyon payı çıkılacak net kârda değil (ROE: %{roe:.2f}), bekleniyor...", flush=True)
 
                     current_coin_df = next((s["df"] for s in taranan_sinyaller if s["symbol"] == symbol), None)
                     if current_coin_df is not None:
@@ -653,14 +648,19 @@ def otomatik_arkaplan_tarayici():
                     continue
 
             # ========================================================
-            # 3. YENİ İŞLEM AÇMA MANTIĞI
+            # 3. YENİ İŞLEM AÇMA (ÇİFT POZİSYON VE SPAM KİLİTLİ)
             # ========================================================
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
+                
+                # KİLİT: Borsada bu coinde zaten açık pozisyon varsa ASLA tekrar işlem açma!
+                if sinyal["symbol"] in aktif_semboller_listesi:
+                    print(f"📌 {sinyal['symbol']} için zaten aktif pozisyon var, yeni emir açılmıyor.", flush=True)
+                    continue
+
                 if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
-                    print(f"📌 Maksimum pozisyon sınırına ({MAKSIMUM_TOPLAM_POZISYON}) ulaşıldı, yeni işlem açılmıyor.", flush=True)
                     break
                 if sinyal["puan"] < 50: continue
 
@@ -687,6 +687,7 @@ def otomatik_arkaplan_tarayici():
 
                     with state_lock:
                         AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {"giris_rsi": float(sinyal["rsi"]), "giris_zamani": time.time()}
+                        aktif_semboller_listesi.append(sinyal["symbol"])
                     hafizayi_kaydet()
                     
                     print(f"⚡ BAŞARILI (5m): İşlem Açıldı -> {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
