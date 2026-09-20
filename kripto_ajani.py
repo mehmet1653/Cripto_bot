@@ -1,3 +1,4 @@
+
 import os
 import time
 import threading
@@ -398,7 +399,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 **BOT DURUM RAPORU (5m & Açık Emir Korumalı)**\n\n"
+            f"📊 **BOT DURUM RAPORU (5m Zaman Dilimi)**\n\n"
             f"👑 BTC Yönü: `{btc_trend_kontrolu()}`\n"
             f"💰 Kasa: `{total:.2f} USDT` | Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -653,10 +654,18 @@ if __name__ == '__main__':
     t.start()
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    
+    # Webhook çakışmasını engellemek için başlatmadan önce temizliyoruz
+    try:
+        requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
+        print("🧹 Aktif Telegram webhook temizlendi.", flush=True)
+    except Exception as e:
+        print(f"⚠️ Webhook temizleme uyarısı: {e}", flush=True)
+
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
     print("🤖 Telegram Bot Başlatılıyor...", flush=True)
-    app_tg.run_polling()
+    app_tg.run_polling(drop_pending_updates=True)
