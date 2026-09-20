@@ -639,14 +639,14 @@ def otomatik_arkaplan_tarayici():
                     continue
 
             # ========================================================
-            # 3. YENİ İŞLEM AÇMA (ESNEK ESNEK BÜTÇE & SPAM / ÇİFT POZİSYON KİLİTLİ)
+            # 3. YENİ İŞLEM AÇMA (KESİN SABİT %20 BÜTÇE KURALI & SPAM / ÇİFT POZİSYON KİLİTLİ)
             # ========================================================
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
                 
-                # KİLİT: Borsada bu coinde zaten açık pozisyon varsa ASLA tekrar işlem açma!
+                # KİLİT: Borsada bu coinde zaten aktif pozisyon varsa ASLA tekrar işlem açma!
                 if sinyal["symbol"] in aktif_semboller_listesi:
                     print(f"📌 {sinyal['symbol']} için zaten aktif pozisyon var, yeni emir açılmıyor.", flush=True)
                     continue
@@ -658,17 +658,19 @@ def otomatik_arkaplan_tarayici():
                 try:
                     bakiye_bilgisi = exchange.fetch_balance()
                     toplam_bakiye = float(bakiye_bilgisi['total'].get('USDT', 0))
-                    serbest_bakiye = float(bakiye_bilgisi.get('free', {}).get('USDT', 0) or bakiye_bilgisi.get('USDT', {}).get('free', 0) or toplam_bakiye)
+                    serbest_bakiye = float(bakiye_bilgisi.get('free', {}).get('USDT', 0) or bakiye_bilgisi.get('USDT', {}).get('free', 0) or 0)
 
                     exchange.set_leverage(KALDIRAC, sinyal["symbol"])
                     market = exchange.market(sinyal["symbol"])
                     
-                    # Hedef %20 ama serbest bakiye durumuna göre esnek (%20 ila kalan serbest paranın tamamı)
+                    # KESİN KURALLI BÜTÇE: Sadece toplam bakiyenin tam %20'si (asla serbest paranın tamamına dalmaz)
                     hedef_butce = toplam_bakiye * 0.20
-                    kullanilacak_tutar = min(max(hedef_butce, serbest_bakiye * 0.95), serbest_bakiye)
                     
-                    if kullanilacak_tutar < 1.0:
-                        print(f"⚠️ Serbest bakiye işlem için çok düşük ({kullanilacak_tutar:.2f} USDT), pas geçiliyor.", flush=True)
+                    # Eğer cüzdandaki serbest bakiye, hesaplanan %20 bütçeden bile azsa hata almamak için serbest parayı baz al, aksi halde tam %20'yi kullan
+                    kullanilacak_tutar = min(hedef_butce, serbest_bakiye)
+                    
+                    if kullanilacak_tutar < 1.0 or serbest_bakiye < hedef_butce:
+                        print(f"⚠️ Serbest bakiye tam %20'lik bütçe için yetersiz (Serbest: {serbest_bakiye:.2f} < Gerekli: {hedef_butce:.2f}), pas geçiliyor.", flush=True)
                         continue
 
                     miktar = float(exchange.amount_to_precision(
