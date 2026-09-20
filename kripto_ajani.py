@@ -226,23 +226,32 @@ def coklu_zaman_dilimi_trend_kontrolu(symbol, yon):
 
 def btc_trend_kontrolu():
     try:
+        # 1 Saatlik Trend
         ohlcv_btc_1h = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=30)
         df_btc_1h = pd.DataFrame(ohlcv_btc_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         ema9_1h = ta.trend.ema_indicator(df_btc_1h['close'], window=9).iloc[-1]
         ema21_1h = ta.trend.ema_indicator(df_btc_1h['close'], window=21).iloc[-1]
         adx_1h = ta.trend.ADXIndicator(df_btc_1h['high'], df_btc_1h['low'], df_btc_1h['close'], window=14).adx().iloc[-1]
 
+        # 15 Dakikalık Trend (Hassas Yön Filtresi)
         ohlcv_btc_15m = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=20)
         df_btc_15m = pd.DataFrame(ohlcv_btc_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         ema5_15m = ta.trend.ema_indicator(df_btc_15m['close'], window=5).iloc[-1]
         ema13_15m = ta.trend.ema_indicator(df_btc_15m['close'], window=13).iloc[-1]
 
+        # 1h Güçlü Trend Varsa Doğrudan Onu Ver
         if adx_1h >= 22:
             if ema9_1h > ema21_1h and ema5_15m > ema13_15m:
                 return "LONG"
             elif ema9_1h < ema21_1h and ema5_15m < ema13_15m:
                 return "SHORT"
                 
+        # 1h Nötr / Zayıfsa, 15m Trendine Bak ve Ona Göre Yön Tanımla
+        if ema5_15m > ema13_15m:
+            return "LONG_15M"
+        elif ema5_15m < ema13_15m:
+            return "SHORT_15M"
+            
         return "NOTR"
     except Exception:
         return "NOTR"
@@ -564,12 +573,6 @@ def otomatik_arkaplan_tarayici():
                     elif grid_yonu == "SHORT" and (duvar_tipi == "ALIS_DUVARI_VAR" or book_durum == "BUY_PRESSURE"):
                         ceza_puani += 20
 
-                    if btc_yonu == "LONG" and grid_yonu == "SHORT": ceza_puani += 25
-                    elif btc_yonu == "SHORT" and grid_yonu == "LONG": ceza_puani += 25
-
-                    if not coklu_zaman_dilimi_trend_kontrolu(symbol, grid_yonu):
-                        ceza_puani += 15
-
                     fonlama_puani, _ = fonlama_orani_analizi(symbol, grid_yonu)
 
                     temel_puan = 70 if adx_val >= 20 else 45
@@ -578,7 +581,6 @@ def otomatik_arkaplan_tarayici():
 
                     sinyal_puani = temel_puan + anlik_momentum_bonus + fonlama_puani + derinlik_bonus - ceza_puani
 
-                    # HER COİNİN ANALİZ SONUCUNU LOGA BAS
                     print(f"🔍 [ANALİZ] {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} (Temel: {temel_puan}, Ceza: {ceza_puani}) | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
 
                     taranan_sinyaller.append({
@@ -592,7 +594,7 @@ def otomatik_arkaplan_tarayici():
                     continue
 
             # ========================================================
-            # 1. ANLIK POZİSYON YÖNETİMİ (KOMİSYON DÂHİL NET KÂR KORUMALI)
+            # 1. ANLIK POZİSYON YÖNETİMİ
             # ========================================================
             for symbol, pos in list(aktif_borsa_map.items()):
                 try:
@@ -615,20 +617,9 @@ def otomatik_arkaplan_tarayici():
                         
                     roe = fark_yuzdesi * 100 * kaldirac_val
 
-                    # Klasik SL kontrolü
                     if roe <= -18.0:
                         pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | ROE: `%{roe:.2f}`", basarili=False, cezali_mi=True)
                         continue
-
-                    # BTC Nötr + Güçlü Ters Sinyal (SADECE KOMİSYON PAYI ÇIKILACAK NET KÂRDA İSE)
-                    if btc_yonu == "NOTR" and yon == "LONG":
-                        ilgili_sinyal = next((s for s in taranan_sinyaller if s["symbol"] == symbol and s["yon"] == "SHORT" and s["puan"] >= 70), None)
-                        if ilgili_sinyal:
-                            if roe >= 0.6:  # Komisyonu telafi edecek minimum artı net kâr eşiği
-                                pozisyonu_kapat(symbol, yon, kontrat, f"🛡️ *BTC NÖTR + TERS SİNYAL (KÂRLI KAPANIŞ)*\n📌 `{symbol}` | Yön: `LONG` kapatıldı.\n💰 Net Kârlı ROE: `%{roe:.2f}`", basarili=True, cezali_mi=False)
-                                continue
-                            else:
-                                print(f"ℹ️ {symbol} ters sinyal aldı ancak henüz komisyon payı çıkılacak net kârda değil (ROE: %{roe:.2f}), bekleniyor...", flush=True)
 
                     current_coin_df = next((s["df"] for s in taranan_sinyaller if s["symbol"] == symbol), None)
                     if current_coin_df is not None:
@@ -643,14 +634,13 @@ def otomatik_arkaplan_tarayici():
                     continue
 
             # ========================================================
-            # 3. YENİ İŞLEM AÇMA (KESİN SABİT %20 BÜTÇE KURALI & SPAM / ÇİFT POZİSYON KİLİTLİ)
+            # 3. YENİ İŞLEM AÇMA (BTC / 15M KESİN YÖN FİLTRESİ)
             # ========================================================
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
                 
-                # KİLİT: Borsada bu coinde zaten aktif pozisyon varsa ASLA tekrar işlem açma!
                 if sinyal["symbol"] in aktif_semboller_listesi:
                     print(f"📌 {sinyal['symbol']} için zaten aktif pozisyon var, yeni emir açılmıyor.", flush=True)
                     continue
@@ -658,6 +648,23 @@ def otomatik_arkaplan_tarayici():
                 if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
                     break
                 if sinyal["puan"] < 50: continue
+
+                # === BTC VE 15M YÖN UYUM KONTROLÜ (KESİN FİLTRE) ===
+                islem_engellendi = False
+                if btc_yonu == "LONG" and sinyal["yon"] != "LONG":
+                    islem_engellendi = True
+                elif btc_yonu == "SHORT" and sinyal["yon"] != "SHORT":
+                    islem_engellendi = True
+                elif btc_yonu == "LONG_15M" and sinyal["yon"] != "LONG":
+                    islem_engellendi = True
+                elif btc_yonu == "SHORT_15M" and sinyal["yon"] != "SHORT":
+                    islem_engellendi = True
+                elif btc_yonu == "NOTR":
+                    islem_engellendi = True
+
+                if islem_engellendi:
+                    print(f"🛑 [FİLTRE ENGELLİ] {sinyal['symbol']} ({sinyal['yon']}) -> BTC/15m Yönü ({btc_yonu}) ile uyuşmuyor, pas geçildi.", flush=True)
+                    continue
 
                 try:
                     bakiye_bilgisi = exchange.fetch_balance()
@@ -667,14 +674,11 @@ def otomatik_arkaplan_tarayici():
                     exchange.set_leverage(KALDIRAC, sinyal["symbol"])
                     market = exchange.market(sinyal["symbol"])
                     
-                    # KESİN KURALLI BÜTÇE: Sadece toplam bakiyenin tam %20'si (asla serbest paranın tamamına dalmaz)
                     hedef_butce = toplam_bakiye * 0.20
-                    
-                    # Eğer cüzdandaki serbest bakiye, hesaplanan %20 bütçeden bile azsa hata almamak için serbest parayı baz al, aksi halde tam %20'yi kullan
                     kullanilacak_tutar = min(hedef_butce, serbest_bakiye)
                     
-                    if kullanilacak_tutar < 1.0 or serbest_bakiye < hedef_butce:
-                        print(f"⚠️ Serbest bakiye tam %20'lik bütçe için yetersiz (Serbest: {serbest_bakiye:.2f} < Gerekli: {hedef_butce:.2f}), pas geçiliyor.", flush=True)
+                    if kullanilacak_tutar < 1.0 or serbest_bakiye < 1.0:
+                        print(f"⚠️ Serbest bakiye işlem için yetersiz (Serbest: {serbest_bakiye:.2f} USDT), pas geçiliyor.", flush=True)
                         continue
 
                     miktar = float(exchange.amount_to_precision(
