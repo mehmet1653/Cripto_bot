@@ -235,16 +235,30 @@ def coklu_zaman_dilimi_trend_kontrolu(symbol, yon):
 
 def btc_trend_kontrolu():
     try:
-        ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='5m', limit=30)
-        df_btc = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        ema5_btc = ta.trend.ema_indicator(df_btc['close'], window=5).iloc[-1]
-        ema13_btc = ta.trend.ema_indicator(df_btc['close'], window=13).iloc[-1]
-        adx_btc = ta.trend.ADXIndicator(df_btc['high'], df_btc['low'], df_btc['close'], window=14).adx().iloc[-1]
-        
-        if adx_btc >= 20:
-            if ema5_btc > ema13_btc: return "LONG"
-            elif ema5_btc < ema13_btc: return "SHORT"
-        return "NOTR"
+        # GÜÇLENDİRİLMİŞ UZUN VADELİ BTC FİLTRESİ (1 Saatlik Ana Trend + 15m Teyit + ADX Gücü)
+        # 1. 1 Saatlik (1h) Büyük Resim Trendi
+        ohlcv_btc_1h = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=30)
+        df_btc_1h = pd.DataFrame(ohlcv_btc_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        ema9_1h = ta.trend.ema_indicator(df_btc_1h['close'], window=9).iloc[-1]
+        ema21_1h = ta.trend.ema_indicator(df_btc_1h['close'], window=21).iloc[-1]
+        adx_1h = ta.trend.ADXIndicator(df_btc_1h['high'], df_btc_1h['low'], df_btc_1h['close'], window=14).adx().iloc[-1]
+
+        # 2. 15 Dakikalık (15m) Kısa Resim Teyidi
+        ohlcv_btc_15m = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=20)
+        df_btc_15m = pd.DataFrame(ohlcv_btc_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        ema5_15m = ta.trend.ema_indicator(df_btc_15m['close'], window=5).iloc[-1]
+        ema13_15m = ta.trend.ema_indicator(df_btc_15m['close'], window=13).iloc[-1]
+
+        # Kesin Long / Short Kararı İçin Şartlar:
+        # - 1h ADX 22'nin üzerindeyse piyasada net bir trend vardır (testereden kaçınmak için).
+        # - Hem 1h EMA'lar hem de 15m EMA'lar aynı yönü kesin olarak desteklemelidir.
+        if adx_1h >= 22:
+            if ema9_1h > ema21_1h and ema5_15m > ema13_15m:
+                return "LONG"
+            elif ema9_1h < ema21_1h and ema5_15m < ema13_15m:
+                return "SHORT"
+                
+        return "NOTR" # Kararsız, yatay veya testere piyasa (emin olana kadar sinyal verilmez/kapatılmaz)
     except Exception:
         return "NOTR"
 
@@ -396,8 +410,8 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 **BOT DURUM RAPORU (5m Zaman Dilimi)**\n\n"
-            f"👑 BTC Yönü: `{btc_trend_kontrolu()}`\n"
+            f"📊 **BOT DURUM RAPORU (5m Zaman Dilimi + 1h/15m BTC Trend Filtresi)**\n\n"
+            f"👑 BTC Yönü (Kesin): `{btc_trend_kontrolu()}`\n"
             f"💰 Kasa: `{total:.2f} USDT` | Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
             f"{pos_detaylari}\n\n"
@@ -412,7 +426,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
     BOT_CALISIYOR_MU = True
     GLOBAL_COOLDOWN_BITIS = 0.0
-    await update.message.reply_text("🟢 Bot 5 Dakikalık Hızlı Mod ve Açık Emir Kontrolü ile Aktif!")
+    await update.message.reply_text("🟢 Bot 5 Dakikalık Hızlı Mod, Açık Emir Kontrolü ve Güçlendirilmiş BTC Filtresiyle Aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -538,7 +552,6 @@ def otomatik_arkaplan_tarayici():
                     if cooldown_veri:
                         zaman_kontrol = cooldown_veri.get("zaman", 0) if isinstance(cooldown_veri, dict) else float(cooldown_veri)
                         if (zaman_kontrol - time.time()) > 0:
-                            # Cooldown süresi bitmediyse, aşağıda puan hesaplaması yapılıp kontrol edilecek.
                             devam_et_izni = False
                         else:
                             devam_et_izni = True
@@ -575,8 +588,8 @@ def otomatik_arkaplan_tarayici():
                     elif grid_yonu == "SHORT" and (duvar_tipi == "ALIS_DUVARI_VAR" or book_durum == "BUY_PRESSURE"):
                         ceza_puani += 20
 
-                    if btc_yonu == "LONG" and grid_yonu == "SHORT": ceza_puani += 15
-                    elif btc_yonu == "SHORT" and grid_yonu == "LONG": ceza_puani += 15
+                    if btc_yonu == "LONG" and grid_yonu == "SHORT": ceza_puani += 25
+                    elif btc_yonu == "SHORT" and grid_yonu == "LONG": ceza_puani += 25
 
                     if not coklu_zaman_dilimi_trend_kontrolu(symbol, grid_yonu):
                         ceza_puani += 15
@@ -590,7 +603,6 @@ def otomatik_arkaplan_tarayici():
                     sinyal_puani = temel_puan + anlik_momentum_bonus + fonlama_puani + derinlik_bonus - ceza_puani
                     print(f"📊 {symbol} Puanı: {sinyal_puani} (Yön: {grid_yonu})", flush=True)
 
-                    # COOLDOWN & 95 PUAN KONTROLÜ: Süre bitmediyse ancak puanı 95 ve üzerindeyse işlem açılmasına izin ver
                     if not devam_et_izni and sinyal_puani < 95:
                         print(f"⏳ Cooldown süresinde ve puanı (<95) yetersiz: {symbol}", flush=True)
                         continue
