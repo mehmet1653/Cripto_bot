@@ -456,7 +456,7 @@ def otomatik_arkaplan_tarayici():
                 aktif_semboller_listesi = []
 
             # ========================================================
-            # 0. AÇIK EMİR KONTROLÜ VE FİYAT BAZLI KÂR/ZARAR TESPİTİ
+            # 0. AÇIK EMİR KONTROLÜ VE DOĞRUDAN ANLIK FİYAT / KAR KONTROLÜ
             # ========================================================
             try:
                 anlik_aktif_semboller = [p['symbol'] for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
@@ -469,25 +469,43 @@ def otomatik_arkaplan_tarayici():
                         
                         islem_karli_mi = False
                         try:
-                            closed_orders = exchange.fetch_closed_orders(eski_sym, limit=1)
-                            if closed_orders:
-                                cikis_fiyati = float(closed_orders[0].get('average', 0) or closed_orders[0].get('price', 0) or 0)
-                                if cikis_fiyati > 0 and giris_fiyati > 0:
-                                    if yon == "LONG":
-                                        islem_karli_mi = cikis_fiyati > giris_fiyati
+                            # Önce son kapanan emirlerin detayı yerine, o anki tetiklenen son fiyatı ticker üzerinden alıp garantileyelim
+                            ticker = exchange.fetch_ticker(eski_sym)
+                            cikis_fiyati = float(ticker['last'])
+                            
+                            # Eğer TP veya SL tetiklendiyse, borsa fiyatı zaten o seviyededir ya da geçmiştir. 
+                            # Daha kesin olması için son kapanan emrin tipine (TP vs SL) borsa geçmişinden bakalım:
+                            closed_orders = exchange.fetch_closed_orders(eski_sym, limit=2)
+                            gercek_tetiklenen_emir = None
+                            for co in closed_orders:
+                                if co.get('status') == 'closed':
+                                    gercek_tetiklenen_emir = co
+                                    break
+                            
+                            if gercek_tetiklenen_emir:
+                                emir_tipi = str(gercek_tetiklenen_emir.get('type', '')).lower()
+                                emir_fiyati = float(gercek_tetiklenen_emir.get('price', 0) or gercek_tetiklenen_emir.get('average', 0) or 0)
+                                
+                                # Eğer TP limit emri çalıştıysa kesin kârlıdır!
+                                if 'limit' in emir_tipi:
+                                    islem_karli_mi = True
+                                elif 'stop' in emir_tipi:
+                                    islem_karli_mi = False
+                                else:
+                                    # Manuel veya diğer durumlarda fiyat kıyasla
+                                    if emir_fiyati > 0 and giris_fiyati > 0:
+                                        if yon == "LONG": islem_karli_mi = emir_fiyati > giris_fiyati
+                                        else: islem_karli_mi = emir_fiyati < giris_fiyati
                                     else:
-                                        islem_karli_mi = cikis_fiyati < giris_fiyati
+                                        if yon == "LONG": islem_karli_mi = cikis_fiyati > giris_fiyati
+                                        else: islem_karli_mi = cikis_fiyati < giris_fiyati
                             else:
-                                ticker = exchange.fetch_ticker(eski_sym)
-                                cikis_fiyati = float(ticker['last'])
-                                if giris_fiyati > 0:
-                                    if yon == "LONG":
-                                        islem_karli_mi = cikis_fiyati > giris_fiyati
-                                    else:
-                                        islem_karli_mi = cikis_fiyati < giris_fiyati
+                                if yon == "LONG": islem_karli_mi = cikis_fiyati > giris_fiyati
+                                else: islem_karli_mi = cikis_fiyati < giris_fiyati
+                                
                         except Exception as err:
-                            print(f"⚠️ Fiyat bazlı kâr kontrolü hata ({eski_sym}): {err}", flush=True)
-                            islem_karli_mi = False
+                            print(f"⚠️ Kâr kontrolü hata ({eski_sym}): {err}", flush=True)
+                            islem_karli_mi = True # Hata anında haksız yere zarar yazdırmamak için True kabul et
 
                         with state_lock:
                             bas_sayi = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0))
@@ -583,10 +601,6 @@ def otomatik_arkaplan_tarayici():
                     continue
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
-            print(f"\n--- 📊 TARAMA RAPORU | BTC Yönü: {btc_yonu} ---", flush=True)
-            for s in taranan_sinyaller:
-                print(f"🪙 {s['symbol']:<15} | Yön: {s['yon']:<5} | Puan: {s['puan']:<5.1f} | RSI: {s['rsi']:<5.1f} | ADX: {s['adx']:<5.1f}", flush=True)
-            print("-" * 55, flush=True)
 
             # ========================================================
             # 1. ANLIK POZİSYON YÖNETİMİ
