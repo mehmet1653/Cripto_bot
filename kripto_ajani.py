@@ -424,7 +424,6 @@ def otomatik_arkaplan_tarayici():
         try:
             if not BOT_CALISIYOR_MU:
                 time.sleep(5)
-                print("⏸️ Bot durduruldu konumunda bekliyor...", flush=True)
                 continue
 
             if time.time() < GLOBAL_COOLDOWN_BITIS:
@@ -734,23 +733,22 @@ def otomatik_arkaplan_tarayici():
         time.sleep(8)
 
 if __name__ == '__main__':
-    # Telegram Botunu Arka Plan Thread'ine Alıyoruz ki railway logları asla bloklanmasın!
-    def telegram_botunu_baslat():
-        app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-        try:
-            requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
-        except Exception: pass
+    # Telegram Botunu Updater üzerinden başlatıyoruz (Thread çakışmalarını ve signal handler hatalarını önler)
+    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    
+    try:
+        requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
+    except Exception: pass
 
-        app_tg.add_handler(CommandHandler("durum", durum_komutu))
-        app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
-        app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
-        app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
-        
-        print("🤖 Telegram Bot Arka Planda Dinlemeye Başladı...", flush=True)
-        app_tg.run_polling(drop_pending_updates=True)
+    app_tg.add_handler(CommandHandler("durum", durum_komutu))
+    app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
+    app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
+    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
+    
+    # Modern ve logları bloklamayan non-blocking polling başlatma yöntemi
+    app_tg.updater.start_polling(drop_pending_updates=True)
+    app_tg.start()
+    print("🤖 Telegram Bot Asenkron Olarak Dinlemede...", flush=True)
 
-    tg_thread = threading.Thread(target=telegram_botunu_baslat, daemon=True)
-    tg_thread.start()
-
-    # Ana thread üzerinden arka plan tarayıcısını doğrudan çalıştırıyoruz (Artık loglar akacak)
+    # Ana thread üzerinden arka plan tarayıcısını doğrudan çalıştırıyoruz (Loglar artık akacak)
     otomatik_arkaplan_tarayici()
