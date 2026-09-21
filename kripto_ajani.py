@@ -702,7 +702,11 @@ def otomatik_arkaplan_tarayici():
 
         except Exception as e:
             print(f"⚠️ Döngü genel hata: {e}", flush=True)
-        
+               except Exception as e:
+            
+        # Her turda konsola akacak canlı durum bilgisi
+            print(f"🔄 Tarama turu tamamlandı. BTC Yönü: {btc_yonu} | Aktif Pozisyon: {len(aktif_borsa_map)}", flush=True)
+ 
         time.sleep(8)
 
 if __name__ == '__main__':
