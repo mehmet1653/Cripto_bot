@@ -463,15 +463,22 @@ def otomatik_arkaplan_tarayici():
                 
                 for eski_sym in list(AKTIF_GRID_SISTEMLERI.keys()):
                     if eski_sym not in anlik_aktif_semboller:
-                        islem_karli_mi = True
+                        islem_karli_mi = False # Kesinlikle varsayılan olarak zarar kabul et
                         try:
-                            closed_trades = exchange.fetch_my_trades(eski_sym, limit=1)
-                            if closed_trades:
-                                son_islem = closed_trades[-1]
-                                realized_pnl = float(son_islem.get('info', {}).get('pnl', 0) or 0)
-                                islem_karli_mi = (realized_pnl >= 0.0)
-                        except Exception:
-                            pass
+                            trades = exchange.fetch_my_trades(eski_sym, limit=5)
+                            toplam_gerceklesen_pnl = 0.0
+                            for t in trades:
+                                info = t.get('info', {})
+                                pnl_val = float(info.get('pnl', 0) or info.get('realizedPnl', 0) or t.get('realizedPnl', 0) or 0)
+                                toplam_gerceklesen_pnl += pnl_val
+                                
+                            if toplam_gerceklesen_pnl > 0.0:
+                                islem_karli_mi = True
+                            else:
+                                islem_karli_mi = False
+                        except Exception as err:
+                            print(f"⚠️ PnL okuma hatası ({eski_sym}): {err}", flush=True)
+                            islem_karli_mi = False
 
                         with state_lock:
                             bas_sayi = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0))
