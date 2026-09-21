@@ -386,8 +386,8 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 **BOT DURUM RAPORU (15m Zaman Dilimi + RSI Süzgeci)**\n\n"
-            f"👑 BTC Yönü (Kesin): `{btc_trend_kontrolu()}`\n"
+            f"📊 **BOT DURUM RAPORU**\n\n"
+            f"👑 Ana BTC Yönü: `{btc_trend_kontrolu()}`\n"
             f"💰 Kasa: `{total:.2f} USDT` | Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
             f"{pos_detaylari}\n\n"
@@ -402,7 +402,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
     BOT_CALISIYOR_MU = True
     GLOBAL_COOLDOWN_BITIS = 0.0
-    await update.message.reply_text("🟢 Bot 15 Dakikalık Ana Periyot, RSI Dip/Tepe Koruması ve Güçlendirilmiş Filtrelerle Aktif!")
+    await update.message.reply_text("🟢 Bot aktif edildi!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -423,7 +423,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
-    print("🚀 Bot 15m Arka Plan ve Dip/Tepe Filtreli Tarama Döngüsü Aktif...", flush=True)
+    print("🚀 Bot Arka Plan Döngüsü Aktif...", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -437,11 +437,9 @@ def otomatik_arkaplan_tarayici():
                 continue
 
             if time.time() < GLOBAL_COOLDOWN_BITIS:
-                print(f"⏳ Genel sigorta bekleme modunda. Kalan süre: {int(GLOBAL_COOLDOWN_BITIS - time.time())} sn", flush=True)
                 time.sleep(15)
                 continue
 
-            print("🔄 Döngü başladı: 15m Piyasalar taranıyor...", flush=True)
             btc_yonu = btc_trend_kontrolu()
 
             try:
@@ -467,8 +465,6 @@ def otomatik_arkaplan_tarayici():
                 
                 for eski_sym in list(AKTIF_GRID_SISTEMLERI.keys()):
                     if eski_sym not in anlik_aktif_semboller:
-                        print(f"🎯 Pozisyon kapanışı algılandı -> {eski_sym}", flush=True)
-                        
                         islem_karli_mi = True
                         try:
                             closed_trades = exchange.fetch_my_trades(eski_sym, limit=1)
@@ -509,12 +505,12 @@ def otomatik_arkaplan_tarayici():
                         except Exception:
                             pass
             except Exception as eo_err:
-                print(f"⚠️ Açık emirler kontrol edilirken hata: {eo_err}", flush=True)
+                print(f"⚠️ Açık emirler kontrol hatası: {eo_err}", flush=True)
 
             taranan_sinyaller = []
 
             # ========================================================
-            # 2. 15 DAKİKALIK COİN TARAMA VE GİRİŞ ANALİZİ
+            # 2. COİN TARAMA VE GİRİŞ ANALİZİ
             # ========================================================
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
@@ -524,7 +520,6 @@ def otomatik_arkaplan_tarayici():
                     if cooldown_veri:
                         zaman_kontrol = cooldown_veri.get("zaman", 0) if isinstance(cooldown_veri, dict) else float(cooldown_veri)
                         if (zaman_kontrol - time.time()) > 0:
-                            print(f"⏳ Cooldown Aktif: {symbol} (Kalan: {int(zaman_kontrol - time.time())} sn)", flush=True)
                             continue
 
                 try:
@@ -534,8 +529,7 @@ def otomatik_arkaplan_tarayici():
                     ticker = exchange.fetch_ticker(symbol)
                     anlik_fiyat = float(ticker['last'])
 
-                    # ZAMAN DİLİMİ 15 DAKİkaya ÇIKARILDI
-                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
+                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
                     ema5 = ta.trend.ema_indicator(df['close'], window=5).iloc[-1]
@@ -551,17 +545,6 @@ def otomatik_arkaplan_tarayici():
                     else:
                         grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
 
-                    # ========================================================
-                    # KESİN RSI DİP/TEPE SÜZGECİ (KÖRLÜK GİDERİCİ)
-                    # ========================================================
-                    if grid_yonu == "SHORT" and rsi < 38:
-                        print(f"🛑 [RSI FİLTRESİ] {symbol} için RSI çok düşük ({rsi:.1f} < 38). Dipten SHORT AÇILMAZ!", flush=True)
-                        continue
-
-                    if grid_yonu == "LONG" and rsi > 62:
-                        print(f"🛑 [RSI FİLTRESİ] {symbol} için RSI çok yüksek ({rsi:.1f} > 62). Tepeden LONG AÇILMAZ!", flush=True)
-                        continue
-
                     ceza_puani = 0
                     if grid_yonu == "LONG" and (duvar_tipi == "SATIS_DUVARI_VAR" or book_durum == "SELL_PRESSURE"):
                         ceza_puani += 20
@@ -569,14 +552,11 @@ def otomatik_arkaplan_tarayici():
                         ceza_puani += 20
 
                     fonlama_puani, _ = fonlama_orani_analizi(symbol, grid_yonu)
-
                     temel_puan = 70 if adx_val >= 20 else 45
                     anlik_momentum_bonus = 10 if (grid_yonu == "LONG" and anlik_fiyat > ema5) or (grid_yonu == "SHORT" and anlik_fiyat < ema5) else 0
                     derinlik_bonus = 5 if (grid_yonu == "LONG" and book_durum == "BUY_PRESSURE") or (grid_yonu == "SHORT" and book_durum == "SELL_PRESSURE") else 0
 
                     sinyal_puani = temel_puan + anlik_momentum_bonus + fonlama_puani + derinlik_bonus - ceza_puani
-
-                    print(f"🔍 [15m ANALİZ] {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
 
                     taranan_sinyaller.append({
                         "symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, 
@@ -589,7 +569,7 @@ def otomatik_arkaplan_tarayici():
                     continue
 
             # ========================================================
-            # 1. ANLIK POZİSYON YÖNETİMİ
+            # 1. ANLIK POZİSYON YÖNETİMİ (ANA TREND VE KÂR/KOMİSYON KONTROLÜ)
             # ========================================================
             for symbol, pos in list(aktif_borsa_map.items()):
                 try:
@@ -612,8 +592,28 @@ def otomatik_arkaplan_tarayici():
                         
                     roe = fark_yuzdesi * 100 * kaldirac_val
 
+                    # Kesin/Ana BTC trend tespiti (Örn: Sadece "LONG" veya "SHORT")
+                    ana_trend_long_mu = (btc_yonu == "LONG")
+                    ana_trend_short_mu = (btc_yonu == "SHORT")
+
+                    trend_zitti_mi = False
+                    if ana_trend_long_mu and yon == "SHORT":
+                        trend_zitti_mi = True
+                    elif ana_trend_short_mu and yon == "LONG":
+                        trend_zitti_mi = True
+
+                    # 1. Durum: Stop Loss patladıysa (Her halükarda kapat)
                     if roe <= -18.0:
                         pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | ROE: `%{roe:.2f}`", basarili=False, cezali_mi=True)
+                        continue
+                    
+                    # 2. Durum: Ana trend zıt yöne kesinleşti VE pozisyon KÂRDA (+ da, komisyonu kurtaracak marjda: ROE > 0.5)
+                    elif trend_zitti_mi and roe > 0.5: 
+                        pozisyonu_kapat(
+                            symbol, yon, kontrat, 
+                            f"✅ *KÂRLA KAPANDI (Ana Trend Değişimi & Komisyon Kurtarıldı)*\n📌 `{symbol}` | Yön: `{yon}` | ROE: `%{roe:.2f}`", 
+                            basarili=True, cezali_mi=False
+                        )
                         continue
 
                     current_coin_df = next((s["df"] for s in taranan_sinyaller if s["symbol"] == symbol), None)
@@ -629,7 +629,7 @@ def otomatik_arkaplan_tarayici():
                     continue
 
             # ========================================================
-            # 3. YENİ İŞLEM AÇMA (BTC / 15M KESİN YÖN FİLTRESİ)
+            # 3. YENİ İŞLEM AÇMA
             # ========================================================
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
@@ -637,14 +637,12 @@ def otomatik_arkaplan_tarayici():
                 if not BOT_CALISIYOR_MU: break
                 
                 if sinyal["symbol"] in aktif_semboller_listesi:
-                    print(f"📌 {sinyal['symbol']} için zaten aktif pozisyon var, yeni emir açılmıyor.", flush=True)
                     continue
 
                 if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
                     break
                 if sinyal["puan"] < 50: continue
 
-                # === BTC VE 15M YÖN UYUM KONTROLÜ (KESİN FİLTRE) ===
                 islem_engellendi = False
                 if btc_yonu == "LONG" and sinyal["yon"] != "LONG":
                     islem_engellendi = True
@@ -658,7 +656,6 @@ def otomatik_arkaplan_tarayici():
                     islem_engellendi = True
 
                 if islem_engellendi:
-                    print(f"🛑 [FİLTRE ENGELLİ] {sinyal['symbol']} ({sinyal['yon']}) -> BTC/15m Yönü ({btc_yonu}) ile uyuşmuyor, pas geçildi.", flush=True)
                     continue
 
                 try:
@@ -673,7 +670,6 @@ def otomatik_arkaplan_tarayici():
                     kullanilacak_tutar = min(hedef_butce, serbest_bakiye)
                     
                     if kullanilacak_tutar < 1.0 or serbest_bakiye < 1.0:
-                        print(f"⚠️ Serbest bakiye işlem için yetersiz (Serbest: {serbest_bakiye:.2f} USDT), pas geçiliyor.", flush=True)
                         continue
 
                     miktar = float(exchange.amount_to_precision(
@@ -702,8 +698,7 @@ def otomatik_arkaplan_tarayici():
                         aktif_semboller_listesi.append(sinyal["symbol"])
                     hafizayi_kaydet()
                     
-                    print(f"⚡ BAŞARILI (15m): İşlem Açıldı -> {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *15M HIZLI İŞLEM AÇILDI (5X)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}`\n🎯 Hedef ROE: `%{hedef_roe:.1f}`")
+                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}`\n🎯 Hedef ROE: `%{hedef_roe:.1f}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası ({sinyal['symbol']}): {e}", flush=True)
@@ -711,8 +706,7 @@ def otomatik_arkaplan_tarayici():
         except Exception as e:
             print(f"⚠️ Döngü genel hata: {e}", flush=True)
         
-        print("💤 Döngü tamamlandı, 15 saniye bekleniyor...\n", flush=True)
-        time.sleep(15)
+        time.sleep(8)
 
 if __name__ == '__main__':
     t = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
@@ -722,9 +716,7 @@ if __name__ == '__main__':
     
     try:
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
-        print("🧹 Aktif Telegram webhook temizlendi.", flush=True)
-    except Exception as e:
-        print(f"⚠️ Webhook temizleme uyarısı: {e}", flush=True)
+    except Exception: pass
 
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
@@ -733,4 +725,3 @@ if __name__ == '__main__':
     
     print("🤖 Telegram Bot Başlatılıyor...", flush=True)
     app_tg.run_polling(drop_pending_updates=True)
-
