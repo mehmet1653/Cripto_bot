@@ -189,7 +189,7 @@ def emir_defteri_derinlik_analizi(symbol, limit=30):
             book_durum = "BALANCED"
 
         return book_durum, alis_yuzdesi, duvar_durumu, en_yakin_satis_duvari, en_yakin_alis_duvari
-    except Exception as e:
+    except Exception:
         return "NEUTRAL", 50.0, "NORMAL", None, None
 
 def atr_ve_volatilite_hesapla(df):
@@ -211,42 +211,25 @@ def fonlama_orani_analizi(symbol, yon):
     except Exception:
         return 0, "Fonlama okunamadı"
 
-def coklu_zaman_dilimi_trend_kontrolu(symbol, yon):
-    try:
-        ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=20)
-        df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        ema5_15m = ta.trend.ema_indicator(df_15m['close'], window=5).iloc[-1]
-        ema13_15m = ta.trend.ema_indicator(df_15m['close'], window=13).iloc[-1]
-        
-        if yon == 'LONG' and ema5_15m < ema13_15m: return False
-        elif yon == 'SHORT' and ema5_15m > ema13_15m: return False
-        return True
-    except Exception:
-        return True
-
 def btc_trend_kontrolu():
     try:
-        # 1 Saatlik Trend
         ohlcv_btc_1h = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=30)
         df_btc_1h = pd.DataFrame(ohlcv_btc_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         ema9_1h = ta.trend.ema_indicator(df_btc_1h['close'], window=9).iloc[-1]
         ema21_1h = ta.trend.ema_indicator(df_btc_1h['close'], window=21).iloc[-1]
         adx_1h = ta.trend.ADXIndicator(df_btc_1h['high'], df_btc_1h['low'], df_btc_1h['close'], window=14).adx().iloc[-1]
 
-        # 15 Dakikalık Trend (Hassas Yön Filtresi)
         ohlcv_btc_15m = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=20)
         df_btc_15m = pd.DataFrame(ohlcv_btc_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         ema5_15m = ta.trend.ema_indicator(df_btc_15m['close'], window=5).iloc[-1]
         ema13_15m = ta.trend.ema_indicator(df_btc_15m['close'], window=13).iloc[-1]
 
-        # 1h Güçlü Trend Varsa Doğrudan Onu Ver
         if adx_1h >= 22:
             if ema9_1h > ema21_1h and ema5_15m > ema13_15m:
                 return "LONG"
             elif ema9_1h < ema21_1h and ema5_15m < ema13_15m:
                 return "SHORT"
                 
-        # 1h Nötr / Zayıfsa, 15m Trendine Bak ve Ona Göre Yön Tanımla
         if ema5_15m > ema13_15m:
             return "LONG_15M"
         elif ema5_15m < ema13_15m:
@@ -488,11 +471,12 @@ def otomatik_arkaplan_tarayici():
                         
                         islem_karli_mi = True
                         try:
-                            income_history = exchange.fetch_income(eski_sym, limit=5)
-                            if income_history:
-                                son_gelir = income_history[-1]
-                                realized_pnl = float(son_gelir.get('amount', 0) or 0)
-                                islem_karli_mi = (realized_pnl > 0.0)
+                            # Gate.io için güvenli PnL kontrolü (fetch_income yerine pozisyon/bakiye kontrolü alternatifi)
+                            closed_trades = exchange.fetch_my_trades(eski_sym, limit=1)
+                            if closed_trades:
+                                son_islem = closed_trades[-1]
+                                realized_pnl = float(son_islem.get('info', {}).get('pnl', 0) or 0)
+                                islem_karli_mi = (realized_pnl >= 0.0)
                         except Exception:
                             pass
 
