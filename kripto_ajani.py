@@ -248,7 +248,6 @@ def hibrit_tp_sl_hesapla(df, giris_fiyati, yon, satis_duvari, alis_duvari, btc_y
         trend_carpanı = 1.5 if btc_yonu in ["LONG", "SHORT"] else 1.0
         dinamik_faktor = max(0.8, min(3.0, (ortalama_mum_boyu_yuzde + atr_yuzde) * 1.2 * trend_carpanı))
         
-        # Maksimum fiyat hareketi %5 ile sınırlı (5x kaldıraçla net %25 ROE tavanı)
         hedef_fiyat_yuzdesi = max(0.012, min(0.05, 0.015 * dinamik_faktor))
         sl_fiyat_yuzdesi = max(0.010, min(0.035, 0.012 * dinamik_faktor))
         
@@ -567,6 +566,13 @@ def otomatik_arkaplan_tarayici():
                     print(f"⚠️ Coin tarama hatası ({symbol}): {ex}", flush=True)
                     continue
 
+            # Detaylı Tarama Raporunu Konsola Bas
+            taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
+            print(f"\n--- 📊 TARAMA RAPORU | BTC Yönü: {btc_yonu} ---", flush=True)
+            for s in taranan_sinyaller:
+                print(f"🪙 {s['symbol']:<15} | Yön: {s['yon']:<5} | Puan: {s['puan']:<5.1f} | RSI: {s['rsi']:<5.1f} | ADX: {s['adx']:<5.1f}", flush=True)
+            print("-" * 55, flush=True)
+
             # ========================================================
             # 1. ANLIK POZİSYON YÖNETİMİ (ANA TREND VE KÂR/KOMİSYON KONTROLÜ)
             # ========================================================
@@ -627,8 +633,6 @@ def otomatik_arkaplan_tarayici():
             # ========================================================
             # 3. YENİ İŞLEM AÇMA
             # ========================================================
-            taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
-
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
                 
@@ -703,8 +707,6 @@ def otomatik_arkaplan_tarayici():
         except Exception as e:
             print(f"⚠️ Döngü genel hata: {e}", flush=True)
         
-        # Konsola her turun tamamlandığına dair canlı log akışı sağlar
-        print(f"🔄 Tarama turu tamamlandı. BTC Yönü: {btc_yonu} | Aktif Pozisyon: {len(aktif_borsa_map)}", flush=True)
         time.sleep(8)
 
 if __name__ == '__main__':
