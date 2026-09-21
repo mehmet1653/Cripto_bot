@@ -432,6 +432,7 @@ def otomatik_arkaplan_tarayici():
                 continue
 
             btc_yonu = btc_trend_kontrolu()
+            print(f"👑 Güncel BTC Trend Yönü: {btc_yonu}", flush=True)
 
             try:
                 raw_positions = exchange.fetch_positions()
@@ -533,6 +534,7 @@ def otomatik_arkaplan_tarayici():
             # ========================================================
             # 2. COİN TARAMA VE GİRİŞ ANALİZİ
             # ========================================================
+            print("🔍 Coinler taranıyor...", flush=True)
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
                 
@@ -541,6 +543,7 @@ def otomatik_arkaplan_tarayici():
                     if cooldown_veri:
                         zaman_kontrol = cooldown_veri.get("zaman", 0) if isinstance(cooldown_veri, dict) else float(cooldown_veri)
                         if (zaman_kontrol - time.time()) > 0:
+                            print(f"⏳ {symbol} cooldown süresinde, atlanıyor.", flush=True)
                             continue
 
                 try:
@@ -578,6 +581,8 @@ def otomatik_arkaplan_tarayici():
                     derinlik_bonus = 5 if (grid_yonu == "LONG" and book_durum == "BUY_PRESSURE") or (grid_yonu == "SHORT" and book_durum == "SELL_PRESSURE") else 0
 
                     sinyal_puani = temel_puan + anlik_momentum_bonus + fonlama_puani + derinlik_bonus - ceza_puani
+
+                    print(f"📊 [{symbol}] Yön: {grid_yonu} | Puan: {sinyal_puani} | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
 
                     taranan_sinyaller.append({
                         "symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, 
@@ -745,18 +750,15 @@ async def main():
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
-    # Asenkron Telegram başlatma metodları (RuntimeWarning hatasını çözer)
     await app_tg.initialize()
     await app_tg.start()
     await app_tg.updater.start_polling(drop_pending_updates=True)
     
     print("🤖 Telegram Bot Asenkron Olarak Dinlemede...", flush=True)
 
-    # Arka plan tarayıcısını ayrı bir daemon thread içinde başlatıyoruz ki asyncio döngüsünü bloklamasın
     tarayici_thread = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
     tarayici_thread.start()
 
-    # Uygulamanın kapanmaması için asenkron sonsuz döngü
     stop_event = asyncio.Event()
     await stop_event.wait()
 
