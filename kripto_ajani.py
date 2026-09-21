@@ -456,28 +456,37 @@ def otomatik_arkaplan_tarayici():
                 aktif_semboller_listesi = []
 
             # ========================================================
-            # 0. AÇIK EMİR KONTROLÜ VE TP/SL GERÇEKLEŞME TAKİBİ
+            # 0. AÇIK EMİR KONTROLÜ VE FİYAT BAZLI KÂR/ZARAR TESPİTİ
             # ========================================================
             try:
                 anlik_aktif_semboller = [p['symbol'] for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                 
                 for eski_sym in list(AKTIF_GRID_SISTEMLERI.keys()):
                     if eski_sym not in anlik_aktif_semboller:
-                        islem_karli_mi = False # Kesinlikle varsayılan olarak zarar kabul et
+                        sistem_bilgisi = AKTIF_GRID_SISTEMLERI[eski_sym]
+                        giris_fiyati = sistem_bilgisi.get("giris_fiyati", 0) if isinstance(sistem_bilgisi, dict) else 0
+                        yon = sistem_bilgisi.get("yon", "LONG") if isinstance(sistem_bilgisi, dict) else "LONG"
+                        
+                        islem_karli_mi = False
                         try:
-                            trades = exchange.fetch_my_trades(eski_sym, limit=5)
-                            toplam_gerceklesen_pnl = 0.0
-                            for t in trades:
-                                info = t.get('info', {})
-                                pnl_val = float(info.get('pnl', 0) or info.get('realizedPnl', 0) or t.get('realizedPnl', 0) or 0)
-                                toplam_gerceklesen_pnl += pnl_val
-                                
-                            if toplam_gerceklesen_pnl > 0.0:
-                                islem_karli_mi = True
+                            closed_orders = exchange.fetch_closed_orders(eski_sym, limit=1)
+                            if closed_orders:
+                                cikis_fiyati = float(closed_orders[0].get('average', 0) or closed_orders[0].get('price', 0) or 0)
+                                if cikis_fiyati > 0 and giris_fiyati > 0:
+                                    if yon == "LONG":
+                                        islem_karli_mi = cikis_fiyati > giris_fiyati
+                                    else:
+                                        islem_karli_mi = cikis_fiyati < giris_fiyati
                             else:
-                                islem_karli_mi = False
+                                ticker = exchange.fetch_ticker(eski_sym)
+                                cikis_fiyati = float(ticker['last'])
+                                if giris_fiyati > 0:
+                                    if yon == "LONG":
+                                        islem_karli_mi = cikis_fiyati > giris_fiyati
+                                    else:
+                                        islem_karli_mi = cikis_fiyati < giris_fiyati
                         except Exception as err:
-                            print(f"⚠️ PnL okuma hatası ({eski_sym}): {err}", flush=True)
+                            print(f"⚠️ Fiyat bazlı kâr kontrolü hata ({eski_sym}): {err}", flush=True)
                             islem_karli_mi = False
 
                         with state_lock:
@@ -494,7 +503,7 @@ def otomatik_arkaplan_tarayici():
                             ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
                             ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
                             
-                            COIN_COOLDOWNLAR[eski_sym] = {"zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), "son_yon": "LONG"}
+                            COIN_COOLDOWNLAR[eski_sym] = {"zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), "son_yon": yon}
                             if eski_sym in AKTIF_GRID_SISTEMLERI:
                                 del AKTIF_GRID_SISTEMLERI[eski_sym]
                                 
@@ -573,7 +582,6 @@ def otomatik_arkaplan_tarayici():
                     print(f"⚠️ Coin tarama hatası ({symbol}): {ex}", flush=True)
                     continue
 
-            # Detaylı Tarama Raporunu Konsola Bas
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
             print(f"\n--- 📊 TARAMA RAPORU | BTC Yönü: {btc_yonu} ---", flush=True)
             for s in taranan_sinyaller:
@@ -581,7 +589,7 @@ def otomatik_arkaplan_tarayici():
             print("-" * 55, flush=True)
 
             # ========================================================
-            # 1. ANLIK POZİSYON YÖNETİMİ (ANA TREND VE KÂR/KOMİSYON KONTROLÜ)
+            # 1. ANLIK POZİSYON YÖNETİMİ
             # ========================================================
             for symbol, pos in list(aktif_borsa_map.items()):
                 try:
@@ -702,7 +710,12 @@ def otomatik_arkaplan_tarayici():
                     except Exception: pass
 
                     with state_lock:
-                        AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {"giris_rsi": float(sinyal["rsi"]), "giris_zamani": time.time()}
+                        AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {
+                            "giris_fiyati": giris_fiyati,
+                            "yon": sinyal["yon"],
+                            "giris_rsi": float(sinyal["rsi"]), 
+                            "giris_zamani": time.time()
+                        }
                         aktif_semboller_listesi.append(sinyal["symbol"])
                     hafizayi_kaydet()
                     
