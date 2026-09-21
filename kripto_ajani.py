@@ -294,19 +294,22 @@ def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True, cezali_mi=
         exchange.create_order(symbol, 'market', kapatma_yonu, miktar, None, {'reduceOnly': True})
     except Exception as e:
         print(f"⚠️ Kapatma hatası: {e}", flush=True)
+        return  # Hata durumunda return eklenerek korumasız işlem engellendi
 
     with state_lock:
         bas_sayi = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0))
         basarisiz_sayi = int(ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0))
-        if basarili: bas_sayi += 1
+        if basarili: 
+            bas_sayi += 1
         else:
             basarisiz_sayi += 1
-            simdiki_zaman = time.time()
-            SON_ZARAR_ZAMANLARI = [t for t in SON_ZARAR_ZAMANLARI if simdiki_zaman - t < 1800]
-            SON_ZARAR_ZAMANLARI.append(simdiki_zaman)
-            if len(SON_ZARAR_ZAMANLARI) >= 3:
-                GLOBAL_COOLDOWN_BITIS = simdiki_zaman + (1.5 * 3600)
-                telegram_mesaj_gonder("🚨 *GENEL SİGORTA ATTI*\n⚠️ Bot ardışık zararlar nedeniyle 1.5 saat durduruldu!")
+            if cezali_mi:
+                simdiki_zaman = time.time()
+                SON_ZARAR_ZAMANLARI = [t for t in SON_ZARAR_ZAMANLARI if simdiki_zaman - t < 1800]
+                SON_ZARAR_ZAMANLARI.append(simdiki_zaman)
+                if len(SON_ZARAR_ZAMANLARI) >= 3:
+                    GLOBAL_COOLDOWN_BITIS = simdiki_zaman + (1.5 * 3600)
+                    telegram_mesaj_gonder("🚨 *GENEL SİGORTA ATTI*\n⚠️ Bot ardışık zararlar nedeniyle 1.5 saat durduruldu!")
 
         ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
         ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
@@ -352,10 +355,12 @@ def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar):
         return {"kapat_ilsi": False, "neden": "Hata."}
 
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != int(CHAT_ID):
+        return
     try:
-        balance = exchange.fetch_balance()
+        balance = await asyncio.to_thread(exchange.fetch_balance)
         total = float(balance['total'].get('USDT', 0))
-        borsa_poslari = [p for p in exchange.fetch_positions() if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
+        borsa_poslari = [p for p in await asyncio.to_thread(exchange.fetch_positions) if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
         toplam_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in borsa_poslari)
         
         basarili = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0))
@@ -371,7 +376,8 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 yon = "LONG" if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0 else "SHORT"
             giris = float(p.get('entryPrice', 0))
             kaldirac_val = int(p.get('leverage', KALDIRAC))
-            guncel_fiyat = float(exchange.fetch_ticker(sym)['last'])
+            ticker_data = await asyncio.to_thread(exchange.fetch_ticker, sym)
+            guncel_fiyat = float(ticker_data['last'])
             fark = (guncel_fiyat - giris) / giris if yon == "LONG" else (giris - guncel_fiyat) / giris
             roe = fark * 100 * kaldirac_val
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
@@ -390,24 +396,31 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != int(CHAT_ID):
+        return
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
     BOT_CALISIYOR_MU = True
     GLOBAL_COOLDOWN_BITIS = 0.0
     await update.message.reply_text("🟢 Bot aktif edildi!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != int(CHAT_ID):
+        return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = False
     await update.message.reply_text("⏸️ Bot durduruldu.")
 
 async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != int(CHAT_ID):
+        return
     try:
-        for pos in exchange.fetch_positions():
+        positions = await asyncio.to_thread(exchange.fetch_positions)
+        for pos in positions:
             kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
             if kontrat > 0:
                 yon = str(pos.get('side', '')).upper()
                 if not yon: yon = "LONG"
-                pozisyonu_kapat(pos['symbol'], yon, kontrat, f"🛑 Manuel Kapatma", basarili=False, cezali_mi=False)
+                pozisyonu_kapat(pos['symbol'], yon, kontrat, f"🛑 Manuel Kapatma", basarili=False, cezali_mi=True)
         await update.message.reply_text("✅ Tüm pozisyonlar ve bekleyen emirler kapatıldı.")
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
@@ -460,34 +473,20 @@ def otomatik_arkaplan_tarayici():
                         sistem_bilgisi = AKTIF_GRID_SISTEMLERI[eski_sym]
                         giris_fiyati = sistem_bilgisi.get("giris_fiyati", 0) if isinstance(sistem_bilgisi, dict) else 0
                         yon = sistem_bilgisi.get("yon", "LONG") if isinstance(sistem_bilgisi, dict) else "LONG"
+                        giris_rsi = sistem_bilgisi.get("giris_rsi", 50.0) if isinstance(sistem_bilgisi, dict) else 50.0
                         
                         islem_karli_mi = False
                         try:
                             ticker = exchange.fetch_ticker(eski_sym)
                             cikis_fiyati = float(ticker['last'])
                             
-                            closed_orders = exchange.fetch_closed_orders(eski_sym, limit=2)
-                            gercek_tetiklenen_emir = None
-                            for co in closed_orders:
-                                if co.get('status') == 'closed':
-                                    gercek_tetiklenen_emir = co
-                                    break
-                            
-                            if gercek_tetiklenen_emir:
-                                emir_tipi = str(gercek_tetiklenen_emir.get('type', '')).lower()
-                                emir_fiyati = float(gercek_tetiklenen_emir.get('price', 0) or gercek_tetiklenen_emir.get('average', 0) or 0)
-                                
-                                if 'limit' in emir_tipi:
-                                    islem_karli_mi = True
-                                elif 'stop' in emir_tipi:
-                                    islem_karli_mi = False
-                                else:
-                                    if emir_fiyati > 0 and giris_fiyati > 0:
-                                        if yon == "LONG": islem_karli_mi = emir_fiyati > giris_fiyati
-                                        else: islem_karli_mi = emir_fiyati < giris_fiyati
-                                    else:
-                                        if yon == "LONG": islem_karli_mi = cikis_fiyati > giris_fiyati
-                                        else: islem_karli_mi = cikis_fiyati < giris_fiyati
+                            # fetch_closed_orders yerine fetch_my_trades kullanımı
+                            my_trades = exchange.fetch_my_trades(eski_sym, limit=5)
+                            gercek_pnl = 0.0
+                            if my_trades:
+                                son_trade = my_trades[-1]
+                                gercek_pnl = float(son_trade.get('realizedPnl', 0) or 0)
+                                islem_karli_mi = gercek_pnl > 0
                             else:
                                 if yon == "LONG": islem_karli_mi = cikis_fiyati > giris_fiyati
                                 else: islem_karli_mi = cikis_fiyati < giris_fiyati
@@ -509,23 +508,39 @@ def otomatik_arkaplan_tarayici():
                                 
                             ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
                             ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
+
+                            # Yapay zeka eğitim verisine ekleme
+                            egitim_listesi = ANALitik_HAFIZA.get("egitim_verileri", [])
+                            feature_vector = [giris_rsi, float(giris_fiyati), float(btc_yonu == "LONG"), 1.0, 0.0, 0.0]
+                            label_val = 1 if islem_karli_mi else 0
+                            egitim_listesi.append(feature_vector + [label_val])
+                            if len(egitim_listesi) > 500:
+                                egitim_listesi.pop(0)
+                            ANALitik_HAFIZA["egitim_verileri"] = egitim_listesi
                             
                             COIN_COOLDOWNLAR[eski_sym] = {"zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), "son_yon": yon}
                             if eski_sym in AKTIF_GRID_SISTEMLERI:
                                 del AKTIF_GRID_SISTEMLERI[eski_sym]
                                 
                         hafizayi_kaydet()
+                        yapay_zekayi_egit_ve_guncelle()
                         telegram_mesaj_gonder(f"{sonuc_mesaj_tipi}\n📌 `{eski_sym}` | Cooldown süresi başlatıldı.")
                         print(f"🔄 Pozisyon kapandı algılandı: {eski_sym} | Sonuç Kârlı mı: {islem_karli_mi}", flush=True)
-                        
-                tum_acik_emirler = exchange.fetch_open_orders()
-                for emir in tum_acik_emirler:
-                    emir_sembol = emir.get('symbol')
-                    if emir_sembol and emir_sembol not in anlik_aktif_semboller:
-                        try:
-                            exchange.cancel_order(emir['id'], emir_sembol)
-                        except Exception:
-                            pass
+                
+                # İkinci Doğrulama Eklenmiş Açık Emir İptali
+                if len(raw_positions) > 0 or not raw_positions:
+                    time.sleep(1)
+                    double_check_positions = exchange.fetch_positions()
+                    double_active_symbols = [p['symbol'] for p in double_check_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
+                    
+                    tum_acik_emirler = exchange.fetch_open_orders()
+                    for emir in tum_acik_emirler:
+                        emir_sembol = emir.get('symbol')
+                        if emir_sembol and emir_sembol not in double_active_symbols:
+                            try:
+                                exchange.cancel_order(emir['id'], emir_sembol)
+                            except Exception:
+                                pass
             except Exception as eo_err:
                 print(f"⚠️ Açık emirler kontrol hatası: {eo_err}", flush=True)
 
@@ -561,6 +576,16 @@ def otomatik_arkaplan_tarayici():
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
                     adx_val = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx().iloc[-1]
                     atr = atr_ve_volatilite_hesapla(df)
+
+                    if ai_model_egitildi:
+                        try:
+                            pred_input = np.array([[rsi, anlik_fiyat, float(btc_yonu == "LONG"), 1.0, 0.0, 0.0]])
+                            ai_tahmin = ai_model.predict(pred_input)[0]
+                            if ai_tahmin == 0:
+                                print(f"🤖 AI {symbol} için işlemi riskli buldu, atlanıyor.", flush=True)
+                                continue
+                        except Exception:
+                            pass
 
                     if ema5 > ema13 and anlik_fiyat >= ema5:
                         grid_yonu = "LONG"
@@ -644,9 +669,11 @@ def otomatik_arkaplan_tarayici():
                     current_coin_df = next((s["df"] for s in taranan_sinyaller if s["symbol"] == symbol), None)
                     if current_coin_df is not None:
                         veri_paketi = {"symbol": symbol, "yon": yon, "giris_fiyati": merkez, "anlik_fiyat": guncel_fiyat, "kaldirac": kaldirac_val}
-                        bariyer_durum = dikey_bariyer_kontrol(veri_paketi, current_coin_df)
+                        # DataFrame .values.tolist() olarak düzeltildi
+                        bariyer_durum = dikey_bariyer_kontrol(veri_paketi, current_coin_df.values.tolist())
                         
-                        if bariyer_durum["kapat_ilsi"] and roe < -4.0:
+                        # Koşul düzeltmesi (ROE şartı doğrulandı)
+                        if bariyer_durum["kapat_ilsi"] and (roe >= 25.0 or roe < -4.0):
                             pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *ACİL ÇIKIŞ / KÂR AL*\n📌 `{symbol}`\nSebep: `{bariyer_durum['neden']}`", basarili=(roe > 0), cezali_mi=True)
                         
                 except Exception as e:
@@ -715,7 +742,11 @@ def otomatik_arkaplan_tarayici():
                     try:
                         exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
                         exchange.create_order(sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
-                    except Exception: pass
+                    except Exception as order_err:
+                        # TP/SL hatası durumunda yutulmadı, loglanıp Telegram'a bildirildi
+                        err_msg = f"⚠️ TP/SL Emir Oluşturma Hatası ({sinyal['symbol']}): {order_err}"
+                        print(err_msg, flush=True)
+                        telegram_mesaj_gonder(err_msg)
 
                     with state_lock:
                         AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {
