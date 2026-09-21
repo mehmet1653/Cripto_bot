@@ -213,14 +213,12 @@ def btc_trend_kontrolu():
         ema21_1h = ta.trend.ema_indicator(df_btc_1h['close'], window=21).iloc[-1]
         adx_1h = ta.trend.ADXIndicator(df_btc_1h['high'], df_btc_1h['low'], df_btc_1h['close'], window=14).adx().iloc[-1]
 
-        # 1 Saatlik büyük trend güçlüyse kesinlikle onu baz al
         if adx_1h >= 20:
             if ema9_1h > ema21_1h:
                 return "LONG"
             elif ema9_1h < ema21_1h:
                 return "SHORT"
 
-        # 1h kararsızsa 15m yardımcı filtreye bak
         ohlcv_btc_15m = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=20)
         df_btc_15m = pd.DataFrame(ohlcv_btc_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         ema5_15m = ta.trend.ema_indicator(df_btc_15m['close'], window=5).iloc[-1]
@@ -615,6 +613,11 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
+            # Tarama sonuçlarını detaylı loglama
+            print(f"📊 --- TARAMA SONUÇLARI ---", flush=True)
+            for s in taranan_sinyaller:
+                print(f"🔹 {s['symbol']} | Yön: {s['yon']} | Puan: {s['puan']} | RSI: {s['rsi']:.1f} | ADX: {s['adx']:.1f} | Fiyat: {s['fiyat']}", flush=True)
+
             # ========================================================
             # 1. ANLIK POZİSYON YÖNETİMİ (KUSURSUZ TREND DEĞİŞİMİ)
             # ========================================================
@@ -639,7 +642,6 @@ def otomatik_arkaplan_tarayici():
                         
                     roe = fark_yuzdesi * 100 * kaldirac_val
 
-                    # KUSURSUZ TREND ZITLIĞI KONTROLÜ (ROE Filtresi Tamamen Kaldırıldı!)
                     trend_zitti_mi = False
                     if btc_yonu == "LONG" and yon == "SHORT":
                         trend_zitti_mi = True
