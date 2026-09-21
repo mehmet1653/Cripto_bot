@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import sys
+import asyncio
 import requests
 import ccxt
 import pandas as pd
@@ -732,8 +733,7 @@ def otomatik_arkaplan_tarayici():
         
         time.sleep(8)
 
-if __name__ == '__main__':
-    # Telegram Botunu Updater üzerinden başlatıyoruz (Thread çakışmalarını ve signal handler hatalarını önler)
+async def main():
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     
     try:
@@ -745,10 +745,23 @@ if __name__ == '__main__':
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
-    # Modern ve logları bloklamayan non-blocking polling başlatma yöntemi
-    app_tg.updater.start_polling(drop_pending_updates=True)
-    app_tg.start()
+    # Asenkron Telegram başlatma metodları (RuntimeWarning hatasını çözer)
+    await app_tg.initialize()
+    await app_tg.start()
+    await app_tg.updater.start_polling(drop_pending_updates=True)
+    
     print("🤖 Telegram Bot Asenkron Olarak Dinlemede...", flush=True)
 
-    # Ana thread üzerinden arka plan tarayıcısını doğrudan çalıştırıyoruz (Loglar artık akacak)
-    otomatik_arkaplan_tarayici()
+    # Arka plan tarayıcısını ayrı bir daemon thread içinde başlatıyoruz ki asyncio döngüsünü bloklamasın
+    tarayici_thread = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
+    tarayici_thread.start()
+
+    # Uygulamanın kapanmaması için asenkron sonsuz döngü
+    stop_event = asyncio.Event()
+    await stop_event.wait()
+
+if __name__ == '__main__':
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        print("🛑 Bot kapatıldı.", flush=True)
