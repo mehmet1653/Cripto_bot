@@ -239,28 +239,27 @@ def btc_trend_kontrolu():
     except Exception:
         return "NOTR"
 
-def hibrit_tp_sl_hesapla(df, giris_fiyati, yon, satis_duvari, alis_duvari):
+def hibrit_tp_sl_hesapla(df, giris_fiyati, yon, satis_duvari, alis_duvari, btc_yonu="NOTR"):
     try:
         df['body'] = abs(df['close'] - df['open'])
         ortalama_mum_boyu_yuzde = (df['body'].rolling(window=10).mean().iloc[-1] / giris_fiyati) * 100
         atr_yuzde = atr_ve_volatilite_hesapla(df)
         
-        son_hacim = df['volume'].iloc[-1]
-        ortalama_hacim = df['volume'].rolling(window=10).mean().iloc[-1]
-        hacim_carpani = 1.2 if son_hacim > (ortalama_hacim * 1.4) else 1.0
-
-        faktor = max(0.8, min(2.5, (ortalama_mum_boyu_yuzde + atr_yuzde) / 1.2))
-        atr_tp_yuzde = max(0.015, 0.020 * faktor * hacim_carpani)
-        atr_sl_yuzde = max(0.012, 0.015 * faktor)
+        trend_carpanı = 1.5 if btc_yonu in ["LONG", "SHORT"] else 1.0
+        dinamik_faktor = max(0.8, min(3.0, (ortalama_mum_boyu_yuzde + atr_yuzde) * 1.2 * trend_carpanı))
+        
+        # Maksimum fiyat hareketi %5 ile sınırlı (5x kaldıraçla net %25 ROE tavanı)
+        hedef_fiyat_yuzdesi = max(0.012, min(0.05, 0.015 * dinamik_faktor))
+        sl_fiyat_yuzdesi = max(0.010, min(0.035, 0.012 * dinamik_faktor))
         
         if yon == 'LONG':
-            tp_fiyat = giris_fiyati * (1 + atr_tp_yuzde)
-            sl_fiyat = giris_fiyati * (1 - atr_sl_yuzde)
+            tp_fiyat = giris_fiyati * (1 + hedef_fiyat_yuzdesi)
+            sl_fiyat = giris_fiyati * (1 - sl_fiyat_yuzdesi)
             kapat_yon = 'sell'
             hedef_roe = ((tp_fiyat - giris_fiyati) / giris_fiyati) * 100 * KALDIRAC
         else:
-            tp_fiyat = giris_fiyati * (1 - atr_tp_yuzde)
-            sl_fiyat = giris_fiyati * (1 + atr_sl_yuzde)
+            tp_fiyat = giris_fiyati * (1 - hedef_fiyat_yuzdesi)
+            sl_fiyat = giris_fiyati * (1 + sl_fiyat_yuzdesi)
             kapat_yon = 'buy'
             hedef_roe = ((giris_fiyati - tp_fiyat) / giris_fiyati) * 100 * KALDIRAC
             
@@ -592,7 +591,6 @@ def otomatik_arkaplan_tarayici():
                         
                     roe = fark_yuzdesi * 100 * kaldirac_val
 
-                    # Kesin/Ana BTC trend tespiti (Örn: Sadece "LONG" veya "SHORT")
                     ana_trend_long_mu = (btc_yonu == "LONG")
                     ana_trend_short_mu = (btc_yonu == "SHORT")
 
@@ -602,12 +600,10 @@ def otomatik_arkaplan_tarayici():
                     elif ana_trend_short_mu and yon == "LONG":
                         trend_zitti_mi = True
 
-                    # 1. Durum: Stop Loss patladıysa (Her halükarda kapat)
                     if roe <= -18.0:
                         pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | ROE: `%{roe:.2f}`", basarili=False, cezali_mi=True)
                         continue
                     
-                    # 2. Durum: Ana trend zıt yöne kesinleşti VE pozisyon KÂRDA (+ da, komisyonu kurtaracak marjda: ROE > 0.5)
                     elif trend_zitti_mi and roe > 0.5: 
                         pozisyonu_kapat(
                             symbol, yon, kontrat, 
@@ -685,7 +681,8 @@ def otomatik_arkaplan_tarayici():
                     
                     tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = hibrit_tp_sl_hesapla(
                         sinyal["df"], giris_fiyati, sinyal["yon"], 
-                        sinyal["satis_duvari"], sinyal["alis_duvari"]
+                        sinyal["satis_duvari"], sinyal["alis_duvari"],
+                        btc_yonu=btc_yonu
                     )
 
                     try:
