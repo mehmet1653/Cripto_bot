@@ -42,14 +42,6 @@ TAKIP_EDILENLER = [
     'LINK/USDT:USDT'
 ]
 
-COIN_ID_MAP = {
-    'SOL/USDT:USDT': 1,
-    'XRP/USDT:USDT': 2,
-    'DOGE/USDT:USDT': 3,
-    'LTC/USDT:USDT': 4,
-    'LINK/USDT:USDT': 5
-}
-
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
 KALDIRAC = 5
@@ -432,6 +424,7 @@ def otomatik_arkaplan_tarayici():
         try:
             if not BOT_CALISIYOR_MU:
                 time.sleep(5)
+                print("⏸️ Bot durduruldu konumunda bekliyor...", flush=True)
                 continue
 
             if time.time() < GLOBAL_COOLDOWN_BITIS:
@@ -469,12 +462,9 @@ def otomatik_arkaplan_tarayici():
                         
                         islem_karli_mi = False
                         try:
-                            # Önce son kapanan emirlerin detayı yerine, o anki tetiklenen son fiyatı ticker üzerinden alıp garantileyelim
                             ticker = exchange.fetch_ticker(eski_sym)
                             cikis_fiyati = float(ticker['last'])
                             
-                            # Eğer TP veya SL tetiklendiyse, borsa fiyatı zaten o seviyededir ya da geçmiştir. 
-                            # Daha kesin olması için son kapanan emrin tipine (TP vs SL) borsa geçmişinden bakalım:
                             closed_orders = exchange.fetch_closed_orders(eski_sym, limit=2)
                             gercek_tetiklenen_emir = None
                             for co in closed_orders:
@@ -486,13 +476,11 @@ def otomatik_arkaplan_tarayici():
                                 emir_tipi = str(gercek_tetiklenen_emir.get('type', '')).lower()
                                 emir_fiyati = float(gercek_tetiklenen_emir.get('price', 0) or gercek_tetiklenen_emir.get('average', 0) or 0)
                                 
-                                # Eğer TP limit emri çalıştıysa kesin kârlıdır!
                                 if 'limit' in emir_tipi:
                                     islem_karli_mi = True
                                 elif 'stop' in emir_tipi:
                                     islem_karli_mi = False
                                 else:
-                                    # Manuel veya diğer durumlarda fiyat kıyasla
                                     if emir_fiyati > 0 and giris_fiyati > 0:
                                         if yon == "LONG": islem_karli_mi = emir_fiyati > giris_fiyati
                                         else: islem_karli_mi = emir_fiyati < giris_fiyati
@@ -505,7 +493,7 @@ def otomatik_arkaplan_tarayici():
                                 
                         except Exception as err:
                             print(f"⚠️ Kâr kontrolü hata ({eski_sym}): {err}", flush=True)
-                            islem_karli_mi = True # Hata anında haksız yere zarar yazdırmamak için True kabul et
+                            islem_karli_mi = True
 
                         with state_lock:
                             bas_sayi = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0))
@@ -527,6 +515,7 @@ def otomatik_arkaplan_tarayici():
                                 
                         hafizayi_kaydet()
                         telegram_mesaj_gonder(f"{sonuc_mesaj_tipi}\n📌 `{eski_sym}` | Cooldown süresi başlatıldı.")
+                        print(f"🔄 Pozisyon kapandı algılandı: {eski_sym} | Sonuç Kârlı mı: {islem_karli_mi}", flush=True)
                         
                 tum_acik_emirler = exchange.fetch_open_orders()
                 for emir in tum_acik_emirler:
@@ -733,6 +722,7 @@ def otomatik_arkaplan_tarayici():
                         aktif_semboller_listesi.append(sinyal["symbol"])
                     hafizayi_kaydet()
                     
+                    print(f"⚡ İşlem açıldı: {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
                     telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}`\n🎯 Hedef ROE: `%{hedef_roe:.1f}`")
                     break
                 except Exception as e:
@@ -744,19 +734,23 @@ def otomatik_arkaplan_tarayici():
         time.sleep(8)
 
 if __name__ == '__main__':
-    t = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
-    t.start()
-    
-    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    
-    try:
-        requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
-    except Exception: pass
+    # Telegram Botunu Arka Plan Thread'ine Alıyoruz ki railway logları asla bloklanmasın!
+    def telegram_botunu_baslat():
+        app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+        try:
+            requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
+        except Exception: pass
 
-    app_tg.add_handler(CommandHandler("durum", durum_komutu))
-    app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
-    app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
-    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
-    
-    print("🤖 Telegram Bot Başlatılıyor...", flush=True)
-    app_tg.run_polling(drop_pending_updates=True)
+        app_tg.add_handler(CommandHandler("durum", durum_komutu))
+        app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
+        app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
+        app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
+        
+        print("🤖 Telegram Bot Arka Planda Dinlemeye Başladı...", flush=True)
+        app_tg.run_polling(drop_pending_updates=True)
+
+    tg_thread = threading.Thread(target=telegram_botunu_baslat, daemon=True)
+    tg_thread.start()
+
+    # Ana thread üzerinden arka plan tarayıcısını doğrudan çalıştırıyoruz (Artık loglar akacak)
+    otomatik_arkaplan_tarayici()
