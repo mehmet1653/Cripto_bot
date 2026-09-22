@@ -204,29 +204,41 @@ def fonlama_orani_analizi(symbol, yon):
     except Exception:
         return 0, "Fonlama okunamadı"
 
-# KUSURSUZ HİBRİT TREND KONTROLÜ (1 Saatlik Ana Otorite)
+# ÇOKLU TEYİTLİ KUSURSUZ HİBRİT TREND KONTROLÜ (1 Saatlik + Fiyat Kırılımı + RSI)
 def btc_trend_kontrolu():
     try:
         ohlcv_btc_1h = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=30)
         df_btc_1h = pd.DataFrame(ohlcv_btc_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        
         ema9_1h = ta.trend.ema_indicator(df_btc_1h['close'], window=9).iloc[-1]
         ema21_1h = ta.trend.ema_indicator(df_btc_1h['close'], window=21).iloc[-1]
         adx_1h = ta.trend.ADXIndicator(df_btc_1h['high'], df_btc_1h['low'], df_btc_1h['close'], window=14).adx().iloc[-1]
+        rsi_1h = ta.momentum.rsi(df_btc_1h['close'], window=14).iloc[-1]
 
-        if adx_1h >= 20:
-            if ema9_1h > ema21_1h:
+        # Son mumların gövde ve hacim teyitleri (Fakeout önleyici)
+        son_kapanis = df_btc_1h['close'].iloc[-1]
+        son_acilis = df_btc_1h['open'].iloc[-1]
+        onceki_kapanis = df_btc_1h['close'].iloc[-2]
+        
+        # Çoklu Teyit Kontrolü: EMA + RSI(50 eşiği) + Güçlü Mum Kırılımı
+        # LONG Teyidi: EMA9 > EMA21 VE RSI > 48 VE Fiyat EMA9'un üzerinde veya hacimli yeşil mum
+        if adx_1h >= 18:
+            if ema9_1h > ema21_1h and rsi_1h > 47.0 and son_kapanis >= ema9_1h:
                 return "LONG"
-            elif ema9_1h < ema21_1h:
+            # SHORT Teyidi: EMA9 < EMA21 VE RSI < 52 VE Fiyat EMA9'un altında veya hacimli kırmızı mum
+            elif ema9_1h < ema21_1h and rsi_1h < 53.0 and son_kapanis <= ema9_1h:
                 return "SHORT"
 
+        # 15 Dakikalık Destekleyici Teyit Katmanı
         ohlcv_btc_15m = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=20)
         df_btc_15m = pd.DataFrame(ohlcv_btc_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         ema5_15m = ta.trend.ema_indicator(df_btc_15m['close'], window=5).iloc[-1]
         ema13_15m = ta.trend.ema_indicator(df_btc_15m['close'], window=13).iloc[-1]
+        rsi_15m = ta.momentum.rsi(df_btc_15m['close'], window=14).iloc[-1]
 
-        if ema5_15m > ema13_15m:
+        if ema5_15m > ema13_15m and rsi_15m > 48:
             return "LONG"
-        elif ema5_15m < ema13_15m:
+        elif ema5_15m < ema13_15m and rsi_15m < 52:
             return "SHORT"
             
         return "NOTR"
@@ -613,13 +625,12 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
-            # Tarama sonuçlarını detaylı loglama
             print(f"📊 --- TARAMA SONUÇLARI ---", flush=True)
             for s in taranan_sinyaller:
                 print(f"🔹 {s['symbol']} | Yön: {s['yon']} | Puan: {s['puan']} | RSI: {s['rsi']:.1f} | ADX: {s['adx']:.1f} | Fiyat: {s['fiyat']}", flush=True)
 
             # ========================================================
-            # 1. ANLIK POZİSYON YÖNETİMİ (KUSURSUZ TREND DEĞİŞİMİ)
+            # 1. ANLIK POZİSYON YÖNETİMİ (ÇOKLU TEYİTLİ TREND DEĞİŞİMİ)
             # ========================================================
             for symbol, pos in list(aktif_borsa_map.items()):
                 try:
@@ -728,7 +739,7 @@ def otomatik_arkaplan_tarayici():
 
                     try:
                         exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
-                        exchange.create_order(sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
+                        exchange.create_order(sinyal["symbol'], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
                     except Exception as order_err:
                         err_msg = f"⚠️ TP/SL Emir Oluşturma Hatası ({sinyal['symbol']}): {order_err}"
                         print(err_msg, flush=True)
@@ -767,9 +778,13 @@ async def main():
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
-    await app_tg.initialize()
-    await app_tg.start()
-    await app_tg.updater.start_polling(drop_pending_updates=True)
+    # Hata yalıtımı ve güvenli polling başlatma
+    try:
+        await app_tg.initialize()
+        await app_tg.start()
+        await app_tg.updater.start_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+    except Exception as tg_err:
+        print(f"⚠️ Telegram başlatma istisnası yakalandı: {tg_err}", flush=True)
     
     print("🤖 Telegram Bot Asenkron Olarak Dinlemede...", flush=True)
 
