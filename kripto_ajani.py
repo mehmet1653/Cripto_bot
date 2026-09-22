@@ -204,7 +204,6 @@ def fonlama_orani_analizi(symbol, yon):
     except Exception:
         return 0, "Fonlama okunamadı"
 
-# ÇOKLU TEYİTLİ KUSURSUZ HİBRİT TREND KONTROLÜ (1 Saatlik + Fiyat Kırılımı + RSI)
 def btc_trend_kontrolu():
     try:
         ohlcv_btc_1h = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=30)
@@ -215,21 +214,14 @@ def btc_trend_kontrolu():
         adx_1h = ta.trend.ADXIndicator(df_btc_1h['high'], df_btc_1h['low'], df_btc_1h['close'], window=14).adx().iloc[-1]
         rsi_1h = ta.momentum.rsi(df_btc_1h['close'], window=14).iloc[-1]
 
-        # Son mumların gövde ve hacim teyitleri (Fakeout önleyici)
         son_kapanis = df_btc_1h['close'].iloc[-1]
-        son_acilis = df_btc_1h['open'].iloc[-1]
-        onceki_kapanis = df_btc_1h['close'].iloc[-2]
         
-        # Çoklu Teyit Kontrolü: EMA + RSI(50 eşiği) + Güçlü Mum Kırılımı
-        # LONG Teyidi: EMA9 > EMA21 VE RSI > 48 VE Fiyat EMA9'un üzerinde veya hacimli yeşil mum
         if adx_1h >= 18:
             if ema9_1h > ema21_1h and rsi_1h > 47.0 and son_kapanis >= ema9_1h:
                 return "LONG"
-            # SHORT Teyidi: EMA9 < EMA21 VE RSI < 52 VE Fiyat EMA9'un altında veya hacimli kırmızı mum
             elif ema9_1h < ema21_1h and rsi_1h < 53.0 and son_kapanis <= ema9_1h:
                 return "SHORT"
 
-        # 15 Dakikalık Destekleyici Teyit Katmanı
         ohlcv_btc_15m = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=20)
         df_btc_15m = pd.DataFrame(ohlcv_btc_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         ema5_15m = ta.trend.ema_indicator(df_btc_15m['close'], window=5).iloc[-1]
@@ -475,9 +467,6 @@ def otomatik_arkaplan_tarayici():
                 aktif_borsa_map = {}
                 aktif_semboller_listesi = []
 
-            # ========================================================
-            # 0. AÇIK EMİR KONTROLÜ VE POZİSYON KAPANMA TESPİTİ
-            # ========================================================
             try:
                 anlik_aktif_semboller = [p['symbol'] for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                 
@@ -555,9 +544,6 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller = []
 
-            # ========================================================
-            # 2. COİN TARAMA VE GİRİŞ ANALİZİ
-            # ========================================================
             print("🔍 Coinler taranıyor...", flush=True)
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
@@ -625,13 +611,6 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
-            print(f"📊 --- TARAMA SONUÇLARI ---", flush=True)
-            for s in taranan_sinyaller:
-                print(f"🔹 {s['symbol']} | Yön: {s['yon']} | Puan: {s['puan']} | RSI: {s['rsi']:.1f} | ADX: {s['adx']:.1f} | Fiyat: {s['fiyat']}", flush=True)
-
-            # ========================================================
-            # 1. ANLIK POZİSYON YÖNETİMİ (ÇOKLU TEYİTLİ TREND DEĞİŞİMİ)
-            # ========================================================
             for symbol, pos in list(aktif_borsa_map.items()):
                 try:
                     yon = str(pos.get('side', '')).upper()
@@ -682,9 +661,6 @@ def otomatik_arkaplan_tarayici():
                 except Exception as e:
                     continue
 
-            # ========================================================
-            # 3. YENİ İŞLEM AÇMA
-            # ========================================================
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
                 
@@ -739,7 +715,7 @@ def otomatik_arkaplan_tarayici():
 
                     try:
                         exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
-                        exchange.create_order(sinyal["symbol'], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
+                        exchange.create_order(sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
                     except Exception as order_err:
                         err_msg = f"⚠️ TP/SL Emir Oluşturma Hatası ({sinyal['symbol']}): {order_err}"
                         print(err_msg, flush=True)
@@ -778,7 +754,6 @@ async def main():
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
-    # Hata yalıtımı ve güvenli polling başlatma
     try:
         await app_tg.initialize()
         await app_tg.start()
