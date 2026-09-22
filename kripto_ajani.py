@@ -117,7 +117,7 @@ COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
 MAKSIMUM_TOPLAM_POZISYON = 3
 COOLDOWN_SURESI_SANIYE = 45 * 60  
-TESTERE_KISA_COOLDOWN = 15 * 60   # Testere için özel 15 dk cooldown
+TESTERE_KISA_COOLDOWN = 15 * 60   
 
 ai_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
 ai_model_egitildi = False
@@ -216,9 +216,7 @@ def btc_trend_kontrolu():
         ema21_1h = ta.trend.ema_indicator(df_btc_1h['close'], window=21).iloc[-1]
         adx_1h = ta.trend.ADXIndicator(df_btc_1h['high'], df_btc_1h['low'], df_btc_1h['close'], window=14).adx().iloc[-1]
         rsi_1h = ta.momentum.rsi(df_btc_1h['close'], window=14).iloc[-1]
-        son_kapanis = df_btc_1h['close'].iloc[-1]
 
-        # Trend modu eski klasik sistem: ADX ve 1h EMA'lar ile yön tespiti
         if adx_1h >= 22.0:
             ANLIK_PIYASA_MODU = "TREND"
             if ema9_1h > ema21_1h and rsi_1h > 48.0:
@@ -227,7 +225,7 @@ def btc_trend_kontrolu():
                 return "SHORT"
         else:
             ANLIK_PIYASA_MODU = "TESTERE"
-            if son_kapanis >= ema9_1h:
+            if ema9_1h > ema21_1h:
                 return "LONG"
             else:
                 return "SHORT"
@@ -242,7 +240,16 @@ def hibrit_tp_sl_hesapla(df, giris_fiyati, yon, satis_duvari, alis_duvari, btc_y
         global ANLIK_PIYASA_MODU
         
         if ANLIK_PIYASA_MODU == "TREND":
-            hedef_fiyat_yuzdesi = 0.06 # Trend modunda yüksek ROE (%30 hedeflenir)
+            # Hacme bağlı dinamik trend hedefi (Körü körüne sabit %30 yerine hacim momentumuna duyarlı)
+            try:
+                vol_ort = df['volume'].rolling(window=20).mean().iloc[-1]
+                vol_oran = df['volume'].iloc[-1] / vol_ort if vol_ort > 0 else 1.0
+            except Exception:
+                vol_oran = 1.0
+            
+            temel_hedef = 0.05  # Temel %25 ROE eşdeğeri hareket
+            hacim_faktor = max(0.6, min(1.8, vol_oran))
+            hedef_fiyat_yuzdesi = max(0.025, min(0.08, temel_hedef * hacim_faktor))
             sl_fiyat_yuzdesi = 0.025   
         else:
             atr_yuzde = atr_ve_volatilite_hesapla(df)
@@ -610,7 +617,6 @@ def otomatik_arkaplan_tarayici():
                         pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | ROE: `%{roe:.2f}`", basarili=False, cezali_mi=True)
                         continue
 
-                    # Testere modu: ROE +%3 olduysa ve momentum bittiyse (<80 puan) hemen kârı al, 15 dk cooldown at.
                     if ANLIK_PIYASA_MODU == "TESTERE" and roe >= 3.0:
                         current_coin_data = next((s for s in taranan_sinyaller if s["symbol"] == symbol), None)
                         if not current_coin_data or current_coin_data["puan"] < 80:
@@ -633,15 +639,6 @@ def otomatik_arkaplan_tarayici():
                             basarili=(roe > 0), cezali_mi=False
                         )
                         continue
-
-                    current_coin_df = next((s["df"] for s in taranan_sinyaller if s["symbol"] == symbol), None)
-                    if current_coin_df is not None:
-                        veri_paketi = {"symbol": symbol, "yon": yon, "giris_fiyati": merkez, "anlik_fiyat": guncel_fiyat, "kaldirac": kaldirac_val}
-                        bariyer_durum = dikey_bariyer_kontrol(veri_paketi, current_coin_df.values.tolist())
-                        
-                        tp_tetik_roe = 28.0 if ANLIK_PIYASA_MODU == "TREND" else 10.0
-                        if bariyer_durum["kapat_ilsi"] and (roe >= tp_tetik_roe or roe < -4.0):
-                            pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *ACİL ÇIKIŞ / KÂR AL*\n📌 `{symbol}`\nSebep: `{bariyer_durum['neden']}`", basarili=(roe > 0), cezali_mi=True)
                         
                 except Exception as e:
                     continue
@@ -655,7 +652,6 @@ def otomatik_arkaplan_tarayici():
                 if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
                     break
                 
-                # Testere modunda 85 puan, Trend modunda eski mantık (50)
                 gerekli_puan_esigi = 85 if ANLIK_PIYASA_MODU == "TESTERE" else 50
                 if sinyal["puan"] < gerekli_puan_esigi: 
                     continue
@@ -679,7 +675,8 @@ def otomatik_arkaplan_tarayici():
                     exchange.set_leverage(KALDIRAC, sinyal["symbol"])
                     market = exchange.market(sinyal["symbol"])
                     
-                    hedef_butce = toplam_bakiye * 0.20
+                    # KASA 3'E BÖLÜNDÜ (%33.3)
+                    hedef_butce = toplam_bakiye * (1.0 / MAKSIMUM_TOPLAM_POZISYON)
                     kullanilacak_tutar = min(hedef_butce, serbest_bakiye)
                     
                     if kullanilacak_tutar < 1.0 or serbest_bakiye < 1.0:
