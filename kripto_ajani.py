@@ -463,9 +463,6 @@ def otomatik_arkaplan_tarayici():
                 aktif_borsa_map = {}
                 aktif_semboller_listesi = []
 
-            # ========================================================
-            # 0. AÇIK EMİR KONTROLÜ VE POZİSYON KAPANMA TESPİTİ
-            # ========================================================
             try:
                 anlik_aktif_semboller = [p['symbol'] for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                 
@@ -543,9 +540,6 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller = []
 
-            # ========================================================
-            # 2. COİN TARAMA VE GİRİŞ ANALİZİ
-            # ========================================================
             print("🔍 Coinler taranıyor...", flush=True)
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
@@ -602,7 +596,6 @@ def otomatik_arkaplan_tarayici():
 
                     sinyal_puani = temel_puan + anlik_momentum_bonus + fonlama_puani + derinlik_bonus - ceza_puani
                     
-                    # Hangi coinin kaç puan aldığını loglarda görmek için eklenen print:
                     print(f"📊 {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} (RSI: {rsi:.1f}, ADX: {adx_val:.1f})", flush=True)
 
                     taranan_sinyaller.append({
@@ -616,9 +609,6 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
-            # ========================================================
-            # 1. ANLIK POZİSYON YÖNETİMİ (YENİ STRATEJİ: TERS TRENDDE KÂRDA/KOMİSYONDA ÇIKIŞ)
-            # ========================================================
             for symbol, pos in list(aktif_borsa_map.items()):
                 try:
                     yon = str(pos.get('side', '')).upper()
@@ -640,22 +630,16 @@ def otomatik_arkaplan_tarayici():
                         
                     roe = fark_yuzdesi * 100 * kaldirac_val
 
-                    # Trendin ana yönle ters düşüp düşmediği
                     trend_zitti_mi = False
                     if btc_yonu == "LONG" and yon == "SHORT":
                         trend_zitti_mi = True
                     elif btc_yonu == "SHORT" and yon == "LONG":
                         trend_zitti_mi = True
 
-                    # 1. Standart Stop-Loss (Maksimum zarar sınırı)
                     if roe <= -18.0:
                         pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | ROE: `%{roe:.2f}`", basarili=False, cezali_mi=True)
                         continue
                     
-                    # 2. YENİ TAKTİK: Ters Trend Kontrolü
-                    # Eğer trend terse döndüyse;
-                    # - ROE >= 0.0 (Kârda veya komisyonu kurtaracak sıfır/artı bölgedeyse) hemen kapat ve cooldown bekle!
-                    # - ROE < 0 (Zarardaysa) dokunulmuyor, SL veya TP beklenmeye devam ediliyor.
                     elif trend_zitti_mi:
                         if roe >= 0.0:
                             pozisyonu_kapat(
@@ -676,9 +660,6 @@ def otomatik_arkaplan_tarayici():
                 except Exception as e:
                     continue
 
-            # ========================================================
-            # 3. YENİ İŞLEM AÇMA (YÜKSEK KALİTE EŞİĞİ)
-            # ========================================================
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
                 
@@ -781,7 +762,14 @@ async def main():
 
     app_tg.post_init = post_init
 
-    await app_tg.run_polling(drop_pending_updates=True)
+    # Çökme sorununu önleyen güvenli başlatma yöntemi:
+    await app_tg.initialize()
+    await app_tg.start()
+    await app_tg.updater.start_polling(drop_pending_updates=True)
+    
+    # Döngünün kapanmasını engellemek için sonsuz bekletme
+    stop_signal = asyncio.Event()
+    await stop_signal.wait()
 
 if __name__ == '__main__':
     try:
