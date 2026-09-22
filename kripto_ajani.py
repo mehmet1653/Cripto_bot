@@ -251,7 +251,6 @@ def hibrit_tp_sl_hesapla(df, giris_fiyati, yon, satis_duvari, alis_duvari, btc_y
         sl_fiyat_yuzdesi = max(0.010, min(0.035, 0.012 * dinamik_faktor))
         
         if yon == 'LONG':
-            # Duvar varsa TP'yi yakınındaki satış duvarının hemen altına koyarak kârı garantile
             if satis_duvari and satis_duvari > giris_fiyati:
                 duvar_mesafe = (satis_duvari - giris_fiyati) / giris_fiyati
                 if duvar_mesafe < hedef_fiyat_yuzdesi:
@@ -615,17 +614,16 @@ def otomatik_arkaplan_tarayici():
                     ceza_puani = 0
                     duvar_bonus = 0
 
-                    # Emir Duvarına Göre Puanlama ve Güvence
                     if grid_yonu == "LONG":
                         if duvar_tipi == "SATIS_DUVARI_VAR" or book_durum == "SELL_PRESSURE":
                             ceza_puani += 20
                         if duvar_tipi == "ALIS_DUVARI_VAR" or book_durum == "BUY_PRESSURE":
-                            duvar_bonus += 15  # Alış duvarı varsa ekstra puan ve güven
+                            duvar_bonus += 15
                     elif grid_yonu == "SHORT":
                         if duvar_tipi == "ALIS_DUVARI_VAR" or book_durum == "BUY_PRESSURE":
                             ceza_puani += 20
                         if duvar_tipi == "SATIS_DUVARI_VAR" or book_durum == "SELL_PRESSURE":
-                            duvar_bonus += 15  # Satış duvarı varsa ekstra puan ve güven
+                            duvar_bonus += 15
 
                     fonlama_puani, _ = fonlama_orani_analizi(symbol, grid_yonu)
                     temel_puan = 70 if adx_val >= 20 else 45
@@ -805,7 +803,7 @@ async def main():
     stop_event = asyncio.Event()
     await stop_event.wait()
 
-in __name__ == '__main__':
+if __name__ == '__main__':
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
