@@ -187,7 +187,7 @@ def emir_defteri_derinlik_analizi(symbol, limit=30):
     except Exception:
         return "NEUTRAL", 50.0, "NORMAL", None, None
 
-def mum_ve_hacim_gecerlilik_kontrolu(df):
+def mum_ve_hacim_gecerlilik_kontrolu(df, piyasa_modu="TREND"):
     try:
         son_mum = df.iloc[-1]
         govde = abs(son_mum['close'] - son_mum['open'])
@@ -201,7 +201,12 @@ def mum_ve_hacim_gecerlilik_kontrolu(df):
         anlik_vol = son_mum['volume']
         hacim_carpani = anlik_vol / vol_ort if vol_ort > 0 else 1.0
         
-        gecerli_mi = (govde_orani >= 0.50) and (hacim_carpani >= 1.1)
+        # Piyasa moduna göre dinamik esneklik
+        if piyasa_modu == "TESTERE":
+            gecerli_mi = (govde_orani >= 0.25) and (hacim_carpani >= 0.65)
+        else:
+            gecerli_mi = (govde_orani >= 0.50) and (hacim_carpani >= 1.1)
+            
         return gecerli_mi, hacim_carpani
     except Exception:
         return True, 1.0
@@ -572,9 +577,10 @@ def otomatik_arkaplan_tarayici():
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-                    mum_gecerli_mi, hacim_carpani = mum_ve_hacim_gecerlilik_kontrolu(df)
+                    # BURADA ANLIK_PIYASA_MODU FONKSİYONA AKTARILIYOR
+                    mum_gecerli_mi, hacim_carpani = mum_ve_hacim_gecerlilik_kontrolu(df, piyasa_modu=ANLIK_PIYASA_MODU)
                     if not mum_gecerli_mi:
-                        print(f"⏭️ Mum/Hacim Filtresi Eledi ({symbol}): Gövde yetersiz veya hacim düşük (Çarpan: {hacim_carpani:.2f})", flush=True)
+                        print(f"⏭️ Mum/Hacim Filtresi Eledi ({symbol}): Gövde yetersiz veya hacim düşük (Mod: {ANLIK_PIYASA_MODU}, Çarpan: {hacim_carpani:.2f})", flush=True)
                         continue
 
                     ema5 = ta.trend.ema_indicator(df['close'], window=5).iloc[-1]
