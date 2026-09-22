@@ -201,11 +201,12 @@ def mum_ve_hacim_gecerlilik_kontrolu(df, piyasa_modu="TREND"):
         anlik_vol = son_mum['volume']
         hacim_carpani = anlik_vol / vol_ort if vol_ort > 0 else 1.0
         
-        # Piyasa moduna göre dinamik esneklik
+        # Esnetilmiş kurallar (Hem Testere hem Trend modu için daha toleranslı eşikler)
         if piyasa_modu == "TESTERE":
-            gecerli_mi = (govde_orani >= 0.25) and (hacim_carpani >= 0.65)
+            gecerli_mi = (govde_orani >= 0.20) and (hacim_carpani >= 0.55)
         else:
-            gecerli_mi = (govde_orani >= 0.50) and (hacim_carpani >= 1.1)
+            # Trend modunda da çok sıkmamak için eşikler aşağı çekildi
+            gecerli_mi = (govde_orani >= 0.30) and (hacim_carpani >= 0.80)
             
         return gecerli_mi, hacim_carpani
     except Exception:
@@ -577,7 +578,7 @@ def otomatik_arkaplan_tarayici():
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-                    # BURADA ANLIK_PIYASA_MODU FONKSİYONA AKTARILIYOR
+                    # Esnetilmiş filtre fonksiyonu çağrısı
                     mum_gecerli_mi, hacim_carpani = mum_ve_hacim_gecerlilik_kontrolu(df, piyasa_modu=ANLIK_PIYASA_MODU)
                     if not mum_gecerli_mi:
                         print(f"⏭️ Mum/Hacim Filtresi Eledi ({symbol}): Gövde yetersiz veya hacim düşük (Mod: {ANLIK_PIYASA_MODU}, Çarpan: {hacim_carpani:.2f})", flush=True)
