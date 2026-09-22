@@ -241,24 +241,17 @@ def btc_trend_kontrolu():
         return "NOTR"
 
 def duvara_gore_akilli_giris_ve_seviyeler(anlik_fiyat, yon, satis_duvari, alis_duvari, atr_yuzde):
-    """
-    İstediğiniz mantık: Fiyat 100 ise, alış duvarı veya satış duvarına 
-    göre trend yönünde akıllı limit giriş fiyatı, TP ve SL belirler.
-    """
     if yon == 'LONG':
-        # Alış duvarı varsa hemen üstünden limit giriş yap, yoksa anlık fiyatın altından
         if alis_duvari and alis_duvari < anlik_fiyat:
             giris_fiyati = alis_duvari * 1.002 
         else:
             giris_fiyati = anlik_fiyat * 0.995
             
-        # TP: Satış duvarı varsa hemen altı, yoksa standart hedef
         if satis_duvari and satis_duvari > giris_fiyati:
             tp_fiyat = satis_duvari * 0.992
         else:
             tp_fiyat = giris_fiyati * (1 + max(0.015, atr_yuzde / 100 * 1.5))
             
-        # SL: Alış duvarının altı
         if alis_duvari and alis_duvari < giris_fiyati:
             sl_fiyat = alis_duvari * 0.995
         else:
@@ -266,7 +259,6 @@ def duvara_gore_akilli_giris_ve_seviyeler(anlik_fiyat, yon, satis_duvari, alis_d
             
         kapat_yon = 'sell'
     else:
-        # SHORT için: Satış duvarı varsa hemen altından limit giriş
         if satis_duvari and satis_duvari > anlik_fiyat:
             giris_fiyati = satis_duvari * 0.998
         else:
@@ -713,7 +705,7 @@ def otomatik_arkaplan_tarayici():
                     continue
 
             # ========================================================
-            # 3. YENİ İŞLEM AÇMA (85 PUAN EŞİĞİ & DUVAR LİMİT GİRİŞ)
+            # 3. YENİ İŞLEM AÇMA (80 PUAN EŞİĞİ & DUVAR LİMİT GİRİŞ)
             # ========================================================
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
@@ -724,8 +716,8 @@ def otomatik_arkaplan_tarayici():
                 if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
                     break
                 
-                if sinyal["puan"] < 85: 
-                    print(f"ℹ️ {sinyal['symbol']} puanı ({sinyal['puan']}) 85 puanlık eşik değerin altında.", flush=True)
+                if sinyal["puan"] < 80: 
+                    print(f"ℹ️ {sinyal['symbol']} puanı ({sinyal['puan']}) 80 puanlık eşik değerin altında.", flush=True)
                     continue
 
                 try:
