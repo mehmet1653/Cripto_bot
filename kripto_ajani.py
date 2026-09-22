@@ -338,39 +338,6 @@ def pozisyonu_kapat(symbol, yon, miktar, sebep_mesaji, basarili=True, cezali_mi=
     hafizayi_kaydet()
     if sebep_mesaji: telegram_mesaj_gonder(sebep_mesaji)
 
-def dikey_bariyer_kontrol(pozisyon, mevcut_mumlar):
-    try:
-        islem_yonu = pozisyon.get("yon", "LONG")
-        giris_fiyati = pozisyon.get("giris_fiyati", 0)
-        anlik_fiyat = pozisyon.get("anlik_fiyat", giris_fiyati)
-        kaldirac = pozisyon.get("kaldirac", KALDIRAC)
-
-        fiyat_degisim_yuzdesi = (anlik_fiyat - giris_fiyati) / giris_fiyati if islem_yonu == "LONG" else (giris_fiyati - anlik_fiyat) / giris_fiyati
-        kaldiracli_roe = fiyat_degisim_yuzdesi * kaldirac * 100
-
-        if kaldiracli_roe >= 25.0:
-            return {"kapat_ilsi": True, "neden": f"Hedef TP Seviyesine Ulaşıldı! (ROE: %{kaldiracli_roe:.2f})"}
-
-        if len(mevcut_mumlar) < 5: return {"kapat_ilsi": False, "neden": "Yetersiz mum."}
-
-        son_mumlar = mevcut_mumlar[-5:]
-        hacimler = [m[5] for m in son_mumlar]
-        govdeler = [abs(m[4] - m[1]) for m in son_mumlar]
-        ortalama_govde = sum(govdeler[:-1]) / len(govdeler[:-1]) if len(govdeler) > 1 else 1e-8
-
-        son_mum_govde = govdeler[-1]
-        son_mum_yonu_kirmizi = son_mumlar[-1][4] < son_mumlar[-1][1]
-        son_mum_yonu_yesil = son_mumlar[-1][4] > son_mumlar[-1][1]
-
-        if islem_yonu == "LONG" and son_mum_yonu_kirmizi and son_mum_govde > (ortalama_govde * 3.0) and hacimler[-1] > (sum(hacimler[:-1])/4.0) * 2:
-            return {"kapat_ilsi": True, "neden": f"Sert Satış Mum Kırılımı (ROE: %{kaldiracli_roe:.2f})"}
-        elif islem_yonu == "SHORT" and son_mum_yonu_yesil and son_mum_govde > (ortalama_govde * 3.0) and hacimler[-1] > (sum(hacimler[:-1])/4.0) * 2:
-            return {"kapat_ilsi": True, "neden": f"Sert Alış Mum Kırılımı (ROE: %{kaldiracli_roe:.2f})"}
-
-        return {"kapat_ilsi": False, "neden": "Devam."}
-    except Exception:
-        return {"kapat_ilsi": False, "neden": "Hata."}
-
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID):
         return
@@ -550,6 +517,7 @@ def otomatik_arkaplan_tarayici():
                         yapay_zekayi_egit_ve_guncelle()
                         telegram_mesaj_gonder(f"{sonuc_mesaj_tipi}\n📌 `{eski_sym}` | Cooldown süresi başlatıldı.")
                 
+                # Açıkta kalan iptal edilmiş limit emirleri temizle
                 if len(raw_positions) > 0 or not raw_positions:
                     time.sleep(1)
                     double_check_positions = exchange.fetch_positions()
@@ -611,7 +579,6 @@ def otomatik_arkaplan_tarayici():
                             pass
 
                     grid_yonu = btc_yonu
-
                     ceza_puani = 0
                     duvar_bonus = 0
 
@@ -647,12 +614,8 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
-            print(f"📊 --- TARAMA SONUÇLARI ---", flush=True)
-            for s in taranan_sinyaller:
-                print(f"🔹 {s['symbol']} | Yön: {s['yon']} | Puan: {s['puan']} | RSI: {s['rsi']:.1f} | Fiyat: {s['fiyat']}", flush=True)
-
             # ========================================================
-            # 1. ANLIK POZİSYON YÖNETİMİ
+            # 1. ANLIK POZİSYON VE ACİL DURUM YÖNETİMİ
             # ========================================================
             for symbol, pos in list(aktif_borsa_map.items()):
                 try:
@@ -681,6 +644,7 @@ def otomatik_arkaplan_tarayici():
                     elif btc_yonu == "SHORT" and yon == "LONG":
                         trend_zitti_mi = True
 
+                    # Acil güvenlik sigortası (Borsa stop emri çalışana kadar ek koruma)
                     if roe <= -18.0:
                         pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | ROE: `%{roe:.2f}`", basarili=False, cezali_mi=True)
                         continue
@@ -692,14 +656,6 @@ def otomatik_arkaplan_tarayici():
                             basarili=True, cezali_mi=False
                         )
                         continue
-
-                    current_coin_df = next((s["df"] for s in taranan_sinyaller if s["symbol"] == symbol), None)
-                    if current_coin_df is not None:
-                        veri_paketi = {"symbol": symbol, "yon": yon, "giris_fiyati": merkez, "anlik_fiyat": guncel_fiyat, "kaldirac": kaldirac_val}
-                        bariyer_durum = dikey_bariyer_kontrol(veri_paketi, current_coin_df.values.tolist())
-                        
-                        if bariyer_durum["kapat_ilsi"] and (roe >= 25.0 or roe < -4.0):
-                            pozisyonu_kapat(symbol, yon, kontrat, f"🎯 *ACİL ÇIKIŞ / KÂR AL*\n📌 `{symbol}`\nSebep: `{bariyer_durum['neden']}`", basarili=(roe > 0), cezali_mi=True)
                         
                 except Exception as e:
                     continue
@@ -750,7 +706,7 @@ def otomatik_arkaplan_tarayici():
                     # 1. Adım: Duvar kademesinden LİMİT GİRİŞ emri gönder
                     exchange.create_order(sinyal["symbol"], 'limit', islem_yonu, miktar, giris_fiyati)
                     
-                    # 2. Adım: Pozisyon dolduğunda çalışacak TP ve SL emirleri
+                    # 2. Adım: Pozisyon dolduğunda çalışacak TP ve SL emirlerini borsa sunucusuna ilet
                     try:
                         exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
                         exchange.create_order(sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
