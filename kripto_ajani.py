@@ -13,6 +13,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
 
+# Tamponlamayı tamamen devre dışı bırak
 os.environ['PYTHONUNBUFFERED'] = '1'
 sys.stdout.reconfigure(line_buffering=True)
 
@@ -28,6 +29,7 @@ exchange = ccxt.gate({
     'apiKey': '82cca880898a88d1a31e86d8eb474c57',
     'secret': '1ac479b9df5e6f2e89560b0d238a250694719b6fcae20da00ebc54ad6aeb8898',
     'enableRateLimit': True,
+    'timeout': 30000,  # 30 saniye zaman aşımı eklendi (takılmayı önler)
     'options': {
         'defaultType': 'swap'
     }
@@ -428,20 +430,24 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
-    print("🚀 Bot Arka Plan Döngüsü Aktif ve Çalışıyor...", flush=True)
+    print("🚀 Arka plan tarayıcı thread'i başlatıldı, piyasalar yükleniyor...", flush=True)
     try:
         exchange.load_markets()
+        print("✅ Piyasalar başarıyla yüklendi, yapay zeka eğitiliyor...", flush=True)
         yapay_zekayi_egit_ve_guncelle()
     except Exception as e:
-        print(f"⚠️ İlk yükleme hatası: {e}", flush=True)
+        print(f"⚠️ İlk yükleme hatası (Devam ediliyor): {e}", flush=True)
     
     while True:
         try:
+            print("🔄 Yeni tarama döngüsü başlatılıyor...", flush=True)
             if not BOT_CALISIYOR_MU:
+                print("⏸️ Bot durdurulmuş durumda, bekleniyor...", flush=True)
                 time.sleep(5)
                 continue
 
             if time.time() < GLOBAL_COOLDOWN_BITIS:
+                print("⏳ Genel cooldown süresindeyiz, bekleniyor...", flush=True)
                 time.sleep(15)
                 continue
 
@@ -553,6 +559,7 @@ def otomatik_arkaplan_tarayici():
                             continue
 
                 try:
+                    print(f"🔎 Analiz ediliyor: {symbol}", flush=True)
                     oi_degeri, oi_degisim = acik_pozisyon_oi_kontrolu(symbol)
                     book_durum, alis_orani, duvar_tipi, satis_duvari, alis_duvari = emir_defteri_derinlik_analizi(symbol, limit=30)
                     
@@ -573,6 +580,7 @@ def otomatik_arkaplan_tarayici():
                             pred_input = np.array([[rsi, anlik_fiyat, float(btc_yonu == "LONG"), 1.0, 0.0, 0.0]])
                             ai_tahmin = ai_model.predict(pred_input)[0]
                             if ai_tahmin == 0:
+                                print(f"🤖 Yapay zeka {symbol} için sinyali onaylamadı.", flush=True)
                                 continue
                         except Exception:
                             pass
@@ -744,6 +752,7 @@ def otomatik_arkaplan_tarayici():
         except Exception as e:
             print(f"⚠️ Döngü genel hata: {e}", flush=True)
         
+        print("💤 Döngü tamamlandı, 8 saniye bekleniyor...", flush=True)
         time.sleep(8)
 
 async def main():
@@ -752,7 +761,6 @@ async def main():
         tarayici_thread = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
         tarayici_thread.start()
 
-    # DÜZELTME BURADA YAPILDI: post_init doğrudan Builder içerisine bağlandı
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
     try:
