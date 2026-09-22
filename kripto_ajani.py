@@ -251,11 +251,22 @@ def hibrit_tp_sl_hesapla(df, giris_fiyati, yon, satis_duvari, alis_duvari, btc_y
         sl_fiyat_yuzdesi = max(0.010, min(0.035, 0.012 * dinamik_faktor))
         
         if yon == 'LONG':
+            # Duvar varsa TP'yi yakınındaki satış duvarının hemen altına koyarak kârı garantile
+            if satis_duvari and satis_duvari > giris_fiyati:
+                duvar_mesafe = (satis_duvari - giris_fiyati) / giris_fiyati
+                if duvar_mesafe < hedef_fiyat_yuzdesi:
+                    hedef_fiyat_yuzdesi = max(0.005, duvar_mesafe * 0.95)
+            
             tp_fiyat = giris_fiyati * (1 + hedef_fiyat_yuzdesi)
             sl_fiyat = giris_fiyati * (1 - sl_fiyat_yuzdesi)
             kapat_yon = 'sell'
             hedef_roe = ((tp_fiyat - giris_fiyati) / giris_fiyati) * 100 * KALDIRAC
         else:
+            if alis_duvari and alis_duvari < giris_fiyati:
+                duvar_mesafe = (giris_fiyati - alis_duvari) / giris_fiyati
+                if duvar_mesafe < hedef_fiyat_yuzdesi:
+                    hedef_fiyat_yuzdesi = max(0.005, duvar_mesafe * 0.95)
+                    
             tp_fiyat = giris_fiyati * (1 - hedef_fiyat_yuzdesi)
             sl_fiyat = giris_fiyati * (1 + sl_fiyat_yuzdesi)
             kapat_yon = 'buy'
@@ -457,6 +468,11 @@ def otomatik_arkaplan_tarayici():
             btc_yonu = btc_trend_kontrolu()
             print(f"👑 Güncel BTC Trend Yönü: {btc_yonu}", flush=True)
 
+            if btc_yonu == "NOTR":
+                print("⚠️ BTC trendi NÖTR, piyasa yönsüz olduğu için bu döngüde işlem aranmıyor.", flush=True)
+                time.sleep(10)
+                continue
+
             try:
                 raw_positions = exchange.fetch_positions()
                 aktif_borsa_map = {}
@@ -553,9 +569,9 @@ def otomatik_arkaplan_tarayici():
             taranan_sinyaller = []
 
             # ========================================================
-            # 2. COİN TARAMA VE GİRİŞ ANALİZİ
+            # 2. COİN TARAMA VE GİRİŞ ANALİZİ (DUVAR KONTROLLÜ)
             # ========================================================
-            print("🔍 Coinler taranıyor...", flush=True)
+            print(f"🔍 Coinler taranıyor (Hedef Yön: {btc_yonu})...", flush=True)
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
                 
@@ -594,27 +610,30 @@ def otomatik_arkaplan_tarayici():
                         except Exception:
                             pass
 
-                    if ema5 > ema13 and anlik_fiyat >= ema5:
-                        grid_yonu = "LONG"
-                    elif ema5 < ema13 and anlik_fiyat <= ema5:
-                        grid_yonu = "SHORT"
-                    else:
-                        grid_yonu = "LONG" if ema5 > ema13 else "SHORT"
+                    grid_yonu = btc_yonu
 
                     ceza_puani = 0
-                    if grid_yonu == "LONG" and (duvar_tipi == "SATIS_DUVARI_VAR" or book_durum == "SELL_PRESSURE"):
-                        ceza_puani += 20
-                    elif grid_yonu == "SHORT" and (duvar_tipi == "ALIS_DUVARI_VAR" or book_durum == "BUY_PRESSURE"):
-                        ceza_puani += 20
+                    duvar_bonus = 0
+
+                    # Emir Duvarına Göre Puanlama ve Güvence
+                    if grid_yonu == "LONG":
+                        if duvar_tipi == "SATIS_DUVARI_VAR" or book_durum == "SELL_PRESSURE":
+                            ceza_puani += 20
+                        if duvar_tipi == "ALIS_DUVARI_VAR" or book_durum == "BUY_PRESSURE":
+                            duvar_bonus += 15  # Alış duvarı varsa ekstra puan ve güven
+                    elif grid_yonu == "SHORT":
+                        if duvar_tipi == "ALIS_DUVARI_VAR" or book_durum == "BUY_PRESSURE":
+                            ceza_puani += 20
+                        if duvar_tipi == "SATIS_DUVARI_VAR" or book_durum == "SELL_PRESSURE":
+                            duvar_bonus += 15  # Satış duvarı varsa ekstra puan ve güven
 
                     fonlama_puani, _ = fonlama_orani_analizi(symbol, grid_yonu)
                     temel_puan = 70 if adx_val >= 20 else 45
                     anlik_momentum_bonus = 10 if (grid_yonu == "LONG" and anlik_fiyat > ema5) or (grid_yonu == "SHORT" and anlik_fiyat < ema5) else 0
-                    derinlik_bonus = 5 if (grid_yonu == "LONG" and book_durum == "BUY_PRESSURE") or (grid_yonu == "SHORT" and book_durum == "SELL_PRESSURE") else 0
 
-                    sinyal_puani = temel_puan + anlik_momentum_bonus + fonlama_puani + derinlik_bonus - ceza_puani
+                    sinyal_puani = temel_puan + anlik_momentum_bonus + fonlama_puani + duvar_bonus - ceza_puani
 
-                    print(f"📊 {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} (RSI: {rsi:.1f}, ADX: {adx_val:.1f})", flush=True)
+                    print(f"📊 {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} (Duvar Durumu: {duvar_durumu})", flush=True)
 
                     taranan_sinyaller.append({
                         "symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, 
@@ -630,10 +649,10 @@ def otomatik_arkaplan_tarayici():
 
             print(f"📊 --- TARAMA SONUÇLARI ---", flush=True)
             for s in taranan_sinyaller:
-                print(f"🔹 {s['symbol']} | Yön: {s['yon']} | Puan: {s['puan']} | RSI: {s['rsi']:.1f} | ADX: {s['adx']:.1f} | Fiyat: {s['fiyat']}", flush=True)
+                print(f"🔹 {s['symbol']} | Yön: {s['yon']} | Puan: {s['puan']} | RSI: {s['rsi']:.1f} | Fiyat: {s['fiyat']}", flush=True)
 
             # ========================================================
-            # 1. ANLIK POZİSYON YÖNETİMİ (AKILLI TREND GÜNCELLEMESİ)
+            # 1. ANLIK POZİSYON YÖNETİMİ
             # ========================================================
             for symbol, pos in list(aktif_borsa_map.items()):
                 try:
@@ -662,12 +681,10 @@ def otomatik_arkaplan_tarayici():
                     elif btc_yonu == "SHORT" and yon == "LONG":
                         trend_zitti_mi = True
 
-                    # 1. STOP-LOSS DURUMU (Zarar çok derinleştiyse)
                     if roe <= -18.0:
                         pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | ROE: `%{roe:.2f}`", basarili=False, cezali_mi=True)
                         continue
                     
-                    # 2. AKILLI TREND DEĞİŞİKLİĞİ (Sadece pozisyon ARTIDAYSA ve komisyonu çıkaracak kadar kârda/nefesta ise kapatır)
                     elif trend_zitti_mi and roe > 0.4: 
                         pozisyonu_kapat(
                             symbol, yon, kontrat, 
@@ -703,17 +720,6 @@ def otomatik_arkaplan_tarayici():
                     print(f"ℹ️ {sinyal['symbol']} puanı ({sinyal['puan']}) eşik değerin altında.", flush=True)
                     continue
 
-                islem_engellendi = False
-                if btc_yonu == "LONG" and sinyal["yon"] != "LONG":
-                    islem_engellendi = True
-                elif btc_yonu == "SHORT" and sinyal["yon"] != "SHORT":
-                    islem_engellendi = True
-                elif btc_yonu == "NOTR":
-                    islem_engellendi = True
-
-                if islem_engellendi:
-                    continue
-
                 try:
                     bakiye_bilgisi = exchange.fetch_balance()
                     toplam_bakiye = float(bakiye_bilgisi['total'].get('USDT', 0))
@@ -722,7 +728,6 @@ def otomatik_arkaplan_tarayici():
                     exchange.set_leverage(KALDIRAC, sinyal["symbol"])
                     market = exchange.market(sinyal["symbol"])
                     
-                    # 4'e bölmek yerine artık 3'e bölünüyor (%33.3)
                     hedef_butce = toplam_bakiye * 0.3333
                     kullanilacak_tutar = min(hedef_butce, serbest_bakiye)
                     
@@ -800,7 +805,7 @@ async def main():
     stop_event = asyncio.Event()
     await stop_event.wait()
 
-if __name__ == '__main__':
+in __name__ == '__main__':
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
