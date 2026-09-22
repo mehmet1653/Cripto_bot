@@ -668,7 +668,6 @@ def otomatik_arkaplan_tarayici():
                         continue
                     
                     # 2. AKILLI TREND DEĞİŞİKLİĞİ (Sadece pozisyon ARTIDAYSA ve komisyonu çıkaracak kadar kârda/nefesta ise kapatır)
-                    # Eğer zarardaysa trend tersine dönse bile kapatmıyoruz, belki döner deyip SL/TP bırakıyoruz.
                     elif trend_zitti_mi and roe > 0.4: 
                         pozisyonu_kapat(
                             symbol, yon, kontrat, 
@@ -723,7 +722,8 @@ def otomatik_arkaplan_tarayici():
                     exchange.set_leverage(KALDIRAC, sinyal["symbol"])
                     market = exchange.market(sinyal["symbol"])
                     
-                    hedef_butce = toplam_bakiye * 0.20
+                    # 4'e bölmek yerine artık 3'e bölünüyor (%33.3)
+                    hedef_butce = toplam_bakiye * 0.3333
                     kullanilacak_tutar = min(hedef_butce, serbest_bakiye)
                     
                     if kullanilacak_tutar < 1.0 or serbest_bakiye < 1.0:
@@ -765,7 +765,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     print(f"⚡ İşlem açıldı: {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}`\n🎯 Hedef ROE: `%{hedef_roe:.1f}`")
+                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI (5X - 1/3 Kasa)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}`\n🎯 Hedef ROE: `%{hedef_roe:.1f}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası ({sinyal['symbol']}): {e}", flush=True)
