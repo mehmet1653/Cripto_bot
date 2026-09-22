@@ -428,7 +428,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
-    print("🚀 Bot Arka Plan Döngüsü Aktif...", flush=True)
+    print("🚀 Bot Arka Plan Döngüsü Aktif ve Çalışıyor...", flush=True)
     try:
         exchange.load_markets()
         yapay_zekayi_egit_ve_guncelle()
@@ -549,6 +549,7 @@ def otomatik_arkaplan_tarayici():
                     if cooldown_veri:
                         zaman_kontrol = cooldown_veri.get("zaman", 0) if isinstance(cooldown_veri, dict) else float(cooldown_veri)
                         if (zaman_kontrol - time.time()) > 0:
+                            print(f"⏳ {symbol} cooldown sürecinde, atlanıyor.", flush=True)
                             continue
 
                 try:
@@ -605,6 +606,7 @@ def otomatik_arkaplan_tarayici():
                         "satis_duvari": satis_duvari, "alis_duvari": alis_duvari
                     })
                 except Exception as ex:
+                    print(f"⚠️ Tarama hatası ({symbol}): {ex}", flush=True)
                     continue
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
@@ -670,6 +672,7 @@ def otomatik_arkaplan_tarayici():
                     break
                 
                 if sinyal["puan"] < MIN_SINYAL_PUANI: 
+                    print(f"ℹ️ {sinyal['symbol']} puanı ({sinyal['puan']}) eşik değerin ({MIN_SINYAL_PUANI}) altında.", flush=True)
                     continue
 
                 islem_engellendi = False
@@ -744,7 +747,13 @@ def otomatik_arkaplan_tarayici():
         time.sleep(8)
 
 async def main():
-    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    async def post_init(application):
+        print("🤖 Telegram Bot Asenkron Olarak Başlatılıyor ve Tarayıcı Tetikleniyor...", flush=True)
+        tarayici_thread = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
+        tarayici_thread.start()
+
+    # DÜZELTME BURADA YAPILDI: post_init doğrudan Builder içerisine bağlandı
+    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
     try:
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
@@ -754,20 +763,11 @@ async def main():
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
-    
-    async def post_init(application):
-        print("🤖 Telegram Bot Asenkron Olarak Dinlemede...", flush=True)
-        tarayici_thread = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
-        tarayici_thread.start()
 
-    app_tg.post_init = post_init
-
-    # Çökme sorununu önleyen güvenli başlatma yöntemi:
     await app_tg.initialize()
     await app_tg.start()
     await app_tg.updater.start_polling(drop_pending_updates=True)
     
-    # Döngünün kapanmasını engellemek için sonsuz bekletme
     stop_signal = asyncio.Event()
     await stop_signal.wait()
 
