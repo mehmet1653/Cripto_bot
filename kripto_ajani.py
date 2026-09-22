@@ -631,7 +631,7 @@ def otomatik_arkaplan_tarayici():
 
                     sinyal_puani = temel_puan + anlik_momentum_bonus + fonlama_puani + duvar_bonus - ceza_puani
 
-                    print(f"📊 {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} (Duvar Durumu: {duvar_durumu})", flush=True)
+                    print(f"📊 {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} (Duvar Durumu: {duvar_tipi})", flush=True)
 
                     taranan_sinyaller.append({
                         "symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, 
