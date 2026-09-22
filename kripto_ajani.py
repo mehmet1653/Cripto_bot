@@ -187,12 +187,67 @@ def emir_defteri_derinlik_analizi(symbol, limit=30):
     except Exception:
         return "NEUTRAL", 50.0, "NORMAL", None, None
 
+def mum_ve_hacim_gecerlilik_kontrolu(df):
+    try:
+        son_mum = df.iloc[-1]
+        govde = abs(son_mum['close'] - son_mum['open'])
+        tum_boy = son_mum['high'] - son_mum['low']
+        
+        if tum_boy == 0:
+            return False, 1.0
+            
+        govde_orani = govde / tum_boy
+        vol_ort = df['volume'].rolling(window=20).mean().iloc[-1]
+        anlik_vol = son_mum['volume']
+        hacim_carpani = anlik_vol / vol_ort if vol_ort > 0 else 1.0
+        
+        gecerli_mi = (govde_orani >= 0.50) and (hacim_carpani >= 1.1)
+        return gecerli_mi, hacim_carpani
+    except Exception:
+        return True, 1.0
+
 def atr_ve_volatilite_hesapla(df):
     try:
         atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
         return float((atr / df['close'].iloc[-1]) * 100)
     except Exception:
         return 1.5
+
+def akilli_giris_ve_hedef_belirle(symbol, yon, anlik_fiyat, satis_duvari, alis_duvari, atr):
+    try:
+        if yon == 'LONG':
+            if alis_duvari and alis_duvari < anlik_fiyat:
+                giris_fiyati = alis_duvari * 1.001
+            else:
+                giris_fiyati = anlik_fiyat - (atr * 0.2)
+                
+            if satis_duvari and satis_duvari > giris_fiyati:
+                tp_fiyati = satis_duvari * 0.998
+            else:
+                tp_fiyati = giris_fiyati * 1.025
+                
+            sl_fiyati = giris_fiyati - (atr * 1.5)
+            kapat_yon = 'sell'
+        else:
+            if satis_duvari and satis_duvari > anlik_fiyat:
+                giris_fiyati = satis_duvari * 0.999
+            else:
+                giris_fiyati = anlik_fiyat + (atr * 0.2)
+                
+            if alis_duvari and alis_duvari < giris_fiyati:
+                tp_fiyati = alis_duvari * 1.002
+            else:
+                tp_fiyati = giris_fiyati * 0.975
+                
+            sl_fiyati = giris_fiyati + (atr * 1.5)
+            kapat_yon = 'buy'
+            
+        return float(giris_fiyati), float(tp_fiyati), float(sl_fiyati), kapat_yon
+    except Exception:
+        if yon == 'LONG':
+            return anlik_fiyat, anlik_fiyat * 1.02, anlik_fiyat * 0.98, 'sell'
+        else:
+            return anlik_fiyat, anlik_fiyat * 0.98, anlik_fiyat * 1.02, 'buy'
 
 def fonlama_orani_analizi(symbol, yon):
     try:
@@ -209,28 +264,23 @@ def fonlama_orani_analizi(symbol, yon):
 def btc_trend_kontrolu():
     global ANLIK_PIYASA_MODU
     try:
-        # Geniş zaman dilimleri: Hem 1 Saatlik (1h) hem de 4 Saatlik (4h) verileri çekerek daha güvenli yapı kuruyoruz
         ohlcv_btc_1h = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=50)
         df_btc_1h = pd.DataFrame(ohlcv_btc_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
         ohlcv_btc_4h = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='4h', limit=30)
         df_btc_4h = pd.DataFrame(ohlcv_btc_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
-        # 1 Saatlik İndikatörler
         ema9_1h = ta.trend.ema_indicator(df_btc_1h['close'], window=9).iloc[-1]
         ema21_1h = ta.trend.ema_indicator(df_btc_1h['close'], window=21).iloc[-1]
         adx_1h = ta.trend.ADXIndicator(df_btc_1h['high'], df_btc_1h['low'], df_btc_1h['close'], window=14).adx().iloc[-1]
         rsi_1h = ta.momentum.rsi(df_btc_1h['close'], window=14).iloc[-1]
 
-        # 4 Saatlik Geniş Perspektif İndikatörleri
         ema20_4h = ta.trend.ema_indicator(df_btc_4h['close'], window=20).iloc[-1]
         ema50_4h = ta.trend.ema_indicator(df_btc_4h['close'], window=50).iloc[-1]
         rsi_4h = ta.momentum.rsi(df_btc_4h['close'], window=14).iloc[-1]
 
-        # ADX gücüne göre piyasa modunu tayin et
         if adx_1h >= 22.0:
             ANLIK_PIYASA_MODU = "TREND"
-            # Trend modunda hem 1h hem de 4h yapıların birbiriyle uyumlu olmasına bakarız (Geniş Zamanlı Yön Teyidi)
             long_kosulu_4h = (ema20_4h > ema50_4h) and (rsi_4h > 48.0)
             short_kosulu_4h = (ema20_4h < ema50_4h) and (rsi_4h < 52.0)
 
@@ -249,45 +299,6 @@ def btc_trend_kontrolu():
     except Exception:
         ANLIK_PIYASA_MODU = "TESTERE"
         return "NOTR"
-
-def hibrit_tp_sl_hesapla(df, giris_fiyati, yon, satis_duvari, alis_duvari, btc_yonu="NOTR"):
-    try:
-        global ANLIK_PIYASA_MODU
-        
-        if ANLIK_PIYASA_MODU == "TREND":
-            try:
-                vol_ort = df['volume'].rolling(window=20).mean().iloc[-1]
-                vol_oran = df['volume'].iloc[-1] / vol_ort if vol_ort > 0 else 1.0
-            except Exception:
-                vol_oran = 1.0
-            
-            temel_hedef = 0.05  
-            hacim_faktor = max(0.6, min(1.8, vol_oran))
-            hedef_fiyat_yuzdesi = max(0.025, min(0.08, temel_hedef * hacim_faktor))
-            sl_fiyat_yuzdesi = 0.025   
-        else:
-            atr_yuzde = atr_ve_volatilite_hesapla(df)
-            dinamik_faktor = max(0.8, min(2.0, atr_yuzde * 1.0))
-            hedef_fiyat_yuzdesi = max(0.012, min(0.022, 0.015 * dinamik_faktor))
-            sl_fiyat_yuzdesi = max(0.010, min(0.020, 0.012 * dinamik_faktor))
-        
-        if yon == 'LONG':
-            tp_fiyat = giris_fiyati * (1 + hedef_fiyat_yuzdesi)
-            sl_fiyat = giris_fiyati * (1 - sl_fiyat_yuzdesi)
-            kapat_yon = 'sell'
-            hedef_roe = ((tp_fiyat - giris_fiyati) / giris_fiyati) * 100 * KALDIRAC
-        else:
-            tp_fiyat = giris_fiyati * (1 - hedef_fiyat_yuzdesi)
-            sl_fiyat = giris_fiyati * (1 + sl_fiyat_yuzdesi)
-            kapat_yon = 'buy'
-            hedef_roe = ((giris_fiyati - tp_fiyat) / giris_fiyati) * 100 * KALDIRAC
-            
-        return tp_fiyat, sl_fiyat, kapat_yon, hedef_roe
-    except Exception:
-        if yon == 'LONG':
-            return giris_fiyati * 1.025, giris_fiyati * 0.97, 'sell', 12.5
-        else:
-            return giris_fiyati * 0.975, giris_fiyati * 1.03, 'buy', 12.5
 
 def acik_pozisyon_oi_kontrolu(symbol):
     try:
@@ -561,6 +572,11 @@ def otomatik_arkaplan_tarayici():
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
+                    mum_gecerli_mi, hacim_carpani = mum_ve_hacim_gecerlilik_kontrolu(df)
+                    if not mum_gecerli_mi:
+                        print(f"⏭️ Mum/Hacim Filtresi Eledi ({symbol}): Gövde yetersiz veya hacim düşük (Çarpan: {hacim_carpani:.2f})", flush=True)
+                        continue
+
                     ema5 = ta.trend.ema_indicator(df['close'], window=5).iloc[-1]
                     ema13 = ta.trend.ema_indicator(df['close'], window=13).iloc[-1]
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
@@ -597,7 +613,7 @@ def otomatik_arkaplan_tarayici():
 
                     sinyal_puani = temel_puan + anlik_momentum_bonus + fonlama_puani + derinlik_bonus - ceza_puani
 
-                    print(f"📊 [Analiz] {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} (Temel:{temel_puan}, Mom:{anlik_momentum_bonus}, Fon:{fonlama_puani}, Derinlik:{derinlik_bonus}, Ceza:{ceza_puani}) | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
+                    print(f"📊 [Analiz] {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} (Hacim Çarpanı: {hacim_carpani:.2f}) | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
 
                     taranan_sinyaller.append({
                         "symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, 
@@ -729,23 +745,23 @@ def otomatik_arkaplan_tarayici():
                         print(f"⚠️ Yetersiz bakiye: {serbest_bakiye} USDT", flush=True)
                         continue
 
+                    # Duvar ve ATR bazlı akıllı giriş, TP ve SL hesaplama
+                    giris_fiyati, tp_fiyat, sl_fiyat, kapat_yon = akilli_giris_ve_hedef_belirle(
+                        sinyal["symbol"], sinyal["yon"], sinyal["fiyat"], 
+                        sinyal["satis_duvari"], sinyal["alis_duvari"], sinyal["atr"]
+                    )
+
                     miktar = float(exchange.amount_to_precision(
                         sinyal["symbol"], 
-                        max((kullanilacak_tutar * KALDIRAC) / sinyal["fiyat"] / float(market.get('contractSize', 1.0)), 
+                        max((kullanilacak_tutar * KALDIRAC) / giris_fiyati / float(market.get('contractSize', 1.0)), 
                         float(market['limits']['amount']['min'] or 1.0))
                     ))
                     
                     islem_yonu = 'buy' if sinyal["yon"] == 'LONG' else 'sell'
-                    giris_fiyati = sinyal["fiyat"]
                     
-                    exchange.create_order(sinyal["symbol"], 'market', islem_yonu, miktar)
+                    # Emir defterinden belirlenen hassas noktaya Limit Giriş Emri verilir
+                    exchange.create_order(sinyal["symbol"], 'limit', islem_yonu, miktar, giris_fiyati)
                     
-                    tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = hibrit_tp_sl_hesapla(
-                        sinyal["df"], giris_fiyati, sinyal["yon"], 
-                        sinyal["satis_duvari"], sinyal["alis_duvari"],
-                        btc_yonu=btc_yonu
-                    )
-
                     try:
                         exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
                         exchange.create_order(sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
@@ -765,8 +781,8 @@ def otomatik_arkaplan_tarayici():
                         aktif_semboller_listesi.append(sinyal["symbol"])
                     hafizayi_kaydet()
                     
-                    print(f"⚡ İşlem açıldı [{ANLIK_PIYASA_MODU}]: {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']}", flush=True)
-                    telegram_mesaj_gonder(f"⚡ *İŞLEM AÇILDI ({ANLIK_PIYASA_MODU} MOD)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}`\n🎯 Hedef ROE: `%{hedef_roe:.1f}`")
+                    print(f"⚡ Akıllı Limit İşlem Kuruldu [{ANLIK_PIYASA_MODU}]: {sinyal['symbol']} | Yön: {sinyal['yon']} | Giriş: {giris_fiyati}", flush=True)
+                    telegram_mesaj_gonder(f"⚡ *AKILLI LİMİT İŞLEM KURULDU ({ANLIK_PIYASA_MODU} MOD)*\n📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`\n🎯 Giriş: `{giris_fiyati}` | Hedef TP: `{tp_fiyat}`")
                     break
                 except Exception as e:
                     print(f"❌ İşlem açma hatası ({sinyal['symbol']}): {e}", flush=True)
