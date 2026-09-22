@@ -115,7 +115,8 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {"basarili_islem_sayisi": 0, "basa
 COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
 MAKSIMUM_TOPLAM_POZISYON = 3
-COOLDOWN_SURESI_SANIYE = 25 * 60  # 25 Dakika
+COOLDOWN_SURESI_SANIYE = 40 * 60  # Komisyon kasayı eritmesin diye 40 dakikaya çıkarıldı
+MIN_SINYAL_PUANI = 70             # Çöpleri elemek için eşik 70 yapıldı
 
 ai_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
 ai_model_egitildi = False
@@ -204,7 +205,6 @@ def fonlama_orani_analizi(symbol, yon):
     except Exception:
         return 0, "Fonlama okunamadı"
 
-# KUSURSUZ HİBRİT TREND KONTROLÜ (1 Saatlik Ana Otorite)
 def btc_trend_kontrolu():
     try:
         ohlcv_btc_1h = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=30)
@@ -613,13 +613,8 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
-            # Tarama sonuçlarını detaylı loglama
-            print(f"📊 --- TARAMA SONUÇLARI ---", flush=True)
-            for s in taranan_sinyaller:
-                print(f"🔹 {s['symbol']} | Yön: {s['yon']} | Puan: {s['puan']} | RSI: {s['rsi']:.1f} | ADX: {s['adx']:.1f} | Fiyat: {s['fiyat']}", flush=True)
-
             # ========================================================
-            # 1. ANLIK POZİSYON YÖNETİMİ (KUSURSUZ TREND DEĞİŞİMİ)
+            # 1. ANLIK POZİSYON YÖNETİMİ (GÜRÜLTÜ KORUMALI STOP-REVERSE)
             # ========================================================
             for symbol, pos in list(aktif_borsa_map.items()):
                 try:
@@ -642,10 +637,11 @@ def otomatik_arkaplan_tarayici():
                         
                     roe = fark_yuzdesi * 100 * kaldirac_val
 
+                    # DÜZELTME: Anlık dalgalanmalarda hemen tersine dönmez, ROE -%2.0'den fazla zarardaysa trend değişimini uygular
                     trend_zitti_mi = False
-                    if btc_yonu == "LONG" and yon == "SHORT":
+                    if btc_yonu == "LONG" and yon == "SHORT" and roe < -2.0:
                         trend_zitti_mi = True
-                    elif btc_yonu == "SHORT" and yon == "LONG":
+                    elif btc_yonu == "SHORT" and yon == "LONG" and roe < -2.0:
                         trend_zitti_mi = True
 
                     if roe <= -18.0:
@@ -672,7 +668,7 @@ def otomatik_arkaplan_tarayici():
                     continue
 
             # ========================================================
-            # 3. YENİ İŞLEM AÇMA
+            # 3. YENİ İŞLEM AÇMA (YÜKSEK KALİTE EŞİĞİ)
             # ========================================================
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
@@ -682,7 +678,10 @@ def otomatik_arkaplan_tarayici():
 
                 if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
                     break
-                if sinyal["puan"] < 50: continue
+                
+                # DÜZELTME: Puan eşiği kasayı korumak için 70'e çıkarıldı
+                if sinyal["puan"] < MIN_SINYAL_PUANI: 
+                    continue
 
                 islem_engellendi = False
                 if btc_yonu == "LONG" and sinyal["yon"] != "LONG":
