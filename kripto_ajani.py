@@ -240,14 +240,13 @@ def hibrit_tp_sl_hesapla(df, giris_fiyati, yon, satis_duvari, alis_duvari, btc_y
         global ANLIK_PIYASA_MODU
         
         if ANLIK_PIYASA_MODU == "TREND":
-            # Hacme bağlı dinamik trend hedefi (Körü körüne sabit %30 yerine hacim momentumuna duyarlı)
             try:
                 vol_ort = df['volume'].rolling(window=20).mean().iloc[-1]
                 vol_oran = df['volume'].iloc[-1] / vol_ort if vol_ort > 0 else 1.0
             except Exception:
                 vol_oran = 1.0
             
-            temel_hedef = 0.05  # Temel %25 ROE eşdeğeri hareket
+            temel_hedef = 0.05  
             hacim_faktor = max(0.6, min(1.8, vol_oran))
             hedef_fiyat_yuzdesi = max(0.025, min(0.08, temel_hedef * hacim_faktor))
             sl_fiyat_yuzdesi = 0.025   
@@ -532,7 +531,9 @@ def otomatik_arkaplan_tarayici():
                     cooldown_veri = COIN_COOLDOWNLAR.get(symbol)
                     if cooldown_veri:
                         zaman_kontrol = cooldown_veri.get("zaman", 0) if isinstance(cooldown_veri, dict) else float(cooldown_veri)
-                        if (zaman_kontrol - time.time()) > 0:
+                        kalan_sure = zaman_kontrol - time.time()
+                        if kalan_sure > 0:
+                            print(f"⏳ Cooldown'da: {symbol} (Kalan: {int(kalan_sure)} sn)", flush=True)
                             continue
 
                 try:
@@ -556,6 +557,7 @@ def otomatik_arkaplan_tarayici():
                             pred_input = np.array([[rsi, anlik_fiyat, float(btc_yonu == "LONG"), 1.0, 0.0, 0.0]])
                             ai_tahmin = ai_model.predict(pred_input)[0]
                             if ai_tahmin == 0:
+                                print(f"🤖 AI Filtresi Eledi: {symbol}", flush=True)
                                 continue
                         except Exception:
                             pass
@@ -580,6 +582,8 @@ def otomatik_arkaplan_tarayici():
 
                     sinyal_puani = temel_puan + anlik_momentum_bonus + fonlama_puani + derinlik_bonus - ceza_puani
 
+                    print(f"📊 [Analiz] {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} (Temel:{temel_puan}, Mom:{anlik_momentum_bonus}, Fon:{fonlama_puani}, Derinlik:{derinlik_bonus}, Ceza:{ceza_puani}) | RSI: {rsi:.1f} | ADX: {adx_val:.1f}", flush=True)
+
                     taranan_sinyaller.append({
                         "symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, 
                         "rsi": rsi, "adx": adx_val, "ema_fark": float(ema5 - ema13), 
@@ -587,6 +591,7 @@ def otomatik_arkaplan_tarayici():
                         "satis_duvari": satis_duvari, "alis_duvari": alis_duvari
                     })
                 except Exception as ex:
+                    print(f"⚠️ Tarama hatası ({symbol}): {ex}", flush=True)
                     continue
 
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
@@ -647,13 +652,16 @@ def otomatik_arkaplan_tarayici():
                 if not BOT_CALISIYOR_MU: break
                 
                 if sinyal["symbol"] in aktif_semboller_listesi:
+                    print(f"ℹ️ Zaten açık pozisyon var: {sinyal['symbol']}", flush=True)
                     continue
 
                 if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
+                    print(f"ℹ️ Maksimum pozisyon sınırına ulaşıldı ({len(aktif_borsa_map)}/{MAKSIMUM_TOPLAM_POZISYON})", flush=True)
                     break
                 
                 gerekli_puan_esigi = 85 if ANLIK_PIYASA_MODU == "TESTERE" else 50
                 if sinyal["puan"] < gerekli_puan_esigi: 
+                    print(f"⏭️ İşlem açılmadı ({sinyal['symbol']}): Puanı ({sinyal['puan']}) eşik değerin ({gerekli_puan_esigi}) altında.", flush=True)
                     continue
 
                 islem_engellendi = False
@@ -665,6 +673,7 @@ def otomatik_arkaplan_tarayici():
                     islem_engellendi = True
 
                 if islem_engellendi:
+                    print(f"🛡️ Trend Engeli ({sinyal['symbol']}): BTC Yönü ({btc_yonu}) ile Coin Yönü ({sinyal['yon']}) uyuşmuyor.", flush=True)
                     continue
 
                 try:
@@ -675,11 +684,11 @@ def otomatik_arkaplan_tarayici():
                     exchange.set_leverage(KALDIRAC, sinyal["symbol"])
                     market = exchange.market(sinyal["symbol"])
                     
-                    # KASA 3'E BÖLÜNDÜ (%33.3)
                     hedef_butce = toplam_bakiye * (1.0 / MAKSIMUM_TOPLAM_POZISYON)
                     kullanilacak_tutar = min(hedef_butce, serbest_bakiye)
                     
                     if kullanilacak_tutar < 1.0 or serbest_bakiye < 1.0:
+                        print(f"⚠️ Yetersiz bakiye: {serbest_bakiye} USDT", flush=True)
                         continue
 
                     miktar = float(exchange.amount_to_precision(
