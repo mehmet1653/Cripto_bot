@@ -209,19 +209,34 @@ def fonlama_orani_analizi(symbol, yon):
 def btc_trend_kontrolu():
     global ANLIK_PIYASA_MODU
     try:
-        ohlcv_btc_1h = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=30)
+        # Geniş zaman dilimleri: Hem 1 Saatlik (1h) hem de 4 Saatlik (4h) verileri çekerek daha güvenli yapı kuruyoruz
+        ohlcv_btc_1h = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=50)
         df_btc_1h = pd.DataFrame(ohlcv_btc_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
+        ohlcv_btc_4h = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='4h', limit=30)
+        df_btc_4h = pd.DataFrame(ohlcv_btc_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        
+        # 1 Saatlik İndikatörler
         ema9_1h = ta.trend.ema_indicator(df_btc_1h['close'], window=9).iloc[-1]
         ema21_1h = ta.trend.ema_indicator(df_btc_1h['close'], window=21).iloc[-1]
         adx_1h = ta.trend.ADXIndicator(df_btc_1h['high'], df_btc_1h['low'], df_btc_1h['close'], window=14).adx().iloc[-1]
         rsi_1h = ta.momentum.rsi(df_btc_1h['close'], window=14).iloc[-1]
 
+        # 4 Saatlik Geniş Perspektif İndikatörleri
+        ema20_4h = ta.trend.ema_indicator(df_btc_4h['close'], window=20).iloc[-1]
+        ema50_4h = ta.trend.ema_indicator(df_btc_4h['close'], window=50).iloc[-1]
+        rsi_4h = ta.momentum.rsi(df_btc_4h['close'], window=14).iloc[-1]
+
+        # ADX gücüne göre piyasa modunu tayin et
         if adx_1h >= 22.0:
             ANLIK_PIYASA_MODU = "TREND"
-            if ema9_1h > ema21_1h and rsi_1h > 48.0:
+            # Trend modunda hem 1h hem de 4h yapıların birbiriyle uyumlu olmasına bakarız (Geniş Zamanlı Yön Teyidi)
+            long_kosulu_4h = (ema20_4h > ema50_4h) and (rsi_4h > 48.0)
+            short_kosulu_4h = (ema20_4h < ema50_4h) and (rsi_4h < 52.0)
+
+            if long_kosulu_4h and ema9_1h > ema21_1h and rsi_1h > 45.0:
                 return "LONG"
-            elif ema9_1h < ema21_1h and rsi_1h < 52.0:
+            elif short_kosulu_4h and ema9_1h < ema21_1h and rsi_1h < 55.0:
                 return "SHORT"
         else:
             ANLIK_PIYASA_MODU = "TESTERE"
@@ -428,7 +443,7 @@ def otomatik_arkaplan_tarayici():
                 continue
 
             btc_yonu = btc_trend_kontrolu()
-            print(f"👑 Güncel Piyasa Modu: {ANLIK_PIYASA_MODU} | BTC Yönü: {btc_yonu}", flush=True)
+            print(f"👑 Güncel Piyasa Modu: {ANLIK_PIYASA_MODU} | Geniş Perspektif BTC Yönü: {btc_yonu}", flush=True)
 
             try:
                 raw_positions = exchange.fetch_positions()
@@ -617,6 +632,29 @@ def otomatik_arkaplan_tarayici():
                         
                     roe = fark_yuzdesi * 100 * kaldirac_val
 
+                    sistem_hafiza_bilgi = AKTIF_GRID_SISTEMLERI.get(symbol, {})
+                    if isinstance(sistem_hafiza_bilgi, dict):
+                        en_yuksek_roe = sistem_hafiza_bilgi.get("en_yuksek_roe", 0.0)
+                        if roe > en_yuksek_roe:
+                            sistem_hafiza_bilgi["en_yuksek_roe"] = roe
+                            AKTIF_GRID_SISTEMLERI[symbol] = sistem_hafiza_bilgi
+
+                        if en_yuksek_roe >= 12.0 and roe <= (en_yuksek_roe - 4.0):
+                            pozisyonu_kapat(
+                                symbol, yon, kontrat, 
+                                f"💰 *YÜKSEK KÂR CEBE ATILDI!*\n📌 `{symbol}` | Tepe ROE: `%{en_yuksek_roe:.1f}` | Kapatılan ROE: `%{roe:.2f}`", 
+                                basarili=True, cezali_mi=False
+                            )
+                            continue
+                            
+                        if en_yuksek_roe >= 6.0 and roe <= 1.0:
+                            pozisyonu_kapat(
+                                symbol, yon, kontrat, 
+                                f"🛡️ *KÂR KORUMA (BREAKEVEN) DEVREYE GİRDİ*\n📌 `{symbol}` | Tepe ROE: `%{en_yuksek_roe:.1f}` | Kapatılan ROE: `%{roe:.2f}`", 
+                                basarili=True, cezali_mi=False
+                            )
+                            continue
+
                     sl_limit_degeri = -22.0 if ANLIK_PIYASA_MODU == "TREND" else -15.0
                     if roe <= sl_limit_degeri:
                         pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | ROE: `%{roe:.2f}`", basarili=False, cezali_mi=True)
@@ -673,7 +711,7 @@ def otomatik_arkaplan_tarayici():
                     islem_engellendi = True
 
                 if islem_engellendi:
-                    print(f"🛡️ Trend Engeli ({sinyal['symbol']}): BTC Yönü ({btc_yonu}) ile Coin Yönü ({sinyal['yon']}) uyuşmuyor.", flush=True)
+                    print(f"🛡️ Trend Engeli ({sinyal['symbol']}): Geniş Zamanlı BTC Yönü ({btc_yonu}) ile Coin Yönü ({sinyal['yon']}) uyuşmuyor.", flush=True)
                     continue
 
                 try:
@@ -721,7 +759,8 @@ def otomatik_arkaplan_tarayici():
                             "giris_fiyati": giris_fiyati,
                             "yon": sinyal["yon"],
                             "giris_rsi": float(sinyal["rsi"]), 
-                            "giris_zamani": time.time()
+                            "giris_zamani": time.time(),
+                            "en_yuksek_roe": 0.0
                         }
                         aktif_semboller_listesi.append(sinyal["symbol"])
                     hafizayi_kaydet()
