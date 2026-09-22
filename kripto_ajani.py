@@ -115,8 +115,8 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {"basarili_islem_sayisi": 0, "basa
 COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
 MAKSIMUM_TOPLAM_POZISYON = 3
-COOLDOWN_SURESI_SANIYE = 40 * 60  # Komisyon kasayı eritmesin diye 40 dakikaya çıkarıldı
-MIN_SINYAL_PUANI = 70             # Çöpleri elemek için eşik 70 yapıldı
+COOLDOWN_SURESI_SANIYE = 40 * 60  
+MIN_SINYAL_PUANI = 70             
 
 ai_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
 ai_model_egitildi = False
@@ -601,6 +601,9 @@ def otomatik_arkaplan_tarayici():
                     derinlik_bonus = 5 if (grid_yonu == "LONG" and book_durum == "BUY_PRESSURE") or (grid_yonu == "SHORT" and book_durum == "SELL_PRESSURE") else 0
 
                     sinyal_puani = temel_puan + anlik_momentum_bonus + fonlama_puani + derinlik_bonus - ceza_puani
+                    
+                    # Hangi coinin kaç puan aldığını loglarda görmek için eklenen print:
+                    print(f"📊 {symbol} | Yön: {grid_yonu} | Puan: {sinyal_puani} (RSI: {rsi:.1f}, ADX: {adx_val:.1f})", flush=True)
 
                     taranan_sinyaller.append({
                         "symbol": symbol, "puan": sinyal_puani, "yon": grid_yonu, 
@@ -614,7 +617,7 @@ def otomatik_arkaplan_tarayici():
             taranan_sinyaller.sort(key=lambda x: x["puan"], reverse=True)
 
             # ========================================================
-            # 1. ANLIK POZİSYON YÖNETİMİ (GÜRÜLTÜ KORUMALI STOP-REVERSE)
+            # 1. ANLIK POZİSYON YÖNETİMİ (YENİ STRATEJİ: TERS TRENDDE KÂRDA/KOMİSYONDA ÇIKIŞ)
             # ========================================================
             for symbol, pos in list(aktif_borsa_map.items()):
                 try:
@@ -637,24 +640,30 @@ def otomatik_arkaplan_tarayici():
                         
                     roe = fark_yuzdesi * 100 * kaldirac_val
 
-                    # DÜZELTME: Anlık dalgalanmalarda hemen tersine dönmez, ROE -%2.0'den fazla zarardaysa trend değişimini uygular
+                    # Trendin ana yönle ters düşüp düşmediği
                     trend_zitti_mi = False
-                    if btc_yonu == "LONG" and yon == "SHORT" and roe < -2.0:
+                    if btc_yonu == "LONG" and yon == "SHORT":
                         trend_zitti_mi = True
-                    elif btc_yonu == "SHORT" and yon == "LONG" and roe < -2.0:
+                    elif btc_yonu == "SHORT" and yon == "LONG":
                         trend_zitti_mi = True
 
+                    # 1. Standart Stop-Loss (Maksimum zarar sınırı)
                     if roe <= -18.0:
                         pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | ROE: `%{roe:.2f}`", basarili=False, cezali_mi=True)
                         continue
                     
-                    elif trend_zitti_mi: 
-                        pozisyonu_kapat(
-                            symbol, yon, kontrat, 
-                            f"✅ *ANİ TREND DEĞİŞİKLİĞİ (STOP-REVERSE)*\n📌 `{symbol}` | Yön: `{yon}` | ROE: `%{roe:.2f}`", 
-                            basarili=(roe > 0), cezali_mi=False
-                        )
-                        continue
+                    # 2. YENİ TAKTİK: Ters Trend Kontrolü
+                    # Eğer trend terse döndüyse;
+                    # - ROE >= 0.0 (Kârda veya komisyonu kurtaracak sıfır/artı bölgedeyse) hemen kapat ve cooldown bekle!
+                    # - ROE < 0 (Zarardaysa) dokunulmuyor, SL veya TP beklenmeye devam ediliyor.
+                    elif trend_zitti_mi:
+                        if roe >= 0.0:
+                            pozisyonu_kapat(
+                                symbol, yon, kontrat, 
+                                f"🛡️ *TERS TRENDDE GÜVENLİ ÇIKIŞ (KÂR/KOMİSYON KURTARILDI)*\n📌 `{symbol}` | Yön: `{yon}` | ROE: `%{roe:.2f}`", 
+                                basarili=True, cezali_mi=False
+                            )
+                            continue
 
                     current_coin_df = next((s["df"] for s in taranan_sinyaller if s["symbol"] == symbol), None)
                     if current_coin_df is not None:
@@ -679,7 +688,6 @@ def otomatik_arkaplan_tarayici():
                 if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
                     break
                 
-                # DÜZELTME: Puan eşiği kasayı korumak için 70'e çıkarıldı
                 if sinyal["puan"] < MIN_SINYAL_PUANI: 
                     continue
 
@@ -766,17 +774,14 @@ async def main():
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
-    await app_tg.initialize()
-    await app_tg.start()
-    await app_tg.updater.start_polling(drop_pending_updates=True)
-    
-    print("🤖 Telegram Bot Asenkron Olarak Dinlemede...", flush=True)
+    async def post_init(application):
+        print("🤖 Telegram Bot Asenkron Olarak Dinlemede...", flush=True)
+        tarayici_thread = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
+        tarayici_thread.start()
 
-    tarayici_thread = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
-    tarayici_thread.start()
+    app_tg.post_init = post_init
 
-    stop_event = asyncio.Event()
-    await stop_event.wait()
+    await app_tg.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     try:
