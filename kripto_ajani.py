@@ -240,51 +240,52 @@ def btc_trend_kontrolu():
     except Exception:
         return "NOTR"
 
-def duvara_gore_akilli_tp_sl_hesapla(df, giris_fiyati, yon, satis_duvari, alis_duvari, btc_yonu="NOTR"):
-    try:
-        atr_yuzde = atr_ve_volatilite_hesapla(df)
-        
-        if yon == 'LONG':
-            # Hedef TP: Satış duvarı varsa tam onun altı (%98'i), yoksa ATR bazlı hedef
-            if satis_duvari and satis_duvari > giris_fiyati:
-                tp_fiyat = satis_duvari * 0.992 
-                if tp_fiyat <= giris_fiyati:
-                    tp_fiyat = giris_fiyati * (1 + max(0.015, atr_yuzde / 100 * 1.5))
-            else:
-                tp_fiyat = giris_fiyati * (1 + max(0.015, atr_yuzde / 100 * 1.5))
-                
-            # Zarar Kes (SL): Alış duvarı varsa onun altı, yoksa standart emniyet mesafesi
-            if alis_duvari and alis_duvari < giris_fiyati:
-                sl_fiyat = alis_duvari * 0.995
-            else:
-                sl_fiyat = giris_fiyati * (1 - 0.015)
-                
-            kapat_yon = 'sell'
-            hedef_roe = ((tp_fiyat - giris_fiyati) / giris_fiyati) * 100 * KALDIRAC
+def duvara_gore_akilli_giris_ve_seviyeler(anlik_fiyat, yon, satis_duvari, alis_duvari, atr_yuzde):
+    """
+    İstediğiniz mantık: Fiyat 100 ise, alış duvarı veya satış duvarına 
+    göre trend yönünde akıllı limit giriş fiyatı, TP ve SL belirler.
+    """
+    if yon == 'LONG':
+        # Alış duvarı varsa hemen üstünden limit giriş yap, yoksa anlık fiyatın altından
+        if alis_duvari and alis_duvari < anlik_fiyat:
+            giris_fiyati = alis_duvari * 1.002 
         else:
-            # SHORT için Hedef TP: Alış duvarı varsa onun bir üstü (%1.002'si)
-            if alis_duvari and alis_duvari < giris_fiyati:
-                tp_fiyat = alis_duvari * 1.008
-                if tp_fiyat >= giris_fiyati:
-                    tp_fiyat = giris_fiyati * (1 - max(0.015, atr_yuzde / 100 * 1.5))
-            else:
-                tp_fiyat = giris_fiyati * (1 - max(0.015, atr_yuzde / 100 * 1.5))
-                
-            # Zarar Kes (SL): Satış duvarı varsa onun üstü
-            if satis_duvari and satis_duvari > giris_fiyati:
-                sl_fiyat = satis_duvari * 1.005
-            else:
-                sl_fiyat = giris_fiyati * (1 + 0.015)
-                
-            kapat_yon = 'buy'
-            hedef_roe = ((giris_fiyati - tp_fiyat) / giris_fiyati) * 100 * KALDIRAC
+            giris_fiyati = anlik_fiyat * 0.995
             
-        return tp_fiyat, sl_fiyat, kapat_yon, hedef_roe
-    except Exception:
-        if yon == 'LONG':
-            return giris_fiyati * 1.025, giris_fiyati * 0.97, 'sell', 12.5
+        # TP: Satış duvarı varsa hemen altı, yoksa standart hedef
+        if satis_duvari and satis_duvari > giris_fiyati:
+            tp_fiyat = satis_duvari * 0.992
         else:
-            return giris_fiyati * 0.975, giris_fiyati * 1.03, 'buy', 12.5
+            tp_fiyat = giris_fiyati * (1 + max(0.015, atr_yuzde / 100 * 1.5))
+            
+        # SL: Alış duvarının altı
+        if alis_duvari and alis_duvari < giris_fiyati:
+            sl_fiyat = alis_duvari * 0.995
+        else:
+            sl_fiyat = giris_fiyati * (1 - max(0.012, atr_yuzde / 100))
+            
+        kapat_yon = 'sell'
+    else:
+        # SHORT için: Satış duvarı varsa hemen altından limit giriş
+        if satis_duvari and satis_duvari > anlik_fiyat:
+            giris_fiyati = satis_duvari * 0.998
+        else:
+            giris_fiyati = anlik_fiyat * 1.005
+            
+        if alis_duvari and alis_duvari < giris_fiyati:
+            tp_fiyat = alis_duvari * 1.008
+        else:
+            tp_fiyat = giris_fiyati * (1 - max(0.015, atr_yuzde / 100 * 1.5))
+            
+        if satis_duvari and satis_duvari > giris_fiyati:
+            sl_fiyat = satis_duvari * 1.005
+        else:
+            sl_fiyat = giris_fiyati * (1 + max(0.012, atr_yuzde / 100))
+            
+        kapat_yon = 'buy'
+        
+    hedef_roe = abs((tp_fiyat - giris_fiyati) / giris_fiyati) * 100 * KALDIRAC
+    return float(giris_fiyati), float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe)
 
 def acik_pozisyon_oi_kontrolu(symbol):
     try:
@@ -407,7 +408,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 **BOT DURUM RAPORU (85+ Eşik & Duvar Destekli)**\n\n"
+            f"📊 **BOT DURUM RAPORU (Duvar Destekli Limit Giriş)**\n\n"
             f"👑 Ana BTC Yönü: `{btc_trend_kontrolu()}`\n"
             f"💰 Kasa: `{total:.2f} USDT` | Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -425,7 +426,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
     BOT_CALISIYOR_MU = True
     GLOBAL_COOLDOWN_BITIS = 0.0
-    await update.message.reply_text("🟢 Bot aktif edildi (85 Puan Eşiği Aktif)!")
+    await update.message.reply_text("🟢 Bot aktif edildi (Duvar Destekli Limit Giriş Modu)!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID):
@@ -451,7 +452,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
-    print("🚀 Bot Arka Plan Döngüsü Aktif (85 Puan & Duvar Bazlı TP/SL)...", flush=True)
+    print("🚀 Bot Arka Plan Döngüsü Aktif (Duvar Seviyeli Limit Giriş)...", flush=True)
     try:
         exchange.load_markets()
         print("✅ Piyasalar başarıyla yüklendi, yapay zeka eğitiliyor...", flush=True)
@@ -533,10 +534,10 @@ def otomatik_arkaplan_tarayici():
                             
                             if islem_karli_mi:
                                 bas_sayi += 1
-                                sonuc_mesaj_tipi = "✅ *POZİSYON KÂRLA KAPANDI (TP)*"
+                                sonuc_mesaj_tipi = "✅ *İŞLEM KÂRLA KAPANDI (TP)*"
                             else:
                                 basarisiz_sayi += 1
-                                sonuc_mesaj_tipi = "❌ *POZİSYON ZARARLA KAPANDI (SL)*"
+                                sonuc_mesaj_tipi = "❌ *İŞLEM ZARARLA KAPANDI (SL)*"
                                 
                             ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
                             ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
@@ -712,7 +713,7 @@ def otomatik_arkaplan_tarayici():
                     continue
 
             # ========================================================
-            # 3. YENİ İŞLEM AÇMA (85 PUAN EŞİĞİ & DUVAR BAZLI HEDEFLEME)
+            # 3. YENİ İŞLEM AÇMA (85 PUAN EŞİĞİ & DUVAR LİMİT GİRİŞ)
             # ========================================================
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
@@ -723,7 +724,6 @@ def otomatik_arkaplan_tarayici():
                 if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
                     break
                 
-                # YENİ EŞİK DEĞERİ: 85 PUAN
                 if sinyal["puan"] < 85: 
                     print(f"ℹ️ {sinyal['symbol']} puanı ({sinyal['puan']}) 85 puanlık eşik değerin altında.", flush=True)
                     continue
@@ -742,24 +742,23 @@ def otomatik_arkaplan_tarayici():
                     if kullanilacak_tutar < 1.0 or serbest_bakiye < 1.0:
                         continue
 
+                    # Duvar seviyelerine göre akıllı limit giriş, TP ve SL hesaplama
+                    giris_fiyati, tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = duvara_gore_akilli_giris_ve_seviyeler(
+                        sinyal["fiyat"], sinyal["yon"], sinyal["satis_duvari"], sinyal["alis_duvari"], sinyal["atr"]
+                    )
+
                     miktar = float(exchange.amount_to_precision(
                         sinyal["symbol"], 
-                        max((kullanilacak_tutar * KALDIRAC) / sinyal["fiyat"] / float(market.get('contractSize', 1.0)), 
+                        max((kullanilacak_tutar * KALDIRAC) / giris_fiyati / float(market.get('contractSize', 1.0)), 
                         float(market['limits']['amount']['min'] or 1.0))
                     ))
                     
                     islem_yonu = 'buy' if sinyal["yon"] == 'LONG' else 'sell'
-                    giris_fiyati = sinyal["fiyat"]
                     
-                    exchange.create_order(sinyal["symbol"], 'market', islem_yonu, miktar)
+                    # 1. Adım: Duvar kademesinden LİMİT GİRİŞ emri gönder
+                    exchange.create_order(sinyal["symbol"], 'limit', islem_yonu, miktar, giris_fiyati)
                     
-                    # DUVAR BAZLI AKILLI TP / SL HESABI
-                    tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = duvara_gore_akilli_tp_sl_hesapla(
-                        sinyal["df"], giris_fiyati, sinyal["yon"], 
-                        sinyal["satis_duvari"], sinyal["alis_duvari"],
-                        btc_yonu=btc_yonu
-                    )
-
+                    # 2. Adım: Pozisyon dolduğunda çalışacak TP ve SL emirleri
                     try:
                         exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
                         exchange.create_order(sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
@@ -778,12 +777,13 @@ def otomatik_arkaplan_tarayici():
                         aktif_semboller_listesi.append(sinyal["symbol"])
                     hafizayi_kaydet()
                     
-                    print(f"⚡ İşlem açıldı: {sinyal['symbol']} | Yön: {sinyal['yon']} | Puan: {sinyal['puan']} | TP: {tp_fiyat}", flush=True)
+                    print(f"⚡ Limit İşlem Eklendi: {sinyal['symbol']} | Yön: {sinyal['yon']} | Giriş: {giris_fiyati} | TP: {tp_fiyat}", flush=True)
                     telegram_mesaj_gonder(
-                        f"⚡ *AKILLI İŞLEM AÇILDI (85+ Puan & Duvar Bazlı)*\n"
+                        f"🧱 *DUVAR BAZLI LİMİT İŞLEM EKLENDİ*\n"
                         f"📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}`\n"
-                        f"🧱 Duvar Durumu: `{sinyal['duvar_tipi']}`\n"
-                        f"🎯 Hedef TP: `{tp_fiyat}` (Hedef ROE: `%{hedef_roe:.1f}`)"
+                        f"🎯 Hedef Giriş Fiyatı: `{giris_fiyati}`\n"
+                        f"💰 Hedef TP: `{tp_fiyat}` (Hedef ROE: `%{hedef_roe:.1f}`)\n"
+                        f"🛑 Stop-Loss (SL): `{sl_fiyat}`"
                     )
                     break
                 except Exception as e:
