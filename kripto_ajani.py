@@ -477,8 +477,8 @@ def otomatik_arkaplan_tarayici():
         except Exception as e:
             print(f"⚠️ [DÖNGÜ GENEL HATA] {e}", flush=True)
         
-        print("💤 [BEKLEME] Tur tamamlandı, 15 saniye sonra tekrar taranacak...", flush=True)
-        time.sleep(15)
+        print("💤 [BEKLEME] Tur tamamlandı, 10 saniye sonra tekrar taranacak...", flush=True)
+        time.sleep(10)
 
 async def main():
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
