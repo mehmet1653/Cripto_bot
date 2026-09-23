@@ -53,6 +53,7 @@ state_lock = threading.Lock()
 KALDIRAC = 3
 
 GLOBAL_COOLDOWN_BITIS = 0.0
+SON_BTC_YONU = "LONG"  # Hysteresis için önceki yönü hafızada tutuyoruz
 
 def hafizayi_yukle():
     print("💾 Hafıza Supabase'den yükleniyor...", flush=True)
@@ -109,23 +110,36 @@ MAKSIMUM_TOPLAM_POZISYON = 2
 COOLDOWN_SURESI_SANIYE = 10 * 60
 
 def piyasa_rejimini_tespit_et():
+    global SON_BTC_YONU
     print("🌐 [PİYASA] BTC rejimi ve yönü analiz ediliyor...", flush=True)
     try:
         ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=30)
         df_btc = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         adx_1h = ta.trend.ADXIndicator(df_btc['high'], df_btc['low'], df_btc['close'], window=14).adx().iloc[-1]
+        
         ema9 = ta.trend.ema_indicator(df_btc['close'], window=9).iloc[-1]
         ema21 = ta.trend.ema_indicator(df_btc['close'], window=21).iloc[-1]
-        trend_yonu = "LONG" if ema9 > ema21 else "SHORT"
+        
+        # YÜZDESEL EŞİK (HYSTERESIS) KONTROLÜ
+        fark_yuzdesi = (abs(ema9 - ema21) / ema21) * 100
+        esik_degeri = 0.1  # %0.1'lik fark bekliyoruz
+        
+        if fark_yuzdesi > esik_degeri:
+            trend_yonu = "LONG" if ema9 > ema21 else "SHORT"
+            SON_BTC_YONU = trend_yonu  # Yönü güncelle ve kaydet
+        else:
+            trend_yonu = SON_BTC_YONU  # Fark yetersizse eski yönü koru
+            
         if adx_1h < 22.0:
             rejim = "YATAY"
         else:
             rejim = "TREND"
-        print(f"🌐 [PİYASA SONUÇ] Rejim: {rejim} | BTC Yön: {trend_yonu} | ADX: {adx_1h:.2f}", flush=True)
+            
+        print(f"🌐 [PİYASA SONUÇ] Rejim: {rejim} | BTC Yön: {trend_yonu} (Fark: %{fark_yuzdesi:.3f}) | ADX: {adx_1h:.2f}", flush=True)
         return rejim, trend_yonu
     except Exception as e:
         print(f"⚠️ [PİYASA HATA] Rejim tespit edilemedi: {e}. Varsayılan YATAY/LONG", flush=True)
-        return "YATAY", "LONG"
+        return "YATAY", SON_BTC_YONU
 
 def emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker_data):
     try:
@@ -275,7 +289,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Tersi Mod Bot Aktif (Long yerine Short, Short yerine Long)...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Tersi Mod Bot Aktif (Yüzdesel Eşik Açık)...", flush=True)
     try:
         exchange.load_markets()
     except Exception: pass
@@ -359,7 +373,6 @@ def otomatik_arkaplan_tarayici():
 
                     emir_analizi = emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker)
 
-                    # 1. Normal Sinyal Tespiti
                     ham_yon = None
                     if piyasa_rejimi == "YATAY":
                         if rsi < 35: ham_yon = "LONG"
@@ -370,9 +383,7 @@ def otomatik_arkaplan_tarayici():
                         elif btc_yonu == "SHORT" and rsi > 40: ham_yon = "SHORT"
                         else: continue
 
-                    # ==================== TERSİNE ÇEVİRME (CONTRARIAN MOD) ====================
-                    # Sistem normalde LONG diyorsa -> Biz SHORT açıyoruz!
-                    # Sistem normalde SHORT diyorsa -> Biz LONG açıyoruz!
+                    # TERSİNE ÇEVİRME MODU
                     islem_yonu = "SHORT" if ham_yon == "LONG" else "LONG"
                     print(f"🔄 [TERS MOD] {symbol} için sistem {ham_yon} dedi, biz tersini yaparak 👉 {islem_yonu} uyguluyoruz! (RSI: {rsi:.2f})", flush=True)
 
@@ -440,7 +451,6 @@ def otomatik_arkaplan_tarayici():
 
         except Exception: pass
         
-        # Süreyi 5 saniyeye düşürdük
         time.sleep(5)
 
 async def main():
