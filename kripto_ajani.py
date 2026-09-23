@@ -106,7 +106,7 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {"basarili_islem_sayisi": 0, "basa
 COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
 MAKSIMUM_TOPLAM_POZISYON = 2
-COOLDOWN_SURESI_SANIYE = 20 * 60
+COOLDOWN_SURESI_SANIYE = 10 * 60
 
 def piyasa_rejimini_tespit_et():
     print("🌐 [PİYASA] BTC rejimi ve yönü analiz ediliyor...", flush=True)
@@ -128,21 +128,13 @@ def piyasa_rejimini_tespit_et():
         return "YATAY", "LONG"
 
 def emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker_data):
-    """
-    Emir defteri derinliğini ve 24h tepe/dip noktalarını analiz eder.
-    Zirvedeyken Long, dipteyken Short açılmasını engeller.
-    """
     try:
-        # 1. 24h Tepe / Dip Kontrolü
         high_24h = float(ticker_data.get('high') or anlik_fiyat * 1.02)
         low_24h = float(ticker_data.get('low') or anlik_fiyat * 0.98)
         
-        # Eğer fiyat 24 saatlik zirvenin %0.6'lık dilimi içindeyse, dirençtedir -> LONG AÇILMAZ!
         tepeye_yakin_mi = anlik_fiyat >= (high_24h * 0.994)
-        # Eğer fiyat 24 saatlik dip seviyenin %0.6'lık dilimi içindeyse, destektedir -> SHORT AÇILMAZ!
         dipe_yakin_mi = anlik_fiyat <= (low_24h * 1.006)
 
-        # 2. Order Book Derinlik Analizi (Alış/Satış Baskısı)
         order_book = exchange.fetch_order_book(symbol, limit=20)
         bids = order_book.get('bids', [])
         asks = order_book.get('asks', [])
@@ -153,8 +145,6 @@ def emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker_data):
 
         alis_orani = (toplam_alis_hacmi / toplam_hacim) * 100
         satis_orani = (toplam_satis_hacmi / toplam_hacim) * 100
-
-        print(f"     📚 [DERİNLİK] {symbol} | Alış: %{alis_orani:.1f} | Satış: %{satis_orani:.1f} | 24h High: {high_24h} | Anlık: {anlik_fiyat}", flush=True)
         
         return {
             "tepeye_yakin": tepeye_yakin_mi,
@@ -163,18 +153,17 @@ def emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker_data):
             "satis_orani": satis_orani
         }
     except Exception as e:
-        print(f"     ⚠️ [DERİNLİK HATA] {symbol} defter okunamadı: {e}", flush=True)
         return {"tepeye_yakin": False, "dipe_yakin": False, "alis_orani": 50.0, "satis_orani": 50.0}
 
 def akilli_seviye_hesapla(anlik_fiyat, yon, df):
     atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
     if yon == 'LONG':
-        tp_fiyat = anlik_fiyat + (atr * 2.5)
-        sl_fiyat = anlik_fiyat - (atr * 1.5)
+        tp_fiyat = anlik_fiyat + (atr * 1.5)  # Hedefleri biraz daha yakın tutup hızlı patlatmadan kâr alalım
+        sl_fiyat = anlik_fiyat - (atr * 1.2)
         kapat_yon = 'sell'
     else:
-        tp_fiyat = anlik_fiyat - (atr * 2.5)
-        sl_fiyat = anlik_fiyat + (atr * 1.5)
+        tp_fiyat = anlik_fiyat - (atr * 1.5)
+        sl_fiyat = anlik_fiyat + (atr * 1.2)
         kapat_yon = 'buy'
     hedef_roe = abs((tp_fiyat - anlik_fiyat) / anlik_fiyat) * 100 * KALDIRAC
     return float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe)
@@ -211,7 +200,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 **BOT DURUM RAPORU (Derinlik Korumalı)**\n\n"
+            f"📊 **BOT DURUM RAPORU (Ters Taktik / Tersi Mod)**\n\n"
             f"🌐 Piyasa Rejimi: `{rejim}` (BTC Yön: `{btc_yon}`)\n"
             f"💰 Kasa: `{total:.2f} USDT` | Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -225,10 +214,9 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
-    global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
+    global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    GLOBAL_COOLDOWN_BITIS = 0.0
-    await update.message.reply_text("🟢 Bot aktif edildi!")
+    await update.message.reply_text("🟢 Tersi Bot aktif edildi!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -243,7 +231,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for pos in positions:
             kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
             if kontrat > 0:
-                yon = str(pos.get('side', '')).upper() or "LONG"
+                yon = str(pos.get('side', '')).upper() or "LONG`"
                 kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
                 try: exchange.cancel_all_orders(pos['symbol'])
                 except Exception: pass
@@ -253,26 +241,19 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Bot Derinlik ve Seviye Korumalı Modda Aktif...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Tersi Mod Bot Aktif (Long yerine Short, Short yerine Long)...", flush=True)
     try:
         exchange.load_markets()
-        print("✅ [BAŞLANGIÇ] Piyasalar başarıyla yüklendi.", flush=True)
-    except Exception as e:
-        print(f"⚠️ [BAŞLANGIÇ HATA] Piyasalar yüklenemedi: {e}", flush=True)
+    except Exception: pass
     
     while True:
         try:
             if not BOT_CALISIYOR_MU:
-                print("⏸️ [DURUM] Bot durduruldu modunda, bekleniyor...", flush=True)
                 time.sleep(5)
                 continue
 
-            print("\n--------------------------------------------------", flush=True)
-            print("🔄 [DÖNGÜ] Yeni tarama turu başlatılıyor...", flush=True)
-
             piyasa_rejimi, btc_yonu = piyasa_rejimini_tespit_et()
 
-            # 1. Borsa pozisyonlarını kontrol et
             try:
                 raw_positions = exchange.fetch_positions()
                 aktif_borsa_map = {}
@@ -283,18 +264,14 @@ def otomatik_arkaplan_tarayici():
                         sym = p['symbol']
                         aktif_borsa_map[sym] = p
                         aktif_semboller_listesi.append(sym)
-                print(f"📌 [POZİSYONLAR] Borsadaki aktif pozisyonlar: {aktif_semboller_listesi if aktif_semboller_listesi else 'Yok'}", flush=True)
-            except Exception as e:
-                print(f"⚠️ [POZİSYON HATA] Pozisyonlar çekilemedi: {e}", flush=True)
+            except Exception:
                 aktif_borsa_map = {}
                 aktif_semboller_listesi = []
 
-            # 2. Kapanan pozisyonları kontrol et ve sonuçlandır
             try:
                 anlik_aktif_semboller = [p['symbol'] for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                 for eski_sym in list(AKTIF_GRID_SISTEMLERI.keys()):
                     if eski_sym not in anlik_aktif_semboller:
-                        print(f"🔍 [KAPANMA] {eski_sym} pozisyonu kapanmış görünüyor, sonuç hesaplanıyor...", flush=True)
                         sistem_bilgisi = AKTIF_GRID_SISTEMLERI[eski_sym]
                         giris_fiyati = sistem_bilgisi.get("giris_fiyati", 0) if isinstance(sistem_bilgisi, dict) else 0
                         yon = sistem_bilgisi.get("yon", "LONG") if isinstance(sistem_bilgisi, dict) else "LONG"
@@ -315,11 +292,9 @@ def otomatik_arkaplan_tarayici():
                             if islem_karli_mi:
                                 bas_sayi += 1
                                 sonuc_mesaj_tipi = "✅ *İŞLEM KÂRLA KAPANDI (TP)*"
-                                print(f"✅ [SONUÇ] {eski_sym} kârla kapandı!", flush=True)
                             else:
                                 basarisiz_sayi += 1
                                 sonuc_mesaj_tipi = "❌ *İŞLEM ZARARLA KAPANDI (SL)*"
-                                print(f"❌ [SONUÇ] {eski_sym} zararla kapandı!", flush=True)
                                 
                             ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
                             ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
@@ -328,97 +303,53 @@ def otomatik_arkaplan_tarayici():
                                 
                         hafizayi_kaydet()
                         telegram_mesaj_gonder(f"{sonuc_mesaj_tipi}\n📌 `{eski_sym}`")
-            except Exception as e:
-                print(f"⚠️ [KAPANMA KONTROL HATA] {e}", flush=True)
+            except Exception: pass
 
             taranan_sinyaller = []
 
-            # 3. Coin coin tarama, filtreleme ve derinlik kontrolü
-            print("🔎 [TARAMA BAŞLIYOR] Takip edilen coinler teknik ve derinlik filtresinden geçiriliyor...", flush=True)
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
                 
-                print(f"   ↳ [COİN KONTROL] {symbol} inceleniyor...", flush=True)
-
                 with state_lock:
                     cooldown_veri = COIN_COOLDOWNLAR.get(symbol)
                     if cooldown_veri:
                         zaman_kontrol = cooldown_veri.get("zaman", 0) if isinstance(cooldown_veri, dict) else float(cooldown_veri)
-                        kalan_sure = zaman_kontrol - time.time()
-                        if kalan_sure > 0:
-                            print(f"     ⏳ [COOLDOWN] {symbol} bekleme süresinde. Kalan: {int(kalan_sure)} saniye.", flush=True)
-                            continue
+                        if zaman_kontrol - time.time() > 0: continue
 
                 try:
                     ticker = exchange.fetch_ticker(symbol)
                     anlik_fiyat = float(ticker['last'])
-                    
-                    # Derinlik ve Seviye Kontrolü (Zirvede Long / Dipte Short engelleme)
-                    derinlik_bilgi = emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker)
-
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
 
-                    print(f"     📊 [VERİ] {symbol} | Fiyat: {anlik_fiyat} | RSI(14): {rsi:.2f}", flush=True)
-
-                    islem_yonu = None
+                    # 1. Normal Sinyal Tespiti
+                    ham_yon = None
                     if piyasa_rejimi == "YATAY":
-                        if rsi < 35: 
-                            islem_yonu = "LONG"
-                            print(f"     🎯 [FİLTRE] {symbol} YATAY rejimde RSI düşük ({rsi:.2f} < 35) -> LONG sinyali.", flush=True)
-                        elif rsi > 65: 
-                            islem_yonu = "SHORT"
-                            print(f"     🎯 [FİLTRE] {symbol} YATAY rejimde RSI yüksek ({rsi:.2f} > 65) -> SHORT sinyali.", flush=True)
-                        else:
-                            print(f"     🚫 [FİLTRE] {symbol} nötr bölgede (RSI: {rsi:.2f}), pas geçiliyor.", flush=True)
-                            continue
+                        if rsi < 35: ham_yon = "LONG"
+                        elif rsi > 65: ham_yon = "SHORT"
+                        else: continue
                     else:
-                        if btc_yonu == "LONG" and rsi < 60: 
-                            islem_yonu = "LONG"
-                            print(f"     🎯 [FİLTRE] {symbol} TREND rejiminde (BTC LONG, RSI: {rsi:.2f} < 60) -> LONG sinyali.", flush=True)
-                        elif btc_yonu == "SHORT" and rsi > 40: 
-                            islem_yonu = "SHORT"
-                            print(f"     🎯 [FİLTRE] {symbol} TREND rejiminde (BTC SHORT, RSI: {rsi:.2f} > 40) -> SHORT sinyali.", flush=True)
-                        else:
-                            print(f"     🚫 [FİLTRE] {symbol} trend koşullarına uymuyor (RSI: {rsi:.2f}), pas geçiliyor.", flush=True)
-                            continue
+                        if btc_yonu == "LONG" and rsi < 60: ham_yon = "LONG"
+                        elif btc_yonu == "SHORT" and rsi > 40: ham_yon = "SHORT"
+                        else: continue
 
-                    # ==================== YENİ: DİRENÇ / DERİNLİK BLOKAJ FİLTRESİ ====================
-                    if islem_yonu == "LONG" and derinlik_bilgi["tepeye_yakin"]:
-                        print(f"     🛑 [BLOKLANDI] {symbol} 24 saatlik tepe noktasına çok yakın! Dirençte LONG açmak riskli, işlem iptal.", flush=True)
-                        continue
-                    
-                    if islem_yonu == "LONG" and derinlik_bilgi["satis_orani"] > 65.0:
-                        print(f"     🛑 [BLOKLANDI] {symbol} emir defterinde satıcı baskısı çok yüksek (%{derinlik_bilgi['satis_orani']:.1f}), LONG açılmıyor.", flush=True)
-                        continue
-
-                    if islem_yonu == "SHORT" and derinlik_bilgi["dipe_yakin"]:
-                        print(f"     🛑 [BLOKLANDI] {symbol} 24 saatlik dip noktasına çok yakın! Destekte SHORT açmak riskli, işlem iptal.", flush=True)
-                        continue
-
-                    if islem_yonu == "SHORT" and derinlik_bilgi["alis_orani"] > 65.0:
-                        print(f"     🛑 [BLOKLANDI] {symbol} emir defterinde alıcı baskısı çok yüksek (%{derinlik_bilgi['alis_orani']:.1f}), SHORT açılmıyor.", flush=True)
-                        continue
+                    # ==================== TERSİNE ÇEVİRME (CONTRARIAN MOD) ====================
+                    # Sistem normalde LONG diyorsa -> Biz SHORT açıyoruz!
+                    # Sistem normalde SHORT diyorsa -> Biz LONG açıyoruz!
+                    islem_yonu = "SHORT" if ham_yon == "LONG" else "LONG"
+                    print(f"🔄 [TERS MOD] {symbol} için sistem {ham_yon} dedi, biz tersini yaparak 👉 {islem_yonu} uyguluyoruz! (RSI: {rsi:.2f})", flush=True)
 
                     taranan_sinyaller.append({
                         "symbol": symbol, "yon": islem_yonu, "rsi": rsi, "fiyat": anlik_fiyat, "df": df
                     })
-                except Exception as e:
-                    print(f"     ⚠️ [HATA] {symbol} analiz edilirken hata oluştu: {e}", flush=True)
-                    continue
+                except Exception: continue
 
-            # 4. Sinyal veren coinler için işlem açma
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
-                if sinyal["symbol"] in aktif_semboller_listesi:
-                    print(f"   ℹ️ [İŞLEM ATLANDI] {sinyal['symbol']} için zaten açık pozisyon var.", flush=True)
-                    continue
-                if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
-                    print(f"   ⚠️ [ LİMİT DOLU ] Maksimum pozisyon sınırına ({MAKSIMUM_TOPLAM_POZISYON}) ulaşıldı, yeni işlem açılmayacak.", flush=True)
-                    break
+                if sinyal["symbol"] in aktif_semboller_listesi: continue
+                if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON: break
 
-                print(f"🚀 [EMİR SÜRECİ] {sinyal['symbol']} için {sinyal['yon']} emri hazırlanıyor...", flush=True)
                 try:
                     bakiye_bilgisi = exchange.fetch_balance()
                     toplam_bakiye = float(bakiye_bilgisi['total'].get('USDT', 0))
@@ -428,9 +359,7 @@ def otomatik_arkaplan_tarayici():
                     market = exchange.market(sinyal["symbol"])
                     
                     kullanilacak_tutar = min(toplam_bakiye * 0.4, serbest_bakiye)
-                    if kullanilacak_tutar < 1.0:
-                        print(f"   ⚠️ [BAKİYE YETERSİZ] Kullanılabilir bakiye yetersiz: {kullanilacak_tutar} USDT", flush=True)
-                        continue
+                    if kullanilacak_tutar < 1.0: continue
 
                     giris_fiyati = sinyal["fiyat"]
                     tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = akilli_seviye_hesapla(
@@ -445,15 +374,12 @@ def otomatik_arkaplan_tarayici():
                     
                     islem_yonu = 'buy' if sinyal["yon"] == 'LONG' else 'sell'
                     
-                    print(f"   📤 [GÖNDERİLİYOR] Piyasaya market emri atılıyor: {sinyal['symbol']} {islem_yonu} Miktar: {miktar}", flush=True)
                     exchange.create_order(sinyal["symbol"], 'market', islem_yonu, miktar)
                     time.sleep(0.5)
                     try:
                         exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
                         exchange.create_order(sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
-                        print(f"   🎯 [TP/SL EKLENDİ] TP: {tp_fiyat} | SL: {sl_fiyat}", flush=True)
-                    except Exception as order_err:
-                        print(f"   ⚠️ [TP/SL HATA] TP/SL emirleri kurulamadı: {order_err}", flush=True)
+                    except Exception: pass
 
                     with state_lock:
                         AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {
@@ -464,21 +390,19 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     telegram_mesaj_gonder(
-                        f"🎯 *DERİNLİK KORUMALI İŞLEM GİRİŞİ*\n"
-                        f"📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`\n"
+                        f"🎯 *TERS MOD İŞLEM GİRİŞİ (CONTRARIAN)*\n"
+                        f"📌 `{sinyal['symbol']}` | Alınan Yön: `{sinyal['yon']}`\n"
                         f"🎯 Giriş: `{giris_fiyati}`\n"
                         f"💰 Hedef TP: `{tp_fiyat}` (Hedef ROE: `%{hedef_roe:.1f}`)\n"
                         f"🛑 Stop-Loss: `{sl_fiyat}`"
                     )
                     break
-                except Exception as e:
-                    print(f"❌ [İŞLEM AÇMA HATA] {sinyal['symbol']} için emir başarısız: {e}", flush=True)
+                except Exception: pass
 
-        except Exception as e:
-            print(f"⚠️ [DÖNGÜ GENEL HATA] {e}", flush=True)
+        except Exception: pass
         
-        print("💤 [BEKLEME] Tur tamamlandı, 10 saniye sonra tekrar taranacak...", flush=True)
-        time.sleep(10)
+        # Hızlı tarama için süreyi 5 saniyeye düşürdük
+        time.sleep(5)
 
 async def main():
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -505,4 +429,4 @@ if __name__ == '__main__':
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        print("🛑 Bot kapatıldı.", flush=True)
+        pass
