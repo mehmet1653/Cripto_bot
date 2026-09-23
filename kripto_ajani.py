@@ -50,7 +50,7 @@ TAKIP_EDILENLER = [
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
-KALDIRAC = 3
+KALDIRAC = 5
 
 GLOBAL_COOLDOWN_BITIS = 0.0
 SON_BTC_YONU = "LONG"  # Hysteresis için önceki yönü hafızada tutuyoruz
