@@ -155,18 +155,52 @@ def emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker_data):
     except Exception as e:
         return {"tepeye_yakin": False, "dipe_yakin": False, "alis_orani": 50.0, "satis_orani": 50.0}
 
-def akilli_seviye_hesapla(anlik_fiyat, yon, df):
+def akilli_seviye_hesapla(anlik_fiyat, yon, df, emir_analizi):
     atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
+    
     if yon == 'LONG':
-        tp_fiyat = anlik_fiyat + (atr * 1.5)  # Hedefleri biraz daha yakın tutup hızlı patlatmadan kâr alalım
-        sl_fiyat = anlik_fiyat - (atr * 1.2)
+        tp_fiyat = anlik_fiyat + (atr * 2.0)
+        sl_fiyat = anlik_fiyat - (atr * 1.5)
         kapat_yon = 'sell'
     else:
-        tp_fiyat = anlik_fiyat - (atr * 1.5)
-        sl_fiyat = anlik_fiyat + (atr * 1.2)
+        tp_fiyat = anlik_fiyat - (atr * 2.0)
+        sl_fiyat = anlik_fiyat + (atr * 1.5)
         kapat_yon = 'buy'
+        
     hedef_roe = abs((tp_fiyat - anlik_fiyat) / anlik_fiyat) * 100 * KALDIRAC
     return float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe)
+
+def makine_ogrenmesi_filtresi(df, rsi, emir_analizi):
+    try:
+        if len(df) < 20: return True
+        X = []
+        y = []
+        closes = df['close'].values
+        highs = df['high'].values
+        lows = df['low'].values
+        
+        for i in range(14, len(df) - 1):
+            sub_close = closes[:i+1]
+            sub_high = highs[:i+1]
+            sub_low = lows[:i+1]
+            sub_rsi = ta.momentum.rsi(pd.Series(sub_close), window=14).iloc[-1]
+            sub_atr = ta.volatility.AverageTrueRange(pd.Series(sub_high), pd.Series(sub_low), pd.Series(sub_close), window=14).average_true_range().iloc[-1]
+            
+            future_return = (closes[i+1] - closes[i]) / closes[i]
+            label = 1 if future_return > 0 else 0
+            
+            X.append([sub_rsi, sub_atr])
+            y.append(label)
+            
+        if len(X) < 10: return True
+        clf = RandomForestClassifier(n_estimators=20, random_state=42, max_depth=3)
+        clf.fit(X, y)
+        
+        current_atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
+        pred = clf.predict([[rsi, current_atr]])[0]
+        return bool(pred == 1)
+    except Exception:
+        return True
 
 def telegram_mesaj_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID: return
@@ -231,7 +265,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for pos in positions:
             kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
             if kontrat > 0:
-                yon = str(pos.get('side', '')).upper() or "LONG`"
+                yon = str(pos.get('side', '')).upper() or "LONG"
                 kapatma_yonu = 'sell' if yon == 'LONG' else 'buy'
                 try: exchange.cancel_all_orders(pos['symbol'])
                 except Exception: pass
@@ -323,6 +357,8 @@ def otomatik_arkaplan_tarayici():
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
 
+                    emir_analizi = emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker)
+
                     # 1. Normal Sinyal Tespiti
                     ham_yon = None
                     if piyasa_rejimi == "YATAY":
@@ -340,8 +376,11 @@ def otomatik_arkaplan_tarayici():
                     islem_yonu = "SHORT" if ham_yon == "LONG" else "LONG"
                     print(f"🔄 [TERS MOD] {symbol} için sistem {ham_yon} dedi, biz tersini yaparak 👉 {islem_yonu} uyguluyoruz! (RSI: {rsi:.2f})", flush=True)
 
+                    ml_onay = makine_ogrenmesi_filtresi(df, rsi, emir_analizi)
+                    if not ml_onay: continue
+
                     taranan_sinyaller.append({
-                        "symbol": symbol, "yon": islem_yonu, "rsi": rsi, "fiyat": anlik_fiyat, "df": df
+                        "symbol": symbol, "yon": islem_yonu, "rsi": rsi, "fiyat": anlik_fiyat, "df": df, "emir_analizi": emir_analizi
                     })
                 except Exception: continue
 
@@ -363,7 +402,7 @@ def otomatik_arkaplan_tarayici():
 
                     giris_fiyati = sinyal["fiyat"]
                     tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = akilli_seviye_hesapla(
-                        giris_fiyati, sinyal["yon"], sinyal["df"]
+                        giris_fiyati, sinyal["yon"], sinyal["df"], sinyal["emir_analizi"]
                     )
 
                     miktar = float(exchange.amount_to_precision(
@@ -401,7 +440,7 @@ def otomatik_arkaplan_tarayici():
 
         except Exception: pass
         
-        # Hızlı tarama için süreyi 5 saniyeye düşürdük
+        # Süreyi 5 saniyeye düşürdük
         time.sleep(5)
 
 async def main():
