@@ -241,39 +241,26 @@ def btc_trend_kontrolu():
         return "NOTR"
 
 def duvara_gore_akilli_giris_ve_seviyeler(anlik_fiyat, yon, satis_duvari, alis_duvari, atr_yuzde):
+    # Gürültülerde patlamaması için ATR payı ve mesafeler güvenli düzeye çıkarıldı
+    guvenli_atr = max(1.8, atr_yuzde)
+    
     if yon == 'LONG':
         if alis_duvari and alis_duvari < anlik_fiyat:
-            giris_fiyati = alis_duvari * 1.002 
+            giris_fiyati = alis_duvari * 1.001 
         else:
-            giris_fiyati = anlik_fiyat * 0.995
+            giris_fiyati = anlik_fiyat * 0.994
             
-        if satis_duvari and satis_duvari > giris_fiyati:
-            tp_fiyat = satis_duvari * 0.992
-        else:
-            tp_fiyat = giris_fiyati * (1 + max(0.015, atr_yuzde / 100 * 1.5))
-            
-        if alis_duvari and alis_duvari < giris_fiyati:
-            sl_fiyat = alis_duvari * 0.995
-        else:
-            sl_fiyat = giris_fiyati * (1 - max(0.012, atr_yuzde / 100))
-            
+        tp_fiyat = giris_fiyati * (1 + max(0.025, guvenli_atr / 100 * 2.2))
+        sl_fiyat = giris_fiyati * (1 - max(0.018, guvenli_atr / 100 * 1.2))
         kapat_yon = 'sell'
     else:
         if satis_duvari and satis_duvari > anlik_fiyat:
-            giris_fiyati = satis_duvari * 0.998
+            giris_fiyati = satis_duvari * 0.999
         else:
-            giris_fiyati = anlik_fiyat * 1.005
+            giris_fiyati = anlik_fiyat * 1.006
             
-        if alis_duvari and alis_duvari < giris_fiyati:
-            tp_fiyat = alis_duvari * 1.008
-        else:
-            tp_fiyat = giris_fiyati * (1 - max(0.015, atr_yuzde / 100 * 1.5))
-            
-        if satis_duvari and satis_duvari > giris_fiyati:
-            sl_fiyat = satis_duvari * 1.005
-        else:
-            sl_fiyat = giris_fiyati * (1 + max(0.012, atr_yuzde / 100))
-            
+        tp_fiyat = giris_fiyati * (1 - max(0.025, guvenli_atr / 100 * 2.2))
+        sl_fiyat = giris_fiyati * (1 + max(0.018, guvenli_atr / 100 * 1.2))
         kapat_yon = 'buy'
         
     hedef_roe = abs((tp_fiyat - giris_fiyati) / giris_fiyati) * 100 * KALDIRAC
@@ -367,7 +354,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 **BOT DURUM RAPORU (Duvar Destekli Limit Giriş)**\n\n"
+            f"📊 **BOT DURUM RAPORU (Trend Kilidi & Gürültü Korumalı)**\n\n"
             f"👑 Ana BTC Yönü: `{btc_trend_kontrolu()}`\n"
             f"💰 Kasa: `{total:.2f} USDT` | Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -385,7 +372,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
     BOT_CALISIYOR_MU = True
     GLOBAL_COOLDOWN_BITIS = 0.0
-    await update.message.reply_text("🟢 Bot aktif edildi (Duvar Destekli Limit Giriş Modu)!")
+    await update.message.reply_text("🟢 Bot aktif edildi (Trend Kilidi ve Gürültü Koruması devrede)!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID):
@@ -411,7 +398,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def otomatik_arkaplan_tarayici():
     global BOT_CALISIYOR_MU, GLOBAL_COOLDOWN_BITIS
-    print("🚀 Bot Arka Plan Döngüsü Aktif (Duvar Seviyeli Limit Giriş)...", flush=True)
+    print("🚀 Bot Arka Plan Döngüsü Aktif (Trend Uyumlu & Gürültü Korumalı)...", flush=True)
     try:
         exchange.load_markets()
         print("✅ Piyasalar başarıyla yüklendi, yapay zeka eğitiliyor...", flush=True)
@@ -517,7 +504,7 @@ def otomatik_arkaplan_tarayici():
                         yapay_zekayi_egit_ve_guncelle()
                         telegram_mesaj_gonder(f"{sonuc_mesaj_tipi}\n📌 `{eski_sym}` | Cooldown süresi başlatıldı.")
                 
-                # Açıkta kalan iptal edilmiş limit emirleri temizle
+                # Açıkta kalan iptal edilmiş emirleri temizle
                 if len(raw_positions) > 0 or not raw_positions:
                     time.sleep(1)
                     double_check_positions = exchange.fetch_positions()
@@ -537,9 +524,9 @@ def otomatik_arkaplan_tarayici():
             taranan_sinyaller = []
 
             # ========================================================
-            # 2. COİN TARAMA VE GİRİŞ ANALİZİ (DUVAR ANALİZLİ)
+            # 2. COİN TARAMA VE GİRİŞ ANALİZİ (TREND KİLİTLİ)
             # ========================================================
-            print(f"🔍 Coinler taranıyor (Hedef Yön: {btc_yonu})...", flush=True)
+            print(f"🔍 Coinler taranıyor (Kesin Hedef Yön: {btc_yonu})...", flush=True)
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
                 
@@ -578,7 +565,9 @@ def otomatik_arkaplan_tarayici():
                         except Exception:
                             pass
 
-                    grid_yonu = btc_yonu
+                    # 👑 KESİN TREND KİLİDİ: Sinyal yönü BTC trendinden bağımsız olamaz!
+                    grid_yonu = btc_yonu 
+
                     ceza_puani = 0
                     duvar_bonus = 0
 
@@ -638,30 +627,16 @@ def otomatik_arkaplan_tarayici():
                         
                     roe = fark_yuzdesi * 100 * kaldirac_val
 
-                    trend_zitti_mi = False
-                    if btc_yonu == "LONG" and yon == "SHORT":
-                        trend_zitti_mi = True
-                    elif btc_yonu == "SHORT" and yon == "LONG":
-                        trend_zitti_mi = True
-
-                    # Acil güvenlik sigortası (Borsa stop emri çalışana kadar ek koruma)
-                    if roe <= -18.0:
+                    # Acil güvenlik sigortası (Genişletilmiş tolerans ile)
+                    if roe <= -22.0:
                         pozisyonu_kapat(symbol, yon, kontrat, f"🛑 *ZARAR KESİLDİ (SL)*\n📌 `{symbol}` | ROE: `%{roe:.2f}`", basarili=False, cezali_mi=True)
-                        continue
-                    
-                    elif trend_zitti_mi and roe > 0.4: 
-                        pozisyonu_kapat(
-                            symbol, yon, kontrat, 
-                            f"✅ *TREND DÖNDÜ & KÂRDA KAPATILDI*\n📌 `{symbol}` | Yön: `{yon}` | ROE: `%{roe:.2f}`", 
-                            basarili=True, cezali_mi=False
-                        )
                         continue
                         
                 except Exception as e:
                     continue
 
             # ========================================================
-            # 3. YENİ İŞLEM AÇMA (80 PUAN EŞİĞİ & DUVAR LİMİT GİRİŞ)
+            # 3. YENİ İŞLEM AÇMA (80 PUAN EŞİĞİ & TREND UYUMLU)
             # ========================================================
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
@@ -674,6 +649,11 @@ def otomatik_arkaplan_tarayici():
                 
                 if sinyal["puan"] < 80: 
                     print(f"ℹ️ {sinyal['symbol']} puanı ({sinyal['puan']}) 80 puanlık eşik değerin altında.", flush=True)
+                    continue
+
+                # Kesin Trend Kontrolü: Sinyal yönü BTC ana yönüyle uyuşmuyorsa asla açma
+                if sinyal["yon"] != btc_yonu:
+                    print(f"⚠️ {sinyal['symbol']} yönü ({sinyal['yon']}) BTC trendi ({btc_yonu}) ile uyuşmuyor, atlanıyor.", flush=True)
                     continue
 
                 try:
@@ -690,7 +670,7 @@ def otomatik_arkaplan_tarayici():
                     if kullanilacak_tutar < 1.0 or serbest_bakiye < 1.0:
                         continue
 
-                    # Duvar seviyelerine göre akıllı limit giriş, TP ve SL hesaplama
+                    # Gürültüye dayanıklı TP ve SL seviyeleri
                     giris_fiyati, tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = duvara_gore_akilli_giris_ve_seviyeler(
                         sinyal["fiyat"], sinyal["yon"], sinyal["satis_duvari"], sinyal["alis_duvari"], sinyal["atr"]
                     )
@@ -703,10 +683,10 @@ def otomatik_arkaplan_tarayici():
                     
                     islem_yonu = 'buy' if sinyal["yon"] == 'LONG' else 'sell'
                     
-                    # 1. Adım: Duvar kademesinden LİMİT GİRİŞ emri gönder
+                    # 1. Adım: Limit Giriş Emri
                     exchange.create_order(sinyal["symbol"], 'limit', islem_yonu, miktar, giris_fiyati)
                     
-                    # 2. Adım: Pozisyon dolduğunda çalışacak TP ve SL emirlerini borsa sunucusuna ilet
+                    # 2. Adım: Gürültü Korumalı TP ve SL Emirleri
                     try:
                         exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
                         exchange.create_order(sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
@@ -725,13 +705,13 @@ def otomatik_arkaplan_tarayici():
                         aktif_semboller_listesi.append(sinyal["symbol"])
                     hafizayi_kaydet()
                     
-                    print(f"⚡ Limit İşlem Eklendi: {sinyal['symbol']} | Yön: {sinyal['yon']} | Giriş: {giris_fiyati} | TP: {tp_fiyat}", flush=True)
+                    print(f"⚡ Trend Uyumlu Limit İşlem Eklendi: {sinyal['symbol']} | Yön: {sinyal['yon']} | Giriş: {giris_fiyati} | TP: {tp_fiyat}", flush=True)
                     telegram_mesaj_gonder(
-                        f"🧱 *DUVAR BAZLI LİMİT İŞLEM EKLENDİ*\n"
+                        f"🧱 *TREND UYUMLU & GÜRÜLTÜ KORUMALI İŞLEM*\n"
                         f"📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}` | Puan: `{sinyal['puan']}`\n"
-                        f"🎯 Hedef Giriş Fiyatı: `{giris_fiyati}`\n"
+                        f"🎯 Giriş Fiyatı: `{giris_fiyati}`\n"
                         f"💰 Hedef TP: `{tp_fiyat}` (Hedef ROE: `%{hedef_roe:.1f}`)\n"
-                        f"🛑 Stop-Loss (SL): `{sl_fiyat}`"
+                        f"🛑 Güvenli Stop-Loss: `{sl_fiyat}`"
                     )
                     break
                 except Exception as e:
