@@ -53,7 +53,7 @@ state_lock = threading.Lock()
 KALDIRAC = 5
 
 GLOBAL_COOLDOWN_BITIS = 0.0
-SON_BTC_YONU = "LONG"
+SON_BTC_YONU = "YATAY (Testere)"
 
 def hafizayi_yukle():
     print("💾 Hafıza Supabase'den yükleniyor...", flush=True)
@@ -110,35 +110,40 @@ COOLDOWN_SURESI_SANIYE = 10 * 60
 
 def piyasa_rejimini_tespit_et():
     global SON_BTC_YONU
-    print("🌐 [PİYASA] BTC rejimi ve yönü analiz ediliyor...", flush=True)
+    print("🌐 [PİYASA] Sertleştirilmiş rejim analizi yapılıyor...", flush=True)
     try:
-        ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=30)
+        ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=40)
         df_btc = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        
+        # 1. ADX Filtresini Sertleştiriyoruz (35'in altı kesinlikle yatay)
         adx_1h = ta.trend.ADXIndicator(df_btc['high'], df_btc['low'], df_btc['close'], window=14).adx().iloc[-1]
         
+        # 2. Bollinger Bantları Genişliği Sıkışma Eşiği
+        indicator_bb = ta.volatility.BollingerBands(close=df_btc['close'], window=20, window_dev=2)
+        bb_high = indicator_bb.bollinger_hband().iloc[-1]
+        bb_low = indicator_bb.bollinger_lband().iloc[-1]
+        bb_mid = indicator_bb.bollinger_mavg().iloc[-1]
+        bb_bandwidth = (bb_high - bb_low) / bb_mid
+        
+        # 3. EMA Farkı
         ema9 = ta.trend.ema_indicator(df_btc['close'], window=9).iloc[-1]
         ema21 = ta.trend.ema_indicator(df_btc['close'], window=21).iloc[-1]
-        
         fark_yuzdesi = (abs(ema9 - ema21) / ema21) * 100
-        esik_degeri = 0.1
         
-        if fark_yuzdesi > esik_degeri:
-            trend_yonu = "LONG" if ema9 > ema21 else "SHORT"
-            SON_BTC_YONU = trend_yonu
-        else:
-            trend_yonu = SON_BTC_YONU
-            
-        # ADX eşiği: 25 altı YATAY (Testere), 25 üstü TREND kabul edilir
-        if adx_1h < 25.0:
+        # SERT KURAL: Trend sayılması için ADX > 35 VE Bant Genişliği > %4 VE EMA Farkı > %0.3 olmalı!
+        if adx_1h < 35.0 or bb_bandwidth < 0.04 or fark_yuzdesi < 0.3:
             rejim = "YATAY"
+            trend_yonu = "YATAY (Testere)"
         else:
             rejim = "TREND"
+            trend_yonu = "LONG" if ema9 > ema21 else "SHORT"
+            SON_BTC_YONU = trend_yonu
             
-        print(f"🌐 [PİYASA SONUÇ] Rejim: {rejim} | BTC Yön: {trend_yonu} (Fark: %{fark_yuzdesi:.3f}) | ADX: {adx_1h:.2f}", flush=True)
+        print(f"🌐 [PİYASA SONUÇ] Rejim: {rejim} | Yön: {trend_yonu} | ADX: {adx_1h:.2f} | BB Genişlik: {bb_bandwidth:.4f} | Fark: %{fark_yuzdesi:.3f}", flush=True)
         return rejim, trend_yonu
     except Exception as e:
-        print(f"⚠️ [PİYASA HATA] Rejim tespit edilemedi: {e}. Varsayılan YATAY/LONG", flush=True)
-        return "YATAY", SON_BTC_YONU
+        print(f"⚠️ [PİYASA HATA] {e}. Varsayılan YATAY", flush=True)
+        return "YATAY", "YATAY (Testere)"
 
 def emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker_data):
     try:
@@ -288,7 +293,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Hibrit Bot Aktif (Testerede Tersi, Trendde Normal İşlem)...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Hibrit Bot Aktif (Sertleştirilmiş Yatay/Testere Algılama)...", flush=True)
     try:
         exchange.load_markets()
     except Exception: pass
@@ -372,9 +377,7 @@ def otomatik_arkaplan_tarayici():
 
                     emir_analizi = emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker)
 
-                    # HİBRİT MANTIK KARAR MEKANİZMASI
                     if piyasa_rejimi == "YATAY":
-                        # 1. TESTERE PİYASASI: TERS MANTIK (Contrarian)
                         if rsi < 35: ham_yon = "LONG"
                         elif rsi > 65: ham_yon = "SHORT"
                         else: continue
@@ -382,7 +385,6 @@ def otomatik_arkaplan_tarayici():
                         islem_yonu = "SHORT" if ham_yon == "LONG" else "LONG"
                         mod_adi = "TERS MOD (Testere)"
                     else:
-                        # 2. TREND PİYASASI: NORMAL MANTIK (Trend Following - BTC Yönüne Uygun)
                         if btc_yonu == "LONG" and rsi < 55:
                             islem_yonu = "LONG"
                         elif btc_yonu == "SHORT" and rsi > 45:
