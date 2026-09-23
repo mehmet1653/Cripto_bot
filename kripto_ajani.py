@@ -108,9 +108,6 @@ COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 MAKSIMUM_TOPLAM_POZISYON = 2
 COOLDOWN_SURESI_SANIYE = 20 * 60
 
-ai_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
-ai_model_egitildi = False
-
 def piyasa_rejimini_tespit_et():
     print("🌐 [PİYASA] BTC rejimi ve yönü analiz ediliyor...", flush=True)
     try:
@@ -129,6 +126,45 @@ def piyasa_rejimini_tespit_et():
     except Exception as e:
         print(f"⚠️ [PİYASA HATA] Rejim tespit edilemedi: {e}. Varsayılan YATAY/LONG", flush=True)
         return "YATAY", "LONG"
+
+def emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker_data):
+    """
+    Emir defteri derinliğini ve 24h tepe/dip noktalarını analiz eder.
+    Zirvedeyken Long, dipteyken Short açılmasını engeller.
+    """
+    try:
+        # 1. 24h Tepe / Dip Kontrolü
+        high_24h = float(ticker_data.get('high') or anlik_fiyat * 1.02)
+        low_24h = float(ticker_data.get('low') or anlik_fiyat * 0.98)
+        
+        # Eğer fiyat 24 saatlik zirvenin %0.6'lık dilimi içindeyse, dirençtedir -> LONG AÇILMAZ!
+        tepeye_yakin_mi = anlik_fiyat >= (high_24h * 0.994)
+        # Eğer fiyat 24 saatlik dip seviyenin %0.6'lık dilimi içindeyse, destektedir -> SHORT AÇILMAZ!
+        dipe_yakin_mi = anlik_fiyat <= (low_24h * 1.006)
+
+        # 2. Order Book Derinlik Analizi (Alış/Satış Baskısı)
+        order_book = exchange.fetch_order_book(symbol, limit=20)
+        bids = order_book.get('bids', [])
+        asks = order_book.get('asks', [])
+
+        toplam_alis_hacmi = sum([b[1] for b in bids]) if bids else 1.0
+        toplam_satis_hacmi = sum([a[1] for a in asks]) if asks else 1.0
+        toplam_hacim = toplam_alis_hacmi + toplam_satis_hacmi
+
+        alis_orani = (toplam_alis_hacmi / toplam_hacim) * 100
+        satis_orani = (toplam_satis_hacmi / toplam_hacim) * 100
+
+        print(f"     📚 [DERİNLİK] {symbol} | Alış: %{alis_orani:.1f} | Satış: %{satis_orani:.1f} | 24h High: {high_24h} | Anlık: {anlik_fiyat}", flush=True)
+        
+        return {
+            "tepeye_yakin": tepeye_yakin_mi,
+            "dipe_yakin": dipe_yakin_mi,
+            "alis_orani": alis_orani,
+            "satis_orani": satis_orani
+        }
+    except Exception as e:
+        print(f"     ⚠️ [DERİNLİK HATA] {symbol} defter okunamadı: {e}", flush=True)
+        return {"tepeye_yakin": False, "dipe_yakin": False, "alis_orani": 50.0, "satis_orani": 50.0}
 
 def akilli_seviye_hesapla(anlik_fiyat, yon, df):
     atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
@@ -175,7 +211,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 **BOT DURUM RAPORU (Detaylı Log Modu)**\n\n"
+            f"📊 **BOT DURUM RAPORU (Derinlik Korumalı)**\n\n"
             f"🌐 Piyasa Rejimi: `{rejim}` (BTC Yön: `{btc_yon}`)\n"
             f"💰 Kasa: `{total:.2f} USDT` | Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -217,7 +253,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Bot Arka Plan Döngüsü Canlı Log Modunda Aktif...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Bot Derinlik ve Seviye Korumalı Modda Aktif...", flush=True)
     try:
         exchange.load_markets()
         print("✅ [BAŞLANGIÇ] Piyasalar başarıyla yüklendi.", flush=True)
@@ -297,8 +333,8 @@ def otomatik_arkaplan_tarayici():
 
             taranan_sinyaller = []
 
-            # 3. Coin coin tarama ve filtreleme
-            print("🔎 [TARAMA BAŞLIYOR] Takip edilen coinler tek tek inceleniyor...", flush=True)
+            # 3. Coin coin tarama, filtreleme ve derinlik kontrolü
+            print("🔎 [TARAMA BAŞLIYOR] Takip edilen coinler teknik ve derinlik filtresinden geçiriliyor...", flush=True)
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
                 
@@ -316,6 +352,10 @@ def otomatik_arkaplan_tarayici():
                 try:
                     ticker = exchange.fetch_ticker(symbol)
                     anlik_fiyat = float(ticker['last'])
+                    
+                    # Derinlik ve Seviye Kontrolü (Zirvede Long / Dipte Short engelleme)
+                    derinlik_bilgi = emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker)
+
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
@@ -326,23 +366,40 @@ def otomatik_arkaplan_tarayici():
                     if piyasa_rejimi == "YATAY":
                         if rsi < 35: 
                             islem_yonu = "LONG"
-                            print(f"     🎯 [FİLTRE] {symbol} YATAY rejimde RSI düşük ({rsi:.2f} < 35) -> LONG sinyali üretildi.", flush=True)
+                            print(f"     🎯 [FİLTRE] {symbol} YATAY rejimde RSI düşük ({rsi:.2f} < 35) -> LONG sinyali.", flush=True)
                         elif rsi > 65: 
                             islem_yonu = "SHORT"
-                            print(f"     🎯 [FİLTRE] {symbol} YATAY rejimde RSI yüksek ({rsi:.2f} > 65) -> SHORT sinyali üretildi.", flush=True)
+                            print(f"     🎯 [FİLTRE] {symbol} YATAY rejimde RSI yüksek ({rsi:.2f} > 65) -> SHORT sinyali.", flush=True)
                         else:
-                            print(f"     🚫 [FİLTRE] {symbol} yatay rejimde nötr bölgede (RSI: {rsi:.2f}), pas geçiliyor.", flush=True)
+                            print(f"     🚫 [FİLTRE] {symbol} nötr bölgede (RSI: {rsi:.2f}), pas geçiliyor.", flush=True)
                             continue
                     else:
                         if btc_yonu == "LONG" and rsi < 60: 
                             islem_yonu = "LONG"
-                            print(f"     🎯 [FİLTRE] {symbol} TREND rejiminde (BTC LONG, RSI: {rsi:.2f} < 60) -> LONG sinyali üretildi.", flush=True)
+                            print(f"     🎯 [FİLTRE] {symbol} TREND rejiminde (BTC LONG, RSI: {rsi:.2f} < 60) -> LONG sinyali.", flush=True)
                         elif btc_yonu == "SHORT" and rsi > 40: 
                             islem_yonu = "SHORT"
-                            print(f"     🎯 [FİLTRE] {symbol} TREND rejiminde (BTC SHORT, RSI: {rsi:.2f} > 40) -> SHORT sinyali üretildi.", flush=True)
+                            print(f"     🎯 [FİLTRE] {symbol} TREND rejiminde (BTC SHORT, RSI: {rsi:.2f} > 40) -> SHORT sinyali.", flush=True)
                         else:
                             print(f"     🚫 [FİLTRE] {symbol} trend koşullarına uymuyor (RSI: {rsi:.2f}), pas geçiliyor.", flush=True)
                             continue
+
+                    # ==================== YENİ: DİRENÇ / DERİNLİK BLOKAJ FİLTRESİ ====================
+                    if islem_yonu == "LONG" and derinlik_bilgi["tepeye_yakin"]:
+                        print(f"     🛑 [BLOKLANDI] {symbol} 24 saatlik tepe noktasına çok yakın! Dirençte LONG açmak riskli, işlem iptal.", flush=True)
+                        continue
+                    
+                    if islem_yonu == "LONG" and derinlik_bilgi["satis_orani"] > 65.0:
+                        print(f"     🛑 [BLOKLANDI] {symbol} emir defterinde satıcı baskısı çok yüksek (%{derinlik_bilgi['satis_orani']:.1f}), LONG açılmıyor.", flush=True)
+                        continue
+
+                    if islem_yonu == "SHORT" and derinlik_bilgi["dipe_yakin"]:
+                        print(f"     🛑 [BLOKLANDI] {symbol} 24 saatlik dip noktasına çok yakın! Destekte SHORT açmak riskli, işlem iptal.", flush=True)
+                        continue
+
+                    if islem_yonu == "SHORT" and derinlik_bilgi["alis_orani"] > 65.0:
+                        print(f"     🛑 [BLOKLANDI] {symbol} emir defterinde alıcı baskısı çok yüksek (%{derinlik_bilgi['alis_orani']:.1f}), SHORT açılmıyor.", flush=True)
+                        continue
 
                     taranan_sinyaller.append({
                         "symbol": symbol, "yon": islem_yonu, "rsi": rsi, "fiyat": anlik_fiyat, "df": df
@@ -355,7 +412,7 @@ def otomatik_arkaplan_tarayici():
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
                 if sinyal["symbol"] in aktif_semboller_listesi:
-                    print(f"   ℹ️ [İŞLEM ATLANDI] {symbol} için zaten açık pozisyon var.", flush=True)
+                    print(f"   ℹ️ [İŞLEM ATLANDI] {sinyal['symbol']} için zaten açık pozisyon var.", flush=True)
                     continue
                 if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
                     print(f"   ⚠️ [ LİMİT DOLU ] Maksimum pozisyon sınırına ({MAKSIMUM_TOPLAM_POZISYON}) ulaşıldı, yeni işlem açılmayacak.", flush=True)
@@ -407,7 +464,7 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     telegram_mesaj_gonder(
-                        f"🎯 *DETAYLI LOG MODU İŞLEM GİRİŞİ*\n"
+                        f"🎯 *DERİNLİK KORUMALI İŞLEM GİRİŞİ*\n"
                         f"📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`\n"
                         f"🎯 Giriş: `{giris_fiyati}`\n"
                         f"💰 Hedef TP: `{tp_fiyat}` (Hedef ROE: `%{hedef_roe:.1f}`)\n"
