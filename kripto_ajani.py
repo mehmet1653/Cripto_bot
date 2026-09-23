@@ -53,7 +53,7 @@ state_lock = threading.Lock()
 KALDIRAC = 5
 
 GLOBAL_COOLDOWN_BITIS = 0.0
-SON_BTC_YONU = "LONG"  # Hysteresis için önceki yönü hafızada tutuyoruz
+SON_BTC_YONU = "LONG"
 
 def hafizayi_yukle():
     print("💾 Hafıza Supabase'den yükleniyor...", flush=True)
@@ -70,12 +70,11 @@ def hafizayi_yukle():
     except Exception as e:
         print(f"⚠️ Hafıza yüklenirken hata: {e}", flush=True)
     
-    varsayilan = {
+    return {
         "aktif_sistemler": {},
         "analitik": {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []},
         "cooldownlar": {}
     }
-    return varsayilan
 
 def hafizayi_kaydet():
     with state_lock:
@@ -120,17 +119,17 @@ def piyasa_rejimini_tespit_et():
         ema9 = ta.trend.ema_indicator(df_btc['close'], window=9).iloc[-1]
         ema21 = ta.trend.ema_indicator(df_btc['close'], window=21).iloc[-1]
         
-        # YÜZDESEL EŞİK (HYSTERESIS) KONTROLÜ
         fark_yuzdesi = (abs(ema9 - ema21) / ema21) * 100
-        esik_degeri = 0.1  # %0.1'lik fark bekliyoruz
+        esik_degeri = 0.1
         
         if fark_yuzdesi > esik_degeri:
             trend_yonu = "LONG" if ema9 > ema21 else "SHORT"
-            SON_BTC_YONU = trend_yonu  # Yönü güncelle ve kaydet
+            SON_BTC_YONU = trend_yonu
         else:
-            trend_yonu = SON_BTC_YONU  # Fark yetersizse eski yönü koru
+            trend_yonu = SON_BTC_YONU
             
-        if adx_1h < 22.0:
+        # ADX eşiği: 25 altı YATAY (Testere), 25 üstü TREND kabul edilir
+        if adx_1h < 25.0:
             rejim = "YATAY"
         else:
             rejim = "TREND"
@@ -169,7 +168,7 @@ def emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker_data):
     except Exception as e:
         return {"tepeye_yakin": False, "dipe_yakin": False, "alis_orani": 50.0, "satis_orani": 50.0}
 
-def akilli_seviye_hesapla(anlik_fiyat, yon, df, emir_analizi):
+def akilli_seviye_hesapla(anlik_fiyat, yon, df):
     atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
     
     if yon == 'LONG':
@@ -184,7 +183,7 @@ def akilli_seviye_hesapla(anlik_fiyat, yon, df, emir_analizi):
     hedef_roe = abs((tp_fiyat - anlik_fiyat) / anlik_fiyat) * 100 * KALDIRAC
     return float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe)
 
-def makine_ogrenmesi_filtresi(df, rsi, emir_analizi):
+def makine_ogrenmesi_filtresi(df, rsi):
     try:
         if len(df) < 20: return True
         X = []
@@ -248,7 +247,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 **BOT DURUM RAPORU (Ters Taktik / Tersi Mod)**\n\n"
+            f"📊 **BOT DURUM RAPORU (Hibrit Mod - 5x)**\n\n"
             f"🌐 Piyasa Rejimi: `{rejim}` (BTC Yön: `{btc_yon}`)\n"
             f"💰 Kasa: `{total:.2f} USDT` | Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -264,7 +263,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Tersi Bot aktif edildi!")
+    await update.message.reply_text("🟢 Hibrit Bot (5x) aktif edildi!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -289,7 +288,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Tersi Mod Bot Aktif (Yüzdesel Eşik Açık)...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Hibrit Bot Aktif (Testerede Tersi, Trendde Normal İşlem)...", flush=True)
     try:
         exchange.load_markets()
     except Exception: pass
@@ -373,25 +372,32 @@ def otomatik_arkaplan_tarayici():
 
                     emir_analizi = emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker)
 
-                    ham_yon = None
+                    # HİBRİT MANTIK KARAR MEKANİZMASI
                     if piyasa_rejimi == "YATAY":
+                        # 1. TESTERE PİYASASI: TERS MANTIK (Contrarian)
                         if rsi < 35: ham_yon = "LONG"
                         elif rsi > 65: ham_yon = "SHORT"
                         else: continue
+                        
+                        islem_yonu = "SHORT" if ham_yon == "LONG" else "LONG"
+                        mod_adi = "TERS MOD (Testere)"
                     else:
-                        if btc_yonu == "LONG" and rsi < 60: ham_yon = "LONG"
-                        elif btc_yonu == "SHORT" and rsi > 40: ham_yon = "SHORT"
-                        else: continue
+                        # 2. TREND PİYASASI: NORMAL MANTIK (Trend Following - BTC Yönüne Uygun)
+                        if btc_yonu == "LONG" and rsi < 55:
+                            islem_yonu = "LONG"
+                        elif btc_yonu == "SHORT" and rsi > 45:
+                            islem_yonu = "SHORT"
+                        else:
+                            continue
+                        mod_adi = "NORMAL TREND MODU"
 
-                    # TERSİNE ÇEVİRME MODU
-                    islem_yonu = "SHORT" if ham_yon == "LONG" else "LONG"
-                    print(f"🔄 [TERS MOD] {symbol} için sistem {ham_yon} dedi, biz tersini yaparak 👉 {islem_yonu} uyguluyoruz! (RSI: {rsi:.2f})", flush=True)
+                    print(f"🔄 [{mod_adi}] {symbol} için karar verildi 👉 {islem_yonu} | Rejim: {piyasa_rejimi} (RSI: {rsi:.2f})", flush=True)
 
-                    ml_onay = makine_ogrenmesi_filtresi(df, rsi, emir_analizi)
+                    ml_onay = makine_ogrenmesi_filtresi(df, rsi)
                     if not ml_onay: continue
 
                     taranan_sinyaller.append({
-                        "symbol": symbol, "yon": islem_yonu, "rsi": rsi, "fiyat": anlik_fiyat, "df": df, "emir_analizi": emir_analizi
+                        "symbol": symbol, "yon": islem_yonu, "rsi": rsi, "fiyat": anlik_fiyat, "df": df, "mod": mod_adi
                     })
                 except Exception: continue
 
@@ -413,7 +419,7 @@ def otomatik_arkaplan_tarayici():
 
                     giris_fiyati = sinyal["fiyat"]
                     tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = akilli_seviye_hesapla(
-                        giris_fiyati, sinyal["yon"], sinyal["df"], sinyal["emir_analizi"]
+                        giris_fiyati, sinyal["yon"], sinyal["df"]
                     )
 
                     miktar = float(exchange.amount_to_precision(
@@ -440,8 +446,8 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     telegram_mesaj_gonder(
-                        f"🎯 *TERS MOD İŞLEM GİRİŞİ (CONTRARIAN)*\n"
-                        f"📌 `{sinyal['symbol']}` | Alınan Yön: `{sinyal['yon']}`\n"
+                        f"🎯 *İŞLEM GİRİŞİ ({sinyal['mod']} - 5x)*\n"
+                        f"📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`\n"
                         f"🎯 Giriş: `{giris_fiyati}`\n"
                         f"💰 Hedef TP: `{tp_fiyat}` (Hedef ROE: `%{hedef_roe:.1f}`)\n"
                         f"🛑 Stop-Loss: `{sl_fiyat}`"
