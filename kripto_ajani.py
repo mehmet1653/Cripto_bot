@@ -29,7 +29,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot aktif ve calisiyor!"
+    return "Bot aktif and calisiyor!"
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
@@ -176,12 +176,14 @@ def akilli_seviye_hesapla(anlik_fiyat, yon, df):
     if yon == 'LONG':
         tp_fiyat = anlik_fiyat + (atr * 2.0)
         sl_fiyat = anlik_fiyat - (atr * 1.5)
+        kapat_yon = 'sell'
     else:
         tp_fiyat = anlik_fiyat - (atr * 2.0)
         sl_fiyat = anlik_fiyat + (atr * 1.5)
+        kapat_yon = 'buy'
         
     hedef_roe = abs((tp_fiyat - anlik_fiyat) / anlik_fiyat) * 100 * KALDIRAC
-    return float(tp_fiyat), float(sl_fiyat), float(hedef_roe)
+    return float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe)
 
 def telegram_mesaj_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID: return
@@ -394,10 +396,9 @@ def otomatik_arkaplan_tarayici():
                         continue
 
                     giris_fiyati = sinyal["fiyat"]
-                    tp_fiyat, sl_fiyat, hedef_roe = akilli_seviye_hesapla(
+                    tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = akilli_seviye_hesapla(
                         giris_fiyati, sinyal["yon"], sinyal["df"]
                     )
-                    kapat_yon = 'sell' if sinyal["yon"] == 'LONG' else 'buy'
 
                     miktar = float(exchange.amount_to_precision(
                         sinyal["symbol"], 
@@ -467,7 +468,7 @@ async def main():
     stop_event = asyncio.Event()
     await stop_event.wait()
 
-if __name__ == 'main__':
+if __name__ == '__main__':
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
