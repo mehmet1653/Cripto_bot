@@ -215,36 +215,6 @@ def akilli_seviye_hesapla(anlik_fiyat, yon, df):
 
 def makine_ogrenmesi_filtresi(df, rsi):
     return True
-    try:
-        if len(df) < 20: return True
-        X = []
-        y = []
-        closes = df['close'].values
-        highs = df['high'].values
-        lows = df['low'].values
-        
-        for i in range(14, len(df) - 1):
-            sub_close = closes[:i+1]
-            sub_high = highs[:i+1]
-            sub_low = lows[:i+1]
-            sub_rsi = ta.momentum.rsi(pd.Series(sub_close), window=14).iloc[-1]
-            sub_atr = ta.volatility.AverageTrueRange(pd.Series(sub_high), pd.Series(sub_low), pd.Series(sub_close), window=14).average_true_range().iloc[-1]
-            
-            future_return = (closes[i+1] - closes[i]) / closes[i]
-            label = 1 if future_return > 0 else 0
-            
-            X.append([sub_rsi, sub_atr])
-            y.append(label)
-            
-        if len(X) < 10: return True
-        clf = RandomForestClassifier(n_estimators=20, random_state=42, max_depth=3)
-        clf.fit(X, y)
-        
-        current_atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
-        pred = clf.predict([[rsi, current_atr]])[0]
-        return bool(pred == 1)
-    except Exception:
-        return True
 
 def telegram_mesaj_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID: return
@@ -388,6 +358,10 @@ def otomatik_arkaplan_tarayici():
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
                 
+                # Kasada halihazırda açık olan veya zaten aktif sistemde kayıtlı olan sembolleri atla
+                if symbol in aktif_semboller_listesi or symbol in AKTIF_GRID_SISTEMLERI:
+                    continue
+
                 with state_lock:
                     cooldown_veri = COIN_COOLDOWNLAR.get(symbol)
                     if cooldown_veri:
@@ -400,8 +374,6 @@ def otomatik_arkaplan_tarayici():
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
-
-                    emir_analizi = emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker)
 
                     if piyasa_rejimi == "YATAY":
                         if rsi < 35: ham_yon = "LONG"
@@ -421,9 +393,6 @@ def otomatik_arkaplan_tarayici():
 
                     print(f"🔄 [{mod_adi}] {symbol} için karar verildi 👉 {islem_yonu} | Rejim: {piyasa_rejimi} (RSI: {rsi:.2f})", flush=True)
 
-                    ml_onay = makine_ogrenmesi_filtresi(df, rsi)
-                    if not ml_onay: continue
-
                     taranan_sinyaller.append({
                         "symbol": symbol, "yon": islem_yonu, "rsi": rsi, "fiyat": anlik_fiyat, "df": df, "mod": mod_adi
                     })
@@ -431,7 +400,6 @@ def otomatik_arkaplan_tarayici():
 
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
-                if sinyal["symbol"] in aktif_semboller_listesi: continue
                 if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON: break
 
                 try:
@@ -470,7 +438,7 @@ def otomatik_arkaplan_tarayici():
                             "giris_fiyati": giris_fiyati, "yon": sinyal["yon"],
                             "giris_rsi": float(sinyal["rsi"]), "giris_zamani": time.time()
                         }
-                        aktif_semboller_listesi.append(sinyal["symbol"])
+                        aktif_borsa_map[sinyal["symbol"]] = True
                     hafizayi_kaydet()
                     
                     telegram_mesaj_gonder(
@@ -480,10 +448,13 @@ def otomatik_arkaplan_tarayici():
                         f"💰 Hedef TP: `{tp_fiyat}` (Hedef ROE: `%{hedef_roe:.1f}`)\n"
                         f"🛑 Stop-Loss: `{sl_fiyat}`"
                     )
-                    break
-                except Exception: pass
+                    # Hata veren tekil 'break' yerine artık bakiye/limit elverdiği sürece sıradakini işleyebilir
+                except Exception as e:
+                    print(f"⚠️ Emir açma hatası ({sinyal['symbol']}): {e}", flush=True)
+                    continue
 
-        except Exception: pass
+        except Exception as e:
+            print(f"⚠️ Ana döngü hatası: {e}", flush=True)
         
         time.sleep(5)
 
@@ -491,7 +462,6 @@ async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
 
-    # Telegram botu asenkron başlatma ve webhook temizleme garantisi
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     
     try:
