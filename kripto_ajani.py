@@ -214,6 +214,7 @@ def akilli_seviye_hesapla(anlik_fiyat, yon, df):
     return float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe)
 
 def makine_ogrenmesi_filtresi(df, rsi):
+    return True
     try:
         if len(df) < 20: return True
         X = []
