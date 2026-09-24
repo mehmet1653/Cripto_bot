@@ -18,39 +18,30 @@ import numpy as np
 from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
-from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
-from dotenv import load_dotenv
-
-load_dotenv()
 
 # ==================== RENDER WEB SUNUCUSU ====================
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot aktif and calisiyor!"
+    return "Bot aktif ve calisiyor!"
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
-# ==================== GİZLİ BİLGİLER ====================
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8870934003:AAGOzmO_VwYnj0Wz2hehI176rKiOkEaV0b0")
-CHAT_ID = os.environ.get("CHAT_ID", "6929517567")
+# ==================== AYARLAR VE ANAHTARLAR ====================
+TELEGRAM_TOKEN = "8870934003:AAGOzmO_VwYnj0Wz2hehI176rKiOkEaV0b0"
+CHAT_ID = "6929517567"
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://rllpcylzhptqwzmzehnv.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "Sb_secret_ln9y67Ep_zCtOQ9Q2NE8KQ_nf0gKkmO")
-
-try:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
-    print(f"⚠️ Supabase bağlantı hatası: {e}", flush=True)
-    supabase = None
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 exchange = ccxt.gate({
-    'apiKey': os.environ.get("GATE_API_KEY", "82cca880898a88d1a31e86d8eb474c57"),
-    'secret': os.environ.get("GATE_SECRET", "1ac479b9df5e6f2e89560b0d238a250694719b6fcae20da00ebc54ad6aeb8898"),
+    'apiKey': '82cca880898a88d1a31e86d8eb474c57',
+    'secret': '1ac479b9df5e6f2e89560b0d238a250694719b6fcae20da00ebc54ad6aeb8898',
     'enableRateLimit': True,
     'timeout': 30000,
     'options': {
@@ -77,12 +68,6 @@ SON_BTC_YONU = "YATAY (Testere)"
 
 def hafizayi_yukle():
     print("💾 Hafıza Supabase'den yükleniyor...", flush=True)
-    if not supabase:
-        return {
-            "aktif_sistemler": {},
-            "analitik": {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []},
-            "cooldownlar": {}
-        }
     try:
         response = supabase.table("bot_hafiza").select("*").eq("id", 1).execute()
         if response.data and len(response.data) > 0:
@@ -103,7 +88,6 @@ def hafizayi_yukle():
     }
 
 def hafizayi_kaydet():
-    if not supabase: return
     with state_lock:
         try:
             payload_analitik = {
@@ -211,36 +195,6 @@ def akilli_seviye_hesapla(anlik_fiyat, yon, df):
     hedef_roe = abs((tp_fiyat - anlik_fiyat) / anlik_fiyat) * 100 * KALDIRAC
     return float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe)
 
-def makine_ogrenmesi_filtresi(df, rsi):
-    try:
-        if len(df) < 20: return True
-        X = []
-        y = []
-        closes = df['close'].values
-        highs = df['high'].values
-        lows = df['low'].values
-        
-        for i in range(14, len(df) - 1):
-            sub_close = closes[:i+1]
-            sub_high = highs[:i+1]
-            sub_low = lows[:i+1]
-            sub_rsi = ta.momentum.rsi(pd.Series(sub_close), window=14).iloc[-1]
-            
-            future_return = (closes[i+1] - closes[i]) / closes[i]
-            label = 1 if future_return > 0 else 0
-            
-            X.append([sub_rsi, 1.0])
-            y.append(label)
-            
-        if len(X) < 10: return True
-        clf = RandomForestClassifier(n_estimators=20, random_state=42, max_depth=3)
-        clf.fit(X, y)
-        
-        pred = clf.predict([[rsi, 1.0]])[0]
-        return bool(pred == 1)
-    except Exception:
-        return True
-
 def telegram_mesaj_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID: return
     try:
@@ -273,7 +227,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 **BOT DURUM RAPORU (Hibrit Mod - 5x)**\n\n"
+            f"📊 **BOT DURUM RAPORU (Saf Rejim & RSI - 5x)**\n\n"
             f"🌐 Piyasa Rejimi: `{rejim}` (BTC Yön: `{btc_yon}`)\n"
             f"💰 Kasa: `{total:.2f} USDT` | Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -289,7 +243,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Hibrit Bot (5x) aktif edildi!")
+    await update.message.reply_text("🟢 Bot aktif edildi!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -314,7 +268,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Orijinal Hibrit Kazandıran Bot Aktif...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Saf ve Kararlı Bot Aktif...", flush=True)
     try:
         exchange.load_markets()
     except Exception: pass
@@ -396,7 +350,6 @@ def otomatik_arkaplan_tarayici():
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
 
-                    # Yatay piyasada RSI eşiğini biraz esneterek (40-60) fırsat kaçırmasını önlüyoruz
                     if piyasa_rejimi == "YATAY":
                         if rsi < 40: ham_yon = "LONG"
                         elif rsi > 60: ham_yon = "SHORT"
