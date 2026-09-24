@@ -42,7 +42,6 @@ CHAT_ID = os.environ.get("CHAT_ID", "6929517567")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-# Güvenli Supabase İstemci Başlatma (Çökme Önleyici)
 try:
     if not SUPABASE_URL or not SUPABASE_KEY:
         print("⚠️ UYARI: SUPABASE_URL veya SUPABASE_KEY çevre değişkeni bulunamadı!", flush=True)
@@ -81,7 +80,6 @@ SON_BTC_YONU = "YATAY (Testere)"
 def hafizayi_yukle():
     print("💾 Hafıza Supabase'den yükleniyor...", flush=True)
     if not supabase:
-        print("⚠️ Supabase istemcisi aktif değil, boş hafıza ile başlanıyor.", flush=True)
         return {
             "aktif_sistemler": {},
             "analitik": {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []},
@@ -492,19 +490,23 @@ async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
 
+    # Telegram botu asenkron başlatma ve webhook temizleme garantisi
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    
     try:
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
-    except Exception: pass
+    except Exception: 
+        pass
 
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
+    print("🤖 Telegram Bot dinlemeye başlıyor...", flush=True)
     await app_tg.initialize()
     await app_tg.start()
-    await app_tg.updater.start_polling(drop_pending_updates=True)
+    await app_tg.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
     tarayici_thread = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
     tarayici_thread.start()
