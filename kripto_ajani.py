@@ -20,8 +20,11 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
+from dotenv import load_dotenv
 
-# ==================== RENDER WEB SUNUCUSU (EN ÜSTE TAŞINDI) ====================
+load_dotenv()
+
+# ==================== RENDER WEB SUNUCUSU ====================
 app = Flask(__name__)
 
 @app.route('/')
@@ -38,7 +41,15 @@ CHAT_ID = os.environ.get("CHAT_ID", "6929517567")
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Güvenli Supabase İstemci Başlatma (Çökme Önleyici)
+try:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("⚠️ UYARI: SUPABASE_URL veya SUPABASE_KEY çevre değişkeni bulunamadı!", flush=True)
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as e:
+    print(f"⚠️ Supabase bağlantı hatası: {e}", flush=True)
+    supabase = None
 
 exchange = ccxt.gate({
     'apiKey': os.environ.get("GATE_API_KEY"),
@@ -69,6 +80,13 @@ SON_BTC_YONU = "YATAY (Testere)"
 
 def hafizayi_yukle():
     print("💾 Hafıza Supabase'den yükleniyor...", flush=True)
+    if not supabase:
+        print("⚠️ Supabase istemcisi aktif değil, boş hafıza ile başlanıyor.", flush=True)
+        return {
+            "aktif_sistemler": {},
+            "analitik": {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []},
+            "cooldownlar": {}
+        }
     try:
         response = supabase.table("bot_hafiza").select("*").eq("id", 1).execute()
         if response.data and len(response.data) > 0:
@@ -89,6 +107,7 @@ def hafizayi_yukle():
     }
 
 def hafizayi_kaydet():
+    if not supabase: return
     with state_lock:
         try:
             payload_analitik = {
@@ -470,7 +489,6 @@ def otomatik_arkaplan_tarayici():
         time.sleep(5)
 
 async def main():
-    # Flask sunucusunu arka planda başlatıyoruz
     web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
 
