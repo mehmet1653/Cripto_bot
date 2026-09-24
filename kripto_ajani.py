@@ -21,15 +21,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
 
-# ==================== GİZLİ BİLGİLER (ÇEVRE DEĞİŞKENLERİ) ====================
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID", "6929517567")
-
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# Render uyku modunu engellemek için mini web sunucusu
+# ==================== RENDER WEB SUNUCUSU (EN ÜSTE TAŞINDI) ====================
 app = Flask(__name__)
 
 @app.route('/')
@@ -39,6 +31,14 @@ def home():
 def run_web():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
+# ==================== GİZLİ BİLGİLER (ÇEVRE DEĞİŞKENLERİ) ====================
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID", "6929517567")
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 exchange = ccxt.gate({
     'apiKey': os.environ.get("GATE_API_KEY"),
@@ -470,6 +470,7 @@ def otomatik_arkaplan_tarayici():
         time.sleep(5)
 
 async def main():
+    # Flask sunucusunu arka planda başlatıyoruz
     web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
 
