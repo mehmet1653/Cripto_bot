@@ -15,22 +15,34 @@ import ccxt
 import pandas as pd
 import ta
 import numpy as np
+from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
 
-# ==================== AYARLAR VE ANAHTARLAR ====================
-TELEGRAM_TOKEN = "8870934003:AAGOzmO_VwYnj0Wz2hehI176rKiOkEaV0b0"
-CHAT_ID = "6929517567"
+# ==================== GİZLİ BİLGİLER (ÇEVRE DEĞİŞKENLERİ) ====================
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID", "6929517567")
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://rllpcylzhptqwzmzehnv.supabase.co")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "Sb_secret_ln9y67Ep_zCtOQ9Q2NE8KQ_nf0gKkmO")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# Render uyku modunu engellemek için mini web sunucusu
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot aktif ve calisiyor!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
 exchange = ccxt.gate({
-    'apiKey': '82cca880898a88d1a31e86d8eb474c57',
-    'secret': '1ac479b9df5e6f2e89560b0d238a250694719b6fcae20da00ebc54ad6aeb8898',
+    'apiKey': os.environ.get("GATE_API_KEY"),
+    'secret': os.environ.get("GATE_SECRET"),
     'enableRateLimit': True,
     'timeout': 30000,
     'options': {
@@ -115,22 +127,18 @@ def piyasa_rejimini_tespit_et():
         ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=40)
         df_btc = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
-        # 1. ADX Filtresini Sertleştiriyoruz (35'in altı kesinlikle yatay)
         adx_1h = ta.trend.ADXIndicator(df_btc['high'], df_btc['low'], df_btc['close'], window=14).adx().iloc[-1]
         
-        # 2. Bollinger Bantları Genişliği Sıkışma Eşiği
         indicator_bb = ta.volatility.BollingerBands(close=df_btc['close'], window=20, window_dev=2)
         bb_high = indicator_bb.bollinger_hband().iloc[-1]
         bb_low = indicator_bb.bollinger_lband().iloc[-1]
         bb_mid = indicator_bb.bollinger_mavg().iloc[-1]
         bb_bandwidth = (bb_high - bb_low) / bb_mid
         
-        # 3. EMA Farkı
         ema9 = ta.trend.ema_indicator(df_btc['close'], window=9).iloc[-1]
         ema21 = ta.trend.ema_indicator(df_btc['close'], window=21).iloc[-1]
         fark_yuzdesi = (abs(ema9 - ema21) / ema21) * 100
         
-        # SERT KURAL: Trend sayılması için ADX > 35 VE Bant Genişliği > %4 VE EMA Farkı > %0.3 olmalı!
         if adx_1h < 35.0 or bb_bandwidth < 0.04 or fark_yuzdesi < 0.3:
             rejim = "YATAY"
             trend_yonu = "YATAY (Testere)"
@@ -462,6 +470,9 @@ def otomatik_arkaplan_tarayici():
         time.sleep(5)
 
 async def main():
+    web_thread = threading.Thread(target=run_web, daemon=True)
+    web_thread.start()
+
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     try:
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
