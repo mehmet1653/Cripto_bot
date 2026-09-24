@@ -14,7 +14,6 @@ import requests
 import ccxt
 import pandas as pd
 import ta
-import numpy as np
 from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
@@ -63,7 +62,6 @@ BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
 KALDIRAC = 5
 
-GLOBAL_COOLDOWN_BITIS = 0.0
 SON_BTC_YONU = "YATAY (Testere)"
 
 def hafizayi_yukle():
@@ -75,7 +73,7 @@ def hafizayi_yukle():
             print("💾 Hafıza başarıyla yüklendi.", flush=True)
             return {
                 "aktif_sistemler": veri.get("aktif_sistemler", {}),
-                "analitik": veri.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []}),
+                "analitik": veri.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0}),
                 "cooldownlar": veri.get("cooldownlar", {})
             }
     except Exception as e:
@@ -83,7 +81,7 @@ def hafizayi_yukle():
     
     return {
         "aktif_sistemler": {},
-        "analitik": {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []},
+        "analitik": {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0},
         "cooldownlar": {}
     }
 
@@ -92,8 +90,7 @@ def hafizayi_kaydet():
         try:
             payload_analitik = {
                 "basarili_islem_sayisi": int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0)),
-                "basarisiz_islem_sayisi": int(ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0)),
-                "egitim_verileri": ANALitik_HAFIZA.get("egitim_verileri", [])
+                "basarisiz_islem_sayisi": int(ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0))
             }
             clean_cooldowns = {}
             for k, v in COIN_COOLDOWNLAR.items():
@@ -113,11 +110,11 @@ def hafizayi_kaydet():
 
 kalici_veri = hafizayi_yukle()
 AKTIF_GRID_SISTEMLERI = kalici_veri.get("aktif_sistemler", {})
-ANALitik_HAFIZA = kalici_veri.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []})
+ANALitik_HAFIZA = kalici_veri.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0})
 COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
 MAKSIMUM_TOPLAM_POZISYON = 2
-COOLDOWN_SURESI_SANIYE = 10 * 60
+COOLDOWN_SURESI_SANIYE = 15 * 60  # 15 dakika cooldown
 
 def piyasa_rejimini_tespit_et():
     global SON_BTC_YONU
@@ -146,10 +143,8 @@ def piyasa_rejimini_tespit_et():
             trend_yonu = "LONG" if ema9 > ema21 else "SHORT"
             SON_BTC_YONU = trend_yonu
             
-        print(f"🌐 [PİYASA SONUÇ] Rejim: {rejim} | Yön: {trend_yonu} | ADX: {adx_1h:.2f}", flush=True)
         return rejim, trend_yonu
-    except Exception as e:
-        print(f"⚠️ [PİYASA HATA] {e}. Varsayılan YATAY", flush=True)
+    except Exception:
         return "YATAY", "YATAY (Testere)"
 
 def emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker_data):
@@ -227,7 +222,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 **BOT DURUM RAPORU (Saf Rejim & RSI - 5x)**\n\n"
+            f"📊 **BOT DURUM RAPORU (Saf Teknik Mod - 5x)**\n\n"
             f"🌐 Piyasa Rejimi: `{rejim}` (BTC Yön: `{btc_yon}`)\n"
             f"💰 Kasa: `{total:.2f} USDT` | Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -268,7 +263,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Saf ve Kararlı Bot Aktif...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Saf Teknik Bot Aktif...", flush=True)
     try:
         exchange.load_markets()
     except Exception: pass
@@ -295,6 +290,7 @@ def otomatik_arkaplan_tarayici():
                 aktif_borsa_map = {}
                 aktif_semboller_listesi = []
 
+            # Pozisyon Kapanış ve Net Kâr/Zarar Tespiti
             try:
                 anlik_aktif_semboller = [p['symbol'] for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                 for eski_sym in list(AKTIF_GRID_SISTEMLERI.keys()):
@@ -304,11 +300,14 @@ def otomatik_arkaplan_tarayici():
                         yon = sistem_bilgisi.get("yon", "LONG") if isinstance(sistem_bilgisi, dict) else "LONG"
                         
                         islem_karli_mi = False
+                        cikis_fiyati = giris_fiyati
                         try:
                             ticker = exchange.fetch_ticker(eski_sym)
                             cikis_fiyati = float(ticker['last'])
-                            if yon == "LONG": islem_karli_mi = cikis_fiyati > giris_fiyati
-                            else: islem_karli_mi = cikis_fiyati < giris_fiyati
+                            if yon == "LONG": 
+                                islem_karli_mi = cikis_fiyati >= sistem_bilgisi.get("tp_fiyat", giris_fiyati) or cikis_fiyati > giris_fiyati
+                            else: 
+                                islem_karli_mi = cikis_fiyati <= sistem_bilgisi.get("tp_fiyat", giris_fiyati) or cikis_fiyati < giris_fiyati
                         except Exception:
                             islem_karli_mi = True
 
@@ -325,23 +324,32 @@ def otomatik_arkaplan_tarayici():
                                 
                             ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
                             ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
-                            COIN_COOLDOWNLAR[eski_sym] = {"zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), "son_yon": yon}
-                            if eski_sym in AKTIF_GRID_SISTEMLERI: del AKTIF_GRID_SISTEMLERI[eski_sym]
+                            
+                            # 15 DAKİKA COOLDOWN UYGULAMASI
+                            COIN_COOLDOWNLAR[eski_sym] = {
+                                "zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), 
+                                "son_yon": yon
+                            }
+                            if eski_sym in AKTIF_GRID_SISTEMLERI: 
+                                del AKTIF_GRID_SISTEMLERI[eski_sym]
                                 
                         hafizayi_kaydet()
-                        telegram_mesaj_gonder(f"{sonuc_mesaj_tipi}\n📌 `{eski_sym}`")
-            except Exception: pass
+                        telegram_mesaj_gonder(f"{sonuc_mesaj_tipi}\n📌 `{eski_sym}` | Çıkış: `{cikis_fiyati}`")
+            except Exception as e: 
+                print(f"⚠️ Kapanış kontrol hatası: {e}", flush=True)
 
             taranan_sinyaller = []
 
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
                 
+                # Cooldown (15 dk) Kontrolü
                 with state_lock:
                     cooldown_veri = COIN_COOLDOWNLAR.get(symbol)
                     if cooldown_veri:
                         zaman_kontrol = cooldown_veri.get("zaman", 0) if isinstance(cooldown_veri, dict) else float(cooldown_veri)
-                        if zaman_kontrol - time.time() > 0: continue
+                        if zaman_kontrol - time.time() > 0: 
+                            continue
 
                 try:
                     ticker = exchange.fetch_ticker(symbol)
@@ -350,9 +358,11 @@ def otomatik_arkaplan_tarayici():
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
 
+                    emir_analizi = emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker)
+
                     if piyasa_rejimi == "YATAY":
-                        if rsi < 40: ham_yon = "LONG"
-                        elif rsi > 60: ham_yon = "SHORT"
+                        if rsi < 35: ham_yon = "LONG"
+                        elif rsi > 65: ham_yon = "SHORT"
                         else: continue
                         
                         islem_yonu = "SHORT" if ham_yon == "LONG" else "LONG"
@@ -365,8 +375,6 @@ def otomatik_arkaplan_tarayici():
                         else:
                             continue
                         mod_adi = "NORMAL TREND MODU"
-
-                    print(f"🔄 [{mod_adi}] {symbol} 👉 {islem_yonu} | RSI: {rsi:.2f}", flush=True)
 
                     taranan_sinyaller.append({
                         "symbol": symbol, "yon": islem_yonu, "rsi": rsi, "fiyat": anlik_fiyat, "df": df, "mod": mod_adi
@@ -411,8 +419,12 @@ def otomatik_arkaplan_tarayici():
 
                     with state_lock:
                         AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {
-                            "giris_fiyati": giris_fiyati, "yon": sinyal["yon"],
-                            "giris_rsi": float(sinyal["rsi"]), "giris_zamani": time.time()
+                            "giris_fiyati": giris_fiyati, 
+                            "yon": sinyal["yon"],
+                            "tp_fiyat": tp_fiyat,
+                            "sl_fiyat": sl_fiyat,
+                            "giris_rsi": float(sinyal["rsi"]), 
+                            "giris_zamani": time.time()
                         }
                         aktif_semboller_listesi.append(sinyal["symbol"])
                     hafizayi_kaydet()
