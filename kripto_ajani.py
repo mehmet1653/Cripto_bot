@@ -118,24 +118,18 @@ COOLDOWN_SURESI_SANIYE = 15 * 60  # 15 dakika cooldown
 
 def piyasa_rejimini_tespit_et():
     global SON_BTC_YONU
-    print("🌐 [PİYASA] Sertleştirilmiş rejim analizi yapılıyor...", flush=True)
+    print("🌐 [PİYASA] Gelişmiş rejim analizi yapılıyor...", flush=True)
     try:
         ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=40)
         df_btc = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
         adx_1h = ta.trend.ADXIndicator(df_btc['high'], df_btc['low'], df_btc['close'], window=14).adx().iloc[-1]
         
-        indicator_bb = ta.volatility.BollingerBands(close=df_btc['close'], window=20, window_dev=2)
-        bb_high = indicator_bb.bollinger_hband().iloc[-1]
-        bb_low = indicator_bb.bollinger_lband().iloc[-1]
-        bb_mid = indicator_bb.bollinger_mavg().iloc[-1]
-        bb_bandwidth = (bb_high - bb_low) / bb_mid
-        
         ema9 = ta.trend.ema_indicator(df_btc['close'], window=9).iloc[-1]
         ema21 = ta.trend.ema_indicator(df_btc['close'], window=21).iloc[-1]
-        fark_yuzdesi = (abs(ema9 - ema21) / ema21) * 100
         
-        if adx_1h < 35.0 or bb_bandwidth < 0.04 or fark_yuzdesi < 0.3:
+        # ADX eşik değerini 30 olarak güncelledik. Altındaysa testere (ters işlem), üstündeyse trend yönü.
+        if adx_1h < 30.0:
             rejim = "YATAY"
             trend_yonu = "YATAY (Testere)"
         else:
