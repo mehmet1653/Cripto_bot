@@ -24,7 +24,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot aktif and calisiyor!"
+    return "Bot aktif ve calisiyor!"
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
@@ -111,10 +111,11 @@ GENEL_COOLDOWN_BITIS = float(kalici_veri.get("genel_cooldown_bitis", 0.0))
 MAKSIMUM_TOPLAM_POZISYON = 2
 GENEL_DINLENME_SURESI_SANIYE = 2 * 60 * 60  
 ANORMAL_SL_SURESI_SINIRI = 5 * 60           
-COIN_COOLDOWN_SURESI = 15 * 60              # Hem TP hem SL sonrasında 15 dk cooldown
+COIN_COOLDOWN_SURESI = 15 * 60              # TP ve SL sonrasında 15 dk cooldown
 
 def piyasa_rejimini_tespit_et():
     global SON_BTC_YONU
+    print("🌐 [PİYASA] Rejim analizi yapılıyor...", flush=True)
     try:
         ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=50)
         df_btc = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -136,8 +137,10 @@ def piyasa_rejimini_tespit_et():
             trend_yonu = "LONG" if ema9 > ema21 else "SHORT"
             SON_BTC_YONU = trend_yonu
             
+        print(f"🌐 [PİYASA SONUÇ] Rejim: {rejim} | BTC Yön: {trend_yonu}", flush=True)
         return rejim, trend_yonu
     except Exception as e:
+        print(f"⚠️ Rejim tespit hatası: {e}", flush=True)
         return "YATAY", "YATAY (Testere)"
 
 def akilli_seviye_hesapla(anlik_fiyat, yon, df):
@@ -233,14 +236,18 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def otomatik_arkaplan_tarayici():
     global GENEL_COOLDOWN_BITIS
-    print("🚀 [BAŞLANGIÇ] Bot Aktif...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Arka plan tarayıcı döngüsü başlatıldı...", flush=True)
     try:
         exchange.load_markets()
-    except Exception: pass
+        print("✅ [BAŞARILI] Borsa piyasa verileri yüklendi.", flush=True)
+    except Exception as e:
+        print(f"⚠️ Piyasa verileri yüklenirken hata: {e}", flush=True)
     
     while True:
         try:
+            print("🔄 [DÖNGÜ] Yeni tarama turu başlıyor...", flush=True)
             if not BOT_CALISIYOR_MU:
+                print("⏸️ Bot durdurulmuş durumda, bekleniyor...", flush=True)
                 time.sleep(5)
                 continue
 
@@ -256,7 +263,9 @@ def otomatik_arkaplan_tarayici():
                         sym = p['symbol']
                         aktif_borsa_map[sym] = p
                         aktif_semboller_listesi.append(sym)
-            except Exception:
+                print(f"📌 [BORSA] Aktif Pozisyon Sayısı: {len(aktif_borsa_map)} / {MAKSIMUM_TOPLAM_POZISYON}", flush=True)
+            except Exception as e:
+                print(f"⚠️ Pozisyonlar çekilirken hata: {e}", flush=True)
                 aktif_borsa_map = {}
                 aktif_semboller_listesi = []
 
@@ -265,6 +274,7 @@ def otomatik_arkaplan_tarayici():
                 anlik_aktif_semboller = [p['symbol'] for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                 for eski_sym in list(AKTIF_GRID_SISTEMLERI.keys()):
                     if eski_sym not in anlik_aktif_semboller:
+                        print(f"🔍 [KAPANIŞ TESPİTİ] {eski_sym} pozisyonu kapanmış görünüyor, analiz ediliyor...", flush=True)
                         sistem_bilgisi = AKTIF_GRID_SISTEMLERI[eski_sym]
                         giris_fiyati = sistem_bilgisi.get("giris_fiyati", 0) if isinstance(sistem_bilgisi, dict) else 0
                         yon = sistem_bilgisi.get("yon", "LONG") if isinstance(sistem_bilgisi, dict) else "LONG"
@@ -285,7 +295,6 @@ def otomatik_arkaplan_tarayici():
 
                         gecen_sure_saniye = time.time() - giris_zamani
                         
-                        # HER İKİ DURUMDA DA (Kâr veya Zarar) 15 DAKİKA COOLDOWN UYGULA
                         COIN_COOLDOWN_SURELERI[eski_sym] = time.time() + COIN_COOLDOWN_SURESI
 
                         fark_oran = ((cikis_fiyati - giris_fiyati) / giris_fiyati) * 100 if yon == "LONG" else ((giris_fiyati - cikis_fiyati) / giris_fiyati) * 100
@@ -314,14 +323,17 @@ def otomatik_arkaplan_tarayici():
                                 
                         hafizayi_kaydet()
                         telegram_mesaj_gonder(sonuc_mesaj_tipi)
+                        print(f"📢 [BİLDİRİM] Kapanış Telegram'a gönderildi: {eski_sym}", flush=True)
             except Exception as e: 
                 print(f"⚠️ Kapanış kontrol hatası: {e}", flush=True)
 
             if time.time() < GENEL_COOLDOWN_BITIS:
+                print(f"⏳ [KORUMA] Bot genel dinlenme modunda. Kalan: {int((GENEL_COOLDOWN_BITIS - time.time()) // 60)} dk", flush=True)
                 time.sleep(30)
                 continue
 
             if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
+                print(f"🔒 [LİMİT] Maksimum pozisyon sınırına ({MAKSIMUM_TOPLAM_POZISYON}) ulaşıldı. Yeni işlem aranmıyor.", flush=True)
                 time.sleep(10)
                 continue
 
@@ -354,7 +366,9 @@ def otomatik_arkaplan_tarayici():
                     taranan_sinyaller.append({
                         "symbol": symbol, "yon": islem_yonu, "rsi": rsi, "fiyat": anlik_fiyat, "df": df, "mod": mod_adi
                     })
+                    print(f"🎯 [SİNYAL BULUNDU] {symbol} | Yön: {islem_yonu} | RSI: {rsi:.1f}", flush=True)
                 except Exception as e:
+                    print(f"⚠️ {symbol} taranırken hata: {e}", flush=True)
                     continue
 
             for sinyal in taranan_sinyaller:
@@ -386,12 +400,14 @@ def otomatik_arkaplan_tarayici():
                     
                     islem_yonu = 'buy' if sinyal["yon"] == 'LONG' else 'sell'
                     
+                    print(f"🚀 [İŞLEM AÇILIYOR] {sinyal['symbol']} {sinyal['yon']} | Miktar: {miktar}", flush=True)
                     exchange.create_order(sinyal["symbol"], 'market', islem_yonu, miktar)
                     time.sleep(0.5)
                     try:
                         exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
                         exchange.create_order(sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
-                    except Exception: pass
+                    except Exception as e:
+                        print(f"⚠️ TP/SL emirleri girilirken hata: {e}", flush=True)
 
                     with state_lock:
                         AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {
@@ -413,10 +429,11 @@ def otomatik_arkaplan_tarayici():
                     )
                     break
                 except Exception as e:
+                    print(f"⚠️ İşlem açılış hatası: {e}", flush=True)
                     pass
 
         except Exception as e:
-            pass
+            print(f"⚠️ Ana döngü genel hata: {e}", flush=True)
         
         time.sleep(5)
 
@@ -425,8 +442,11 @@ async def main():
     web_thread.start()
 
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    
+    # Çakışmaları önlemek için eski webhook/polling kuyruğunu tamamen temizle
     try:
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
+        print("🧹 [TELEGRAM] Eski webhook kalıntıları temizlendi.", flush=True)
     except Exception: pass
 
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
@@ -437,6 +457,7 @@ async def main():
     await app_tg.initialize()
     await app_tg.start()
     await app_tg.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    print("🤖 [TELEGRAM] Bot polling dinlemeye başladı.", flush=True)
 
     tarayici_thread = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
     tarayici_thread.start()
