@@ -19,6 +19,18 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from supabase import create_client, Client
+from flask import Flask
+
+# ==================== FLASK WEB SUNUCUSU (Render Port Desteği İçin) ====================
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Kripto Bot Aktif ve Çalışıyor!", 200
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 # ==================== ORTAM DEĞİŞKENLERİ VE GÜVENLİK ====================
 if os.path.exists('/etc/secrets/.env'):
@@ -449,12 +461,13 @@ def otomatik_arkaplan_tarayici():
         time.sleep(5)
 
 async def main():
-    # Çakışmayı önlemek için webhook'u sıfırla ve bekleyen güncellemeleri atla
+    # Çakışma hatasını önlemek için webhook'u temizle ve bekleyen güncellemeleri düşür
     try:
-        requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=10)
-        time.sleep(2) # Telegram API'nin oturumu tamamen sonlandırması için kısa bir bekleme
-    except Exception: 
-        pass
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True"
+        await asyncio.to_thread(requests.get, url, timeout=10)
+        await asyncio.sleep(2)
+    except Exception as e:
+        print(f"⚠️ Webhook silinirken hata: {e}", flush=True)
 
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
@@ -466,7 +479,7 @@ async def main():
     await app_tg.initialize()
     await app_tg.start()
     
-    # Hata durumunda (Conflict) botun sonsuz döngüde çökmesini önleyen koruma
+    # Döngü içinde çakışmaya karşı korumalı polling başlatma
     while True:
         try:
             await app_tg.updater.start_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
@@ -482,6 +495,13 @@ async def main():
     await stop_event.wait()
 
 if __name__ == '__main__':
+    # 1. Flask web sunucusunu Render port sorununu çözmek için arka planda başlatıyoruz
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+    print("🌐 Flask web sunucusu arka planda başlatıldı, port dinleniyor...", flush=True)
+
+    # 2. Botun ana asenkron döngüsünü başlatıyoruz
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
