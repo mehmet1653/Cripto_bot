@@ -30,17 +30,17 @@ def run_web():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
-# ==================== AYARLAR VE ANAHTARLAR ====================
-TELEGRAM_TOKEN = "8870934003:AAGOzmO_VwYnj0Wz2hehI176rKiOkEaV0b0"
-CHAT_ID = "6929517567"
+# ==================== AYARLAR VE ANAHTARLAR (.ENV / RENDER) ====================
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8870934003:AAGOzmO_VwYnj0Wz2hehI176rKiOkEaV0b0")
+CHAT_ID = os.environ.get("CHAT_ID", "6929517567")
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://rllpcylzhptqwzmzehnv.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "Sb_secret_ln9y67Ep_zCtOQ9Q2NE8KQ_nf0gKkmO")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 exchange = ccxt.gate({
-    'apiKey': '82cca880898a88d1a31e86d8eb474c57',
-    'secret': '1ac479b9df5e6f2e89560b0d238a250694719b6fcae20da00ebc54ad6aeb8898',
+    'apiKey': os.environ.get("GATE_API_KEY", "82cca880898a88d1a31e86d8eb474c57"),
+    'secret': os.environ.get("GATE_SECRET", "1ac479b9df5e6f2e89560b0d238a250694719b6fcae20da00ebc54ad6aeb8898"),
     'enableRateLimit': True,
     'timeout': 30000,
     'options': {
@@ -63,6 +63,7 @@ state_lock = threading.Lock()
 KALDIRAC = 5
 
 SON_BTC_YONU = "YATAY (Testere)"
+COIN_COOLDOWN_SURELERI = {} # Her coin için kapanıştan sonra 15 dk bekleme süresi
 
 def hafizayi_yukle():
     print("💾 Hafıza Supabase'den yükleniyor...", flush=True)
@@ -108,8 +109,9 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {"basarili_islem_sayisi": 0, "basa
 GENEL_COOLDOWN_BITIS = float(kalici_veri.get("genel_cooldown_bitis", 0.0))
 
 MAKSIMUM_TOPLAM_POZISYON = 2
-GENEL_DINLENME_SURESI_SANIYE = 2 * 60 * 60  # Anormal hızlı SL gelirse 2 saat genel dinlenme
-ANORMAL_SL_SURESI_SINIRI = 5 * 60           # Girişten itibaren 5 dakikadan kısa sürede SL oluyorsa tehlike var demektir
+GENEL_DINLENME_SURESI_SANIYE = 2 * 60 * 60  # Anormal hızlı SL gelirse tüm bot 2 saat dinlenir
+ANORMAL_SL_SURESI_SINIRI = 5 * 60           # 5 dakikadan kısa sürede gelen SL anormal sayılır
+COIN_COOLDOWN_SURESI = 15 * 60              # Her coinin kendi işleminden sonra bekleyeceği 15 dk
 
 def piyasa_rejimini_tespit_et():
     global SON_BTC_YONU
@@ -219,7 +221,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 **BOT DURUM RAPORU (Anormal SL Korumalı)**\n\n"
+            f"📊 **BOT DURUM RAPORU (15dk Cooldown + Korumalı)**\n\n"
             f"🌐 Piyasa Rejimi: `{rejim}` (BTC Yön: `{btc_yon}`)\n"
             f"🛡️ Bot Koruma Durumu: `{dinlenme_durumu}`\n"
             f"💰 Kasa: `{total:.2f} USDT` | Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
@@ -262,7 +264,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def otomatik_arkaplan_tarayici():
     global GENEL_COOLDOWN_BITIS
-    print("🚀 [BAŞLANGIÇ] Anormal SL Korumalı Bot Aktif...", flush=True)
+    print("🚀 [BAŞLANGIÇ] 15dk Cooldown ve TP Korumalı Bot Aktif...", flush=True)
     try:
         exchange.load_markets()
     except Exception: pass
@@ -289,7 +291,7 @@ def otomatik_arkaplan_tarayici():
                 aktif_borsa_map = {}
                 aktif_semboller_listesi = []
 
-            # Pozisyon Kapanış ve Anormal Hızlı SL Kontrolü
+            # Pozisyon Kapanış Kontrolü (TP / SL ve Kesin Kâr Tespiti)
             try:
                 anlik_aktif_semboller = [p['symbol'] for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                 for eski_sym in list(AKTIF_GRID_SISTEMLERI.keys()):
@@ -298,6 +300,7 @@ def otomatik_arkaplan_tarayici():
                         giris_fiyati = sistem_bilgisi.get("giris_fiyati", 0) if isinstance(sistem_bilgisi, dict) else 0
                         yon = sistem_bilgisi.get("yon", "LONG") if isinstance(sistem_bilgisi, dict) else "LONG"
                         giris_zamani = sistem_bilgisi.get("giris_zamani", time.time()) if isinstance(sistem_bilgisi, dict) else time.time()
+                        tp_fiyat = sistem_bilgisi.get("tp_fiyat", giris_fiyati) if isinstance(sistem_bilgisi, dict) else giris_fiyati
                         
                         islem_karli_mi = False
                         cikis_fiyati = giris_fiyati
@@ -305,13 +308,16 @@ def otomatik_arkaplan_tarayici():
                             ticker = exchange.fetch_ticker(eski_sym)
                             cikis_fiyati = float(ticker['last'])
                             if yon == "LONG": 
-                                islem_karli_mi = cikis_fiyati >= sistem_bilgisi.get("tp_fiyat", giris_fiyati) or cikis_fiyati > giris_fiyati
+                                islem_karli_mi = cikis_fiyati >= tp_fiyat or cikis_fiyati > giris_fiyati
                             else: 
-                                islem_karli_mi = cikis_fiyati <= sistem_bilgisi.get("tp_fiyat", giris_fiyati) or cikis_fiyati < giris_fiyati
+                                islem_karli_mi = cikis_fiyati <= tp_fiyat or cikis_fiyati < giris_fiyati
                         except Exception:
                             islem_karli_mi = True
 
                         gecen_sure_saniye = time.time() - giris_zamani
+
+                        # Coini 15 dakika boyunca tekrar işleme almıyoruz
+                        COIN_COOLDOWN_SURELERI[eski_sym] = time.time() + COIN_COOLDOWN_SURESI
 
                         with state_lock:
                             bas_sayi = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0))
@@ -322,11 +328,10 @@ def otomatik_arkaplan_tarayici():
                                 sonuc_mesaj_tipi = "✅ *İŞLEM KÂRLA KAPANDI (TP)*"
                             else:
                                 basarisiz_sayi += 1
-                                # ANORMAL HIZLI SL KONTROLÜ: Eğer çok kısa sürede (örn. 5 dk) SL patladıysa piyasa bozuk demektir!
                                 if gecen_sure_saniye < ANORMAL_SL_SURESI_SINIRI:
                                     GENEL_COOLDOWN_BITIS = float(time.time() + GENEL_DINLENME_SURESI_SANIYE)
                                     sonuc_mesaj_tipi = f"❌ *ANORMAL HIZLI SL PATLADI ({int(gecen_sure_saniye)} sn) -> TÜM BOT 2 SAAT DİNLENmeye GEÇTİ*"
-                                    print(f"⚠️ [ALARM] {eski_sym} çok kısa sürede ({int(gecen_sure_saniye)} sn) zarar yazdı. Piyasa öngörülemez hareket üretti!", flush=True)
+                                    print(f"⚠️ [ALARM] {eski_sym} çok kısa sürede zarar yazdı. Piyasa bozuk!", flush=True)
                                 else:
                                     sonuc_mesaj_tipi = "❌ *İŞLEM ZARARLA KAPANDI (Normal SL)*"
                                 
@@ -341,7 +346,7 @@ def otomatik_arkaplan_tarayici():
             except Exception as e: 
                 print(f"⚠️ Kapanış kontrol hatası: {e}", flush=True)
 
-            # ANORMAL PİYASA KORUMA KONTROLÜ: Süre bitmediyse yeni işlem açma
+            # Genel Dinlenme Kontrolü
             if time.time() < GENEL_COOLDOWN_BITIS:
                 kalan_dk = int((GENEL_COOLDOWN_BITIS - time.time()) / 60)
                 print(f"🛡️ [KORUMA] Anormal piyasa şoku nedeniyle bot genel dinlemede. Kalan süre: {kalan_dk} dakika...", flush=True)
@@ -352,6 +357,12 @@ def otomatik_arkaplan_tarayici():
 
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
+
+                # Coine özel 15 dk cooldown kontrolü
+                if symbol in COIN_COOLDOWN_SURELERI and time.time() < COIN_COOLDOWN_SURELERI[symbol]:
+                    kalan_coin_dk = int((COIN_COOLDOWN_SURELERI[symbol] - time.time()) / 60)
+                    print(f"⏳ [COOLDOWN] {symbol} için 15 dk bekleme süresi aktif (Kalan: {kalan_coin_dk} dk)", flush=True)
+                    continue
 
                 try:
                     ticker = exchange.fetch_ticker(symbol)
