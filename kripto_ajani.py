@@ -17,20 +17,19 @@ import ta
 import numpy as np
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
-from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
 
-# ==================== AYARLAR VE ANAHTARLAR ====================
-TELEGRAM_TOKEN = "8870934003:AAGOzmO_VwYnj0Wz2hehI176rKiOkEaV0b0"
-CHAT_ID = "6929517567"
+# ==================== GÜVENLİ AYARLAR (ENV) ====================
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+CHAT_ID = os.environ.get("CHAT_ID", "")
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://rllpcylzhptqwzmzehnv.supabase.co")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "Sb_secret_ln9y67Ep_zCtOQ9Q2NE8KQ_nf0gKkmO")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 exchange = ccxt.gate({
-    'apiKey': '82cca880898a88d1a31e86d8eb474c57',
-    'secret': '1ac479b9df5e6f2e89560b0d238a250694719b6fcae20da00ebc54ad6aeb8898',
+    'apiKey': os.environ.get("GATE_API_KEY", ""),
+    'secret': os.environ.get("GATE_SECRET", ""),
     'enableRateLimit': True,
     'timeout': 30000,
     'options': {
@@ -115,22 +114,18 @@ def piyasa_rejimini_tespit_et():
         ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=40)
         df_btc = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
-        # 1. ADX Filtresini Sertleştiriyoruz (35'in altı kesinlikle yatay)
         adx_1h = ta.trend.ADXIndicator(df_btc['high'], df_btc['low'], df_btc['close'], window=14).adx().iloc[-1]
         
-        # 2. Bollinger Bantları Genişliği Sıkışma Eşiği
         indicator_bb = ta.volatility.BollingerBands(close=df_btc['close'], window=20, window_dev=2)
         bb_high = indicator_bb.bollinger_hband().iloc[-1]
         bb_low = indicator_bb.bollinger_lband().iloc[-1]
         bb_mid = indicator_bb.bollinger_mavg().iloc[-1]
         bb_bandwidth = (bb_high - bb_low) / bb_mid
         
-        # 3. EMA Farkı
         ema9 = ta.trend.ema_indicator(df_btc['close'], window=9).iloc[-1]
         ema21 = ta.trend.ema_indicator(df_btc['close'], window=21).iloc[-1]
         fark_yuzdesi = (abs(ema9 - ema21) / ema21) * 100
         
-        # SERT KURAL: Trend sayılması için ADX > 35 VE Bant Genişliği > %4 VE EMA Farkı > %0.3 olmalı!
         if adx_1h < 35.0 or bb_bandwidth < 0.04 or fark_yuzdesi < 0.3:
             rejim = "YATAY"
             trend_yonu = "YATAY (Testere)"
@@ -187,38 +182,6 @@ def akilli_seviye_hesapla(anlik_fiyat, yon, df):
         
     hedef_roe = abs((tp_fiyat - anlik_fiyat) / anlik_fiyat) * 100 * KALDIRAC
     return float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe)
-
-def makine_ogrenmesi_filtresi(df, rsi):
-    try:
-        if len(df) < 20: return True
-        X = []
-        y = []
-        closes = df['close'].values
-        highs = df['high'].values
-        lows = df['low'].values
-        
-        for i in range(14, len(df) - 1):
-            sub_close = closes[:i+1]
-            sub_high = highs[:i+1]
-            sub_low = lows[:i+1]
-            sub_rsi = ta.momentum.rsi(pd.Series(sub_close), window=14).iloc[-1]
-            sub_atr = ta.volatility.AverageTrueRange(pd.Series(sub_high), pd.Series(sub_low), pd.Series(sub_close), window=14).average_true_range().iloc[-1]
-            
-            future_return = (closes[i+1] - closes[i]) / closes[i]
-            label = 1 if future_return > 0 else 0
-            
-            X.append([sub_rsi, sub_atr])
-            y.append(label)
-            
-        if len(X) < 10: return True
-        clf = RandomForestClassifier(n_estimators=20, random_state=42, max_depth=3)
-        clf.fit(X, y)
-        
-        current_atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
-        pred = clf.predict([[rsi, current_atr]])[0]
-        return bool(pred == 1)
-    except Exception:
-        return True
 
 def telegram_mesaj_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID: return
@@ -293,7 +256,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Hibrit Bot Aktif (Sertleştirilmiş Yatay/Testere Algılama)...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Hibrit Bot Aktif (Order Book + Sertleştirilmiş Rejim)...", flush=True)
     try:
         exchange.load_markets()
     except Exception: pass
@@ -376,27 +339,37 @@ def otomatik_arkaplan_tarayici():
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
 
                     emir_analizi = emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker)
+                    tepeye_yakin = emir_analizi["tepeye_yakin"]
+                    dipe_yakin = emir_analizi["dipe_yakin"]
+                    alis_orani = emir_analizi["alis_orani"]
+                    satis_orani = emir_analizi["satis_orani"]
 
                     if piyasa_rejimi == "YATAY":
-                        if rsi < 35: ham_yon = "LONG"
-                        elif rsi > 65: ham_yon = "SHORT"
-                        else: continue
+                        if rsi < 35: 
+                            ham_yon = "LONG"
+                        elif rsi > 65: 
+                            ham_yon = "SHORT"
+                        else: 
+                            continue
                         
                         islem_yonu = "SHORT" if ham_yon == "LONG" else "LONG"
-                        mod_adi = "TERS MOD (Testere)"
+                        
+                        if islem_yonu == "SHORT" and not (satis_orani >= 52.0 or tepeye_yakin):
+                            continue
+                        if islem_yonu == "LONG" and not (alis_orani >= 52.0 or dipe_yakin):
+                            continue
+                            
+                        mod_adi = "TERS MOD (Testere + OB Teyitli)"
                     else:
-                        if btc_yonu == "LONG" and rsi < 55:
+                        if btc_yonu == "LONG" and rsi < 55 and alis_orani >= 48.0:
                             islem_yonu = "LONG"
-                        elif btc_yonu == "SHORT" and rsi > 45:
+                        elif btc_yonu == "SHORT" and rsi > 45 and satis_orani >= 48.0:
                             islem_yonu = "SHORT"
                         else:
                             continue
                         mod_adi = "NORMAL TREND MODU"
 
-                    print(f"🔄 [{mod_adi}] {symbol} için karar verildi 👉 {islem_yonu} | Rejim: {piyasa_rejimi} (RSI: {rsi:.2f})", flush=True)
-
-                    ml_onay = makine_ogrenmesi_filtresi(df, rsi)
-                    if not ml_onay: continue
+                    print(f"🔄 [{mod_adi}] {symbol} karar verildi 👉 {islem_yonu} | RSI: {rsi:.2f} | Alış%: {alis_orani:.1f} | Satış%: {satis_orani:.1f}", flush=True)
 
                     taranan_sinyaller.append({
                         "symbol": symbol, "yon": islem_yonu, "rsi": rsi, "fiyat": anlik_fiyat, "df": df, "mod": mod_adi
