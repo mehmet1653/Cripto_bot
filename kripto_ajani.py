@@ -114,22 +114,31 @@ ANALitik_HAFIZA = kalici_veri.get("analitik", {"basarili_islem_sayisi": 0, "basa
 COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
 MAKSIMUM_TOPLAM_POZISYON = 2
-COOLDOWN_SURESI_SANIYE = 15 * 60  # 15 dakika cooldown
+COOLDOWN_SURESI_SANIYE = 2 * 60 * 60  # SL patladığında tam 2 saat (120 dk) dinlenme süresi!
 
 def piyasa_rejimini_tespit_et():
     global SON_BTC_YONU
-    print("🌐 [PİYASA] Gelişmiş rejim analizi yapılıyor...", flush=True)
+    print("🌐 [PİYASA] Çoklu İndikatörlü Rejim Analizi (BTC) yapılıyor...", flush=True)
     try:
-        ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=40)
+        ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=50)
         df_btc = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
+        # 1. ADX İndikatörü
         adx_1h = ta.trend.ADXIndicator(df_btc['high'], df_btc['low'], df_btc['close'], window=14).adx().iloc[-1]
         
+        # 2. EMA (9 ve 21) Trend Yönü
         ema9 = ta.trend.ema_indicator(df_btc['close'], window=9).iloc[-1]
         ema21 = ta.trend.ema_indicator(df_btc['close'], window=21).iloc[-1]
         
-        # ADX eşik değerini 30 olarak güncelledik. Altındaysa testere (ters işlem), üstündeyse trend yönü.
-        if adx_1h < 30.0:
+        # 3. Bollinger Bantları Genişliği (Piyasa sıkışık mı, patlıyor mu?)
+        bollinger = ta.volatility.BollingerBands(df_btc['close'], window=20, window_dev=2)
+        bb_width = (bollinger.bollinger_hband().iloc[-1] - bollinger.bollinger_lband().iloc[-1]) / bollinger.bollinger_mavg().iloc[-1]
+        
+        # Çoklu Onay: ADX > 28 VE BB genişliği belli bir eşiğin üzerindeyse KESİN TREND
+        # Aksi takdirde (ADX düşük veya bantlar dar) YATAY / TESTERE
+        trend_onayi = (adx_1h > 28.0) and (bb_width > 0.012)
+        
+        if not trend_onayi:
             rejim = "YATAY"
             trend_yonu = "YATAY (Testere)"
         else:
@@ -137,7 +146,7 @@ def piyasa_rejimini_tespit_et():
             trend_yonu = "LONG" if ema9 > ema21 else "SHORT"
             SON_BTC_YONU = trend_yonu
             
-        print(f"🌐 [REJİM BAŞARILI] Mod: {rejim} | BTC Yön: {trend_yonu} (ADX: {adx_1h:.1f})", flush=True)
+        print(f"🌐 [REJİM SONUCU] Mod: {rejim} | BTC Yön: {trend_yonu} (ADX: {adx_1h:.1f}, BB Genişlik: {bb_width:.4f})", flush=True)
         return rejim, trend_yonu
     except Exception as e:
         print(f"⚠️ REJİM TESPİT HATASI (Detay): {e}", flush=True)
@@ -218,7 +227,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 **BOT DURUM RAPORU (Saf Teknik Mod - 5x)**\n\n"
+            f"📊 **BOT DURUM RAPORU (Çoklu İndikatör Modu - 5x)**\n\n"
             f"🌐 Piyasa Rejimi: `{rejim}` (BTC Yön: `{btc_yon}`)\n"
             f"💰 Kasa: `{total:.2f} USDT` | Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -259,7 +268,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Saf Teknik Bot Aktif...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Çoklu İndikatörlü ve 2 Saat Koruma Kalkanlı Bot Aktif...", flush=True)
     try:
         exchange.load_markets()
     except Exception: pass
@@ -286,7 +295,7 @@ def otomatik_arkaplan_tarayici():
                 aktif_borsa_map = {}
                 aktif_semboller_listesi = []
 
-            # Pozisyon Kapanış ve Net Kâr/Zarar Tespiti
+            # Pozisyon Kapanış ve Net Kâr/Zarar Tespiti (SL Durumunda 2 Saat Dinlenme)
             try:
                 anlik_aktif_semboller = [p['symbol'] for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                 for eski_sym in list(AKTIF_GRID_SISTEMLERI.keys()):
@@ -316,11 +325,12 @@ def otomatik_arkaplan_tarayici():
                                 sonuc_mesaj_tipi = "✅ *İŞLEM KÂRLA KAPANDI (TP)*"
                             else:
                                 basarisiz_sayi += 1
-                                sonuc_mesaj_tipi = "❌ *İŞLEM ZARARLA KAPANDI (SL)*"
+                                sonuc_mesaj_tipi = "❌ *İŞLEM ZARARLA KAPANDI (SL) -> 2 SAAT DİNLENME BAŞLADI*"
                                 
                             ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
                             ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
                             
+                            # SL patladığı için tam 2 saat cooldown veriyoruz!
                             COIN_COOLDOWNLAR[eski_sym] = {
                                 "zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), 
                                 "son_yon": yon
@@ -338,7 +348,7 @@ def otomatik_arkaplan_tarayici():
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
                 
-                # Cooldown Kontrolü
+                # Cooldown (Dinlenme) Kontrolü
                 with state_lock:
                     cooldown_veri = COIN_COOLDOWNLAR.get(symbol)
                     if cooldown_veri:
@@ -357,21 +367,19 @@ def otomatik_arkaplan_tarayici():
 
                     emir_analizi = emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker)
 
-                    if piyasa_rejimi == "YATAY":
-                        if rsi < 35: ham_yon = "LONG"
-                        elif rsi > 65: ham_yon = "SHORT"
+                    # KURAL: Eğer piyasa TREND modundaysa, coinler SADECE BTC trend yönüne uyacak!
+                    # Eğer piyasa YATAY (Testere) modundaysa, coinler bireysel incelenip TERS İŞLEM yapılacak.
+                    if piyasa_rejimi == "TREND":
+                        islem_yonu = btc_yonu  # Doğrudan BTC trend yönü (LONG veya SHORT)
+                        mod_adi = f"TREND MODU (BTC: {btc_yonu})"
+                    else:
+                        # Testere Modu: Bireysel RSI analizi ve ters işlem
+                        if rsi < 38: ham_yon = "LONG"
+                        elif rsi > 62: ham_yon = "SHORT"
                         else: continue
                         
                         islem_yonu = "SHORT" if ham_yon == "LONG" else "LONG"
-                        mod_adi = "TERS MOD (Testere)"
-                    else:
-                        if btc_yonu == "LONG" and rsi < 55:
-                            islem_yonu = "LONG"
-                        elif btc_yonu == "SHORT" and rsi > 45:
-                            islem_yonu = "SHORT"
-                        else:
-                            continue
-                        mod_adi = "NORMAL TREND MODU"
+                        mod_adi = "TESTERE MODU (Ters İşlem)"
 
                     taranan_sinyaller.append({
                         "symbol": symbol, "yon": islem_yonu, "rsi": rsi, "fiyat": anlik_fiyat, "df": df, "mod": mod_adi
