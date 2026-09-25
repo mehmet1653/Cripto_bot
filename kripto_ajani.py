@@ -15,16 +15,31 @@ import ccxt
 import pandas as pd
 import ta
 import numpy as np
+from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from supabase import create_client, Client
+
+# ==================== RENDER / LOKAL .ENV ÇÖZÜCÜSÜ ====================
+if os.path.exists('/etc/secrets/.env'):
+    load_dotenv('/etc/secrets/.env')
+else:
+    load_dotenv()
 
 # ==================== GÜVENLİ AYARLAR (ENV) ====================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
+
+# Hata ayıklama için terminale durum basalım
+print(f"DEBUG -> SUPABASE_URL yüklendi mi?: {'EVET' if SUPABASE_URL else 'HAYIR (BOŞ!)'}", flush=True)
+print(f"DEBUG -> TELEGRAM_TOKEN yüklendi mi?: {'EVET' if TELEGRAM_TOKEN else 'HAYIR (BOŞ!)'}", flush=True)
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("HATA: SUPABASE_URL veya SUPABASE_KEY çevre değişkeni (Environment Variables) bulunamadı! Lütfen Render panelinden değişkenleri kontrol edin.")
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 exchange = ccxt.gate({
