@@ -20,31 +20,30 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from supabase import create_client, Client
 
-# ==================== RENDER / LOKAL .ENV ÇÖZÜCÜSÜ ====================
+# ==================== ORTAM DEĞİŞKENLERİ VE GÜVENLİK ====================
 if os.path.exists('/etc/secrets/.env'):
-    load_dotenv('/etc/secrets/.env')
+    load_dotenv('/etc/secrets/.env', override=True)
 else:
-    load_dotenv()
+    load_dotenv(override=True)
 
-# ==================== GÜVENLİ AYARLAR (ENV) ====================
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
-CHAT_ID = os.environ.get("CHAT_ID", "")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
+CHAT_ID = os.environ.get("CHAT_ID", "").strip()
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
 
-# Hata ayıklama için terminale durum basalım
-print(f"DEBUG -> SUPABASE_URL yüklendi mi?: {'EVET' if SUPABASE_URL else 'HAYIR (BOŞ!)'}", flush=True)
-print(f"DEBUG -> TELEGRAM_TOKEN yüklendi mi?: {'EVET' if TELEGRAM_TOKEN else 'HAYIR (BOŞ!)'}", flush=True)
+print(f"DEBUG -> SUPABASE_URL Kontrolü: {'DOLU (' + SUPABASE_URL[:10] + '...)' if SUPABASE_URL else 'BOŞ!'}", flush=True)
+print(f"DEBUG -> SUPABASE_KEY Kontrolü: {'DOLU (Karakter Sayısı: ' + str(len(SUPABASE_KEY)) + ')' if SUPABASE_KEY else 'BOŞ!'}", flush=True)
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("HATA: SUPABASE_URL veya SUPABASE_KEY çevre değişkeni (Environment Variables) bulunamadı! Lütfen Render panelinden değişkenleri kontrol edin.")
+    print("❌ KRİTİK HATA: SUPABASE_URL veya SUPABASE_KEY tanımlı değil!", flush=True)
+    sys.exit(1)
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 exchange = ccxt.gate({
-    'apiKey': os.environ.get("GATE_API_KEY", ""),
-    'secret': os.environ.get("GATE_SECRET", ""),
+    'apiKey': os.environ.get("GATE_API_KEY", "").strip(),
+    'secret': os.environ.get("GATE_SECRET", "").strip(),
     'enableRateLimit': True,
     'timeout': 30000,
     'options': {
@@ -450,10 +449,14 @@ def otomatik_arkaplan_tarayici():
         time.sleep(5)
 
 async def main():
-    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    # Çakışmayı önlemek için webhook'u sıfırla ve bekleyen güncellemeleri atla
     try:
-        requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
-    except Exception: pass
+        requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=10)
+        time.sleep(2) # Telegram API'nin oturumu tamamen sonlandırması için kısa bir bekleme
+    except Exception: 
+        pass
+
+    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
@@ -462,7 +465,15 @@ async def main():
     
     await app_tg.initialize()
     await app_tg.start()
-    await app_tg.updater.start_polling(drop_pending_updates=True)
+    
+    # Hata durumunda (Conflict) botun sonsuz döngüde çökmesini önleyen koruma
+    while True:
+        try:
+            await app_tg.updater.start_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+            break
+        except Exception as e:
+            print(f"⚠️ Polling başlatılırken çakışma hatası: {e}. 5 saniye sonra tekrar deneniyor...", flush=True)
+            await asyncio.sleep(5)
 
     tarayici_thread = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
     tarayici_thread.start()
