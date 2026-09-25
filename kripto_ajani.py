@@ -143,8 +143,10 @@ def piyasa_rejimini_tespit_et():
             trend_yonu = "LONG" if ema9 > ema21 else "SHORT"
             SON_BTC_YONU = trend_yonu
             
+        print(f"🌐 [REJİM BAŞARILI] Mod: {rejim} | BTC Yön: {trend_yonu} (ADX: {adx_1h:.1f})", flush=True)
         return rejim, trend_yonu
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ REJİM TESPİT HATASI (Detay): {e}", flush=True)
         return "YATAY", "YATAY (Testere)"
 
 def emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker_data):
@@ -325,7 +327,6 @@ def otomatik_arkaplan_tarayici():
                             ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
                             ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
                             
-                            # 15 DAKİKA COOLDOWN UYGULAMASI
                             COIN_COOLDOWNLAR[eski_sym] = {
                                 "zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), 
                                 "son_yon": yon
@@ -343,7 +344,7 @@ def otomatik_arkaplan_tarayici():
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
                 
-                # Cooldown (15 dk) Kontrolü
+                # Cooldown Kontrolü
                 with state_lock:
                     cooldown_veri = COIN_COOLDOWNLAR.get(symbol)
                     if cooldown_veri:
@@ -357,6 +358,8 @@ def otomatik_arkaplan_tarayici():
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
+
+                    print(f"🔍 [TARANIYOR] {symbol} | Fiyat: {anlik_fiyat} | RSI: {rsi:.1f}", flush=True)
 
                     emir_analizi = emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker)
 
@@ -379,7 +382,9 @@ def otomatik_arkaplan_tarayici():
                     taranan_sinyaller.append({
                         "symbol": symbol, "yon": islem_yonu, "rsi": rsi, "fiyat": anlik_fiyat, "df": df, "mod": mod_adi
                     })
-                except Exception: continue
+                except Exception as e:
+                    print(f"⚠️ {symbol} tarama hatası: {e}", flush=True)
+                    continue
 
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
@@ -437,9 +442,12 @@ def otomatik_arkaplan_tarayici():
                         f"🛑 Stop-Loss: `{sl_fiyat}`"
                     )
                     break
-                except Exception: pass
+                except Exception as e:
+                    print(f"⚠️ Emir gönderim hatası: {e}", flush=True)
+                    pass
 
-        except Exception: pass
+        except Exception as e:
+            print(f"⚠️ Ana döngü genel hata: {e}", flush=True)
         
         time.sleep(5)
 
