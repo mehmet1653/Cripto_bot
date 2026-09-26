@@ -309,7 +309,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     if str(update.effective_chat.id) != str(CHAT_ID): return
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (Ters Mod Testere entegre edildi)")
+    await update.message.reply_text("🟢 Bot aktif! (Ters Mod + Borsa SL + Yazılımsal SL)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -397,7 +397,7 @@ def durum_cache_guncelle():
                     f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n"
                     f"  Anlık ROE: `%{roe:+.2f}`\n"
                     f"  🎯 Hedef TP: `{tp_fiyat}` (ROE: `+%{hedef_roe:.1f}`)\n"
-                    f"  🛑 SL: `{sl_fiyat}` (ROE: `-%{sl_roe:.1f}`) [Yazılımsal]"
+                    f"  🛑 SL: `{sl_fiyat}` (ROE: `-%{sl_roe:.1f}`)"
                 )
             else:
                 detay += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
@@ -413,7 +413,7 @@ def durum_cache_guncelle():
 
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Bot devrede. TERS MOD (Testere) + Sıkı RSI aktif.", flush=True)
+    print("🚀 [BAŞLANGIÇ] Bot devrede. TERS MOD (Testere) + Borsa SL + Yazılımsal SL aktif.", flush=True)
     try:
         exchange.load_markets()
     except Exception as e:
@@ -445,7 +445,6 @@ def otomatik_arkaplan_tarayici():
                         borsa_acik[p['symbol']] = p
 
                 with state_lock:
-                    # A) Borsada olup hafızada olmayanları EKLE
                     for sym, p in borsa_acik.items():
                         if sym not in AKTIF_GRID_SISTEMLERI:
                             print(f"➕ [SENKRON] {sym} borsada var, hafızaya eklendi", flush=True)
@@ -462,7 +461,6 @@ def otomatik_arkaplan_tarayici():
                                 "giris_zamani": time.time()
                             }
 
-                    # B) Hafızada olup borsada olmayanları SİL + COOLDOWN SET ET
                     silinecek = [s for s in AKTIF_GRID_SISTEMLERI.keys() if s not in borsa_acik]
                     for s in silinecek:
                         kayit = AKTIF_GRID_SISTEMLERI[s]
@@ -522,7 +520,7 @@ def otomatik_arkaplan_tarayici():
             except Exception as e:
                 print(f"⚠️ senkron hata: {e}", flush=True)
 
-            # 2.5) YAZILIMSAL SL/TP KONTROLÜ
+            # 2.5) YAZILIMSAL SL/TP KONTROLÜ (borsa SL emri tetiklenmezse yedek)
             with state_lock:
                 kontrol_listesi = list(AKTIF_GRID_SISTEMLERI.items())
 
@@ -643,14 +641,12 @@ def otomatik_arkaplan_tarayici():
                         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                         rsi = float(ta.momentum.rsi(df['close'], window=14).iloc[-1])
 
-                        # Hacim
                         son_hacim = float(df['volume'].iloc[-2])
                         ort_hacim = float(df['volume'].iloc[-21:-1].mean())
                         hacim_orani = son_hacim / ort_hacim if ort_hacim > 0 else 1.0
 
                         atr = float(ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1])
 
-                        # 24 saat tepe/dip
                         high_24h = float(ticker.get('high') or anlik * 1.02)
                         low_24h = float(ticker.get('low') or anlik * 0.98)
                         tepeye_yakin = anlik >= (high_24h * 0.994)
@@ -660,7 +656,6 @@ def otomatik_arkaplan_tarayici():
                         # YÖN BELİRLEME (TERS MOD Testere Entegre)
                         # ============================================
                         if piyasa_rejimi == "YATAY":
-                            # ✅ TERS MOD: RSI düşük → SHORT, RSI yüksek → LONG
                             if rsi < 35:
                                 islem_yonu = "SHORT"
                                 sebep = f"Testere dibi (RSI {rsi:.1f}<35) → TERS SHORT"
@@ -677,7 +672,6 @@ def otomatik_arkaplan_tarayici():
                                 continue
                             mod_adi = "TERS MOD (Testere)"
                         else:
-                            # TREND modu — normal yön
                             if btc_yonu == "LONG" and rsi < 55 and not tepeye_yakin:
                                 islem_yonu = "LONG"
                                 sebep = f"BTC trendi LONG (RSI {rsi:.1f}, tepeden uzak)"
@@ -772,8 +766,21 @@ def otomatik_arkaplan_tarayici():
                         except Exception as e:
                             print(f"   ❌ TP emri HATA: {e}", flush=True)
 
-                        # 🛡️ SL yazılımsal (borsa SL emri gönderilmedi)
-                        print(f"   🛡️ SL yazılımsal aktif: {sl}", flush=True)
+                        # ✅ SL emri — SİZİN KODUNUZDAKİ ÇALIŞAN FORMAT (miktar, sl)
+                        try:
+                            sl_emir = exchange.create_order(
+                                sinyal["symbol"], 'stop', kapat_yon, miktar, sl,
+                                {'stopPrice': sl, 'reduceOnly': True}
+                            )
+                            print(f"   ✅ SL emri gönderildi: {sl} (id:{sl_emir.get('id','?')})", flush=True)
+                        except Exception as e:
+                            print(f"   ❌ SL emri HATA: {e}", flush=True)
+                            telegram_mesaj_gonder(
+                                f"⚠️ *SL EMRİ GÖNDERİLEMEDİ*\n"
+                                f"📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`\n"
+                                f"🛑 Yazılımsal SL: `{sl}`\n"
+                                f"⏱️ Bot her 10 sn kontrol edip manuel kapatacak."
+                            )
 
                         with state_lock:
                             AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {
@@ -796,7 +803,7 @@ def otomatik_arkaplan_tarayici():
                             f"📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`\n"
                             f"📍 Giriş: `{gerceklesen}`\n"
                             f"💰 TP: `{tp}` (ROE: `+%{hedef_roe:.1f}`)\n"
-                            f"🛑 SL: `{sl}` (Yazılımsal)\n"
+                            f"🛑 SL: `{sl}`\n"
                             f"🔎 Sebep: {sinyal['sebep']}"
                         )
                     except Exception as e:
