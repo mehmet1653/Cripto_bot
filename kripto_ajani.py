@@ -71,7 +71,7 @@ BOT_CALISIYOR_MU = True
 state_lock = threading.RLock()
 KALDIRAC = 5
 MAKSIMUM_TOPLAM_POZISYON = 2
-COOLDOWN_SURESI_SANIYE = 15 * 60   # 15 dakika
+COOLDOWN_SURESI_SANIYE = 15 * 60
 TARAMA_ARALIGI = 10
 HACIM_ESIGI = 0.3
 MIN_TP_YUZDE = 0.005
@@ -397,7 +397,7 @@ def durum_cache_guncelle():
                     f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n"
                     f"  Anlık ROE: `%{roe:+.2f}`\n"
                     f"  🎯 Hedef TP: `{tp_fiyat}` (ROE: `+%{hedef_roe:.1f}`)\n"
-                    f"  🛑 SL: `{sl_fiyat}` (ROE: `-%{sl_roe:.1f}`)"
+                    f"  🛑 SL: `{sl_fiyat}` (ROE: `-%{sl_roe:.1f}`) [Yazılımsal]"
                 )
             else:
                 detay += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
@@ -413,7 +413,7 @@ def durum_cache_guncelle():
 
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Bot devrede. Her coin 10 sn'de bir taranacak.", flush=True)
+    print("🚀 [BAŞLANGIÇ] Bot devrede. SL emri borsaya gönderilmez, yazılımsal koruma aktiftir.", flush=True)
     try:
         exchange.load_markets()
     except Exception as e:
@@ -435,7 +435,7 @@ def otomatik_arkaplan_tarayici():
             # 1) Rejim
             piyasa_rejimi, btc_yonu = piyasa_rejimini_tespit_et()
 
-            # 2) Borsa senkronizasyonu (HEM EKLE HEM SİL + COOLDOWN SET ET)
+            # 2) Borsa senkronizasyonu
             try:
                 borsa_pozlar = exchange.fetch_positions()
                 borsa_acik = {}
@@ -471,7 +471,6 @@ def otomatik_arkaplan_tarayici():
                         tp_f = float(kayit.get("tp_fiyat", 0))
                         sl_f = float(kayit.get("sl_fiyat", 0))
 
-                        # Kapanış fiyatını bul
                         try:
                             son_islemler = exchange.fetch_my_trades(s, limit=5)
                             cikis = float(son_islemler[-1]['price']) if son_islemler else giris_f
@@ -482,7 +481,6 @@ def otomatik_arkaplan_tarayici():
                             except Exception:
                                 cikis = giris_f
 
-                        # TP mi SL mi tespit
                         tp_mesafe = abs(cikis - tp_f) if tp_f > 0 else float('inf')
                         sl_mesafe = abs(cikis - sl_f) if sl_f > 0 else float('inf')
 
@@ -524,7 +522,7 @@ def otomatik_arkaplan_tarayici():
             except Exception as e:
                 print(f"⚠️ senkron hata: {e}", flush=True)
 
-            # 2.5) YAZILIMSAL SL/TP KONTROLÜ (borsa SL emrine güvenmiyoruz)
+            # 2.5) YAZILIMSAL SL/TP KONTROLÜ (tek koruma katmanı)
             with state_lock:
                 kontrol_listesi = list(AKTIF_GRID_SISTEMLERI.items())
 
@@ -633,7 +631,6 @@ def otomatik_arkaplan_tarayici():
                     try:
                         ticker = exchange.fetch_ticker(symbol)
                         anlik = float(ticker['last'])
-                        hacim_24h = float(ticker.get('quoteVolume', 0) or 0)
 
                         try:
                             oo = exchange.fetch_open_orders(symbol)
@@ -753,7 +750,7 @@ def otomatik_arkaplan_tarayici():
                         giris_emir = exchange.create_order(sinyal["symbol"], 'market', emir_yonu, miktar)
                         gerceklesen = float(giris_emir.get('average', 0) or giris_emir.get('price', 0) or ideal_giris)
 
-                        # ✅ TP emri (limit reduce-only)
+                        # ✅ TP emri (limit reduce-only) — kâr garantisi için borsada dursun
                         try:
                             tp_emir = exchange.create_order(
                                 sinyal["symbol"], 'limit', kapat_yon, miktar, tp,
@@ -763,32 +760,8 @@ def otomatik_arkaplan_tarayici():
                         except Exception as e:
                             print(f"   ❌ TP emri HATA: {e}", flush=True)
 
-                        # ✅ SL emri (stop-market, Gate.io çoklu deneme)
-                        sl_gonderildi = False
-                        sl_denemeler = [
-                            {'stopPrice': sl, 'reduceOnly': True, 'type': 'market', 'trigger': 'last'},
-                            {'stopPrice': sl, 'reduceOnly': True, 'type': 'market', 'trigger': 'mark'},
-                            {'stopPrice': sl, 'reduceOnly': True},
-                        ]
-                        for idx, params in enumerate(sl_denemeler, 1):
-                            try:
-                                sl_emir = exchange.create_order(
-                                    sinyal["symbol"], 'stop', kapat_yon, miktar, None, params
-                                )
-                                print(f"   ✅ SL emri gönderildi (deneme {idx}): {sl} | id:{sl_emir.get('id','?')}", flush=True)
-                                sl_gonderildi = True
-                                break
-                            except Exception as e:
-                                print(f"   ⚠️ SL deneme {idx} hata: {e}", flush=True)
-
-                        if not sl_gonderildi:
-                            print(f"   🚨 SL EMRİ GÖNDERİLEMEDİ — yazılımsal koruma devrede!", flush=True)
-                            telegram_mesaj_gonder(
-                                f"🚨 *SL EMRİ GÖNDERİLEMEDİ*\n"
-                                f"📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`\n"
-                                f"🛑 Yazılımsal SL: `{sl}`\n"
-                                f"⏱️ Bot her 10 sn'de kontrol edip manuel kapatacak."
-                            )
+                        # ⚠️ SL emri YOK — Gate.io testnet stop emirleri güvenilmez
+                        print(f"   🛡️ SL yazılımsal aktif: {sl} (borsa SL emri gönderilmedi)", flush=True)
 
                         with state_lock:
                             AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {
@@ -811,7 +784,7 @@ def otomatik_arkaplan_tarayici():
                             f"📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`\n"
                             f"📍 Giriş: `{gerceklesen}`\n"
                             f"💰 TP: `{tp}` (ROE: `+%{hedef_roe:.1f}`)\n"
-                            f"🛑 SL: `{sl}`\n"
+                            f"🛑 SL: `{sl}` (Yazılımsal)\n"
                             f"🔎 Sebep: {sinyal['sebep']}"
                         )
                     except Exception as e:
