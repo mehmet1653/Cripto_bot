@@ -79,7 +79,7 @@ MIN_TP_YUZDE = 0.005
 SON_BTC_YONU = "YATAY (Testere)"
 SON_REJIM = "YATAY"
 SON_BTC_ADX = 0.0
-BTC_REJIM_GECISI_UYARI = False   # ✅ YENİ: Rejim geçiş sinyali
+BTC_REJIM_GECISI_UYARI = False
 
 DURUM_CACHE = {
     "kasa": 0.0,
@@ -139,7 +139,7 @@ AKTIF_GRID_SISTEMLERI = kalici_veri.get("aktif_sistemler", {})
 ANALITIK_HAFIZA = kalici_veri.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []})
 COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
-# ==================== PİYASA REJİMİ (GELİŞTİRİLDİ) ====================
+# ==================== PİYASA REJİMİ ====================
 def piyasa_rejimini_tespit_et():
     global SON_BTC_YONU, SON_REJIM, SON_BTC_ADX, BTC_REJIM_GECISI_UYARI
     try:
@@ -160,7 +160,6 @@ def piyasa_rejimini_tespit_et():
 
         trend_mi = (adx_1h >= 25.0) and (bb_bandwidth >= 0.04) and (fark_yuzdesi >= 0.3)
 
-        # ✅ YENİ: Rejim geçiş sinyali (YATAY ama trend sinyali yükseliyor)
         trend_gecis_sinyali = (
             (20 <= adx_1h < 25) or 
             (0.03 <= bb_bandwidth < 0.04) or 
@@ -176,7 +175,6 @@ def piyasa_rejimini_tespit_et():
             rejim = "YATAY"
             trend_yonu = "YATAY (Testere)"
             
-            # YATAY'da iken trend sinyali yükseliyorsa UYARI ver
             if trend_gecis_sinyali:
                 BTC_REJIM_GECISI_UYARI = True
                 print(f"⚠️ [REJİM GEÇİŞ UYARISI] YATAY → TREND sinyali yükseliyor! ADX:{adx_1h:.1f} BBW:{bb_bandwidth:.4f} EMA%:{fark_yuzdesi:.2f} → Yeni işlem AÇMA", flush=True)
@@ -192,14 +190,39 @@ def piyasa_rejimini_tespit_et():
         print(f"⚠️ [BTC REJİM HATA] {e}", flush=True)
         return "YATAY", "YATAY (Testere)"
 
-# ==================== EMİR DEFTERİ DUVAR ANALİZİ ====================
-def emir_defteri_duvar_analizi(symbol, anlik_fiyat, yon, df):
+# ==================== EMİR DEFTERİ + DİNAMİK TP/SL ====================
+def emir_defteri_duvar_analizi(symbol, anlik_fiyat, yon, df, mod="TREND"):
     try:
+        atr = float(ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1])
+        
+        # ============================================
+        # ✅ TESTERE MODU: Emir defteri kullanma, sıkı ATR bazlı TP/SL
+        # ============================================
+        if "TERS MOD" in mod or "Testere" in mod:
+            print(f"   🎯 [TESTERE MODU] Emir defteri atlanıyor, sıkı ATR bazlı TP/SL", flush=True)
+            
+            if yon == 'LONG':
+                giris_fiyati = anlik_fiyat
+                tp_fiyat = anlik_fiyat + (atr * 1.2)
+                sl_fiyat = anlik_fiyat - (atr * 0.8)
+                kapat_yon = 'sell'
+            else:
+                giris_fiyati = anlik_fiyat
+                tp_fiyat = anlik_fiyat - (atr * 1.2)
+                sl_fiyat = anlik_fiyat + (atr * 0.8)
+                kapat_yon = 'buy'
+            
+            hedef_roe = abs((tp_fiyat - giris_fiyati) / giris_fiyati) * 100 * KALDIRAC
+            sl_roe = abs((sl_fiyat - giris_fiyati) / giris_fiyati) * 100 * KALDIRAC
+            print(f"🧱 [TESTERE TP/SL] {symbol} | {yon} | Giriş:{giris_fiyati:.4f} TP:{tp_fiyat:.4f} SL:{sl_fiyat:.4f} | TP ROE:%{hedef_roe:.1f} SL ROE:-%{sl_roe:.1f}", flush=True)
+            return float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe), float(giris_fiyati)
+        
+        # ============================================
+        # ✅ TREND MODU: Emir defteri duvar analizi
+        # ============================================
         order_book = exchange.fetch_order_book(symbol, limit=25)
         bids = order_book.get('bids', [])
         asks = order_book.get('asks', [])
-
-        atr = float(ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1])
 
         if not bids or not asks:
             raise Exception("Order book boş")
@@ -233,7 +256,6 @@ def emir_defteri_duvar_analizi(symbol, anlik_fiyat, yon, df):
             if (tp_fiyat - anlik_fiyat) < min_tp_mesafe:
                 tp_fiyat = anlik_fiyat + (atr * 1.8)
                 duvar_bilgisi += " (ATR-TP)"
-                print(f"   ⚠️ TP duvarı çok yakın, ATR bazlı TP kullanılıyor", flush=True)
 
             sl_fiyat = giris_fiyati - (atr * 1.3)
             kapat_yon = 'sell'
@@ -255,7 +277,6 @@ def emir_defteri_duvar_analizi(symbol, anlik_fiyat, yon, df):
             if (anlik_fiyat - tp_fiyat) < min_tp_mesafe:
                 tp_fiyat = anlik_fiyat - (atr * 1.8)
                 duvar_bilgisi += " (ATR-TP)"
-                print(f"   ⚠️ TP duvarı çok yakın, ATR bazlı TP kullanılıyor", flush=True)
 
             sl_fiyat = giris_fiyati + (atr * 1.3)
             kapat_yon = 'buy'
@@ -271,12 +292,12 @@ def emir_defteri_duvar_analizi(symbol, anlik_fiyat, yon, df):
         except Exception:
             atr = anlik_fiyat * 0.01
         if yon == 'LONG':
-            tp_fiyat = anlik_fiyat + (atr * 1.8)
-            sl_fiyat = anlik_fiyat - (atr * 1.3)
+            tp_fiyat = anlik_fiyat + (atr * 1.5)
+            sl_fiyat = anlik_fiyat - (atr * 1.0)
             kapat_yon = 'sell'
         else:
-            tp_fiyat = anlik_fiyat - (atr * 1.8)
-            sl_fiyat = anlik_fiyat + (atr * 1.3)
+            tp_fiyat = anlik_fiyat - (atr * 1.5)
+            sl_fiyat = anlik_fiyat + (atr * 1.0)
             kapat_yon = 'buy'
         hedef_roe = abs((tp_fiyat - anlik_fiyat) / anlik_fiyat) * 100 * KALDIRAC
         return float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe), float(anlik_fiyat)
@@ -327,7 +348,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     if str(update.effective_chat.id) != str(CHAT_ID): return
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (Rejim Geçiş Koruması + Borsa SL)")
+    await update.message.reply_text("🟢 Bot aktif! (Testere sıkı TP/SL + Rejim Geçiş Koruması)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -453,7 +474,7 @@ def durum_cache_guncelle():
 
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Bot devrede. Rejim Geçiş Koruması aktif.", flush=True)
+    print("🚀 [BAŞLANGIÇ] Bot devrede. Testere sıkı TP/SL + Rejim Geçiş Koruması aktif.", flush=True)
     try:
         exchange.load_markets()
     except Exception as e:
@@ -472,10 +493,9 @@ def otomatik_arkaplan_tarayici():
             print(f"\n{'='*50}", flush=True)
             print(f"🔄 [DÖNGÜ #{dongu_sayaci}] {time.strftime('%H:%M:%S')}", flush=True)
 
-            # 1) Rejim
             piyasa_rejimi, btc_yonu = piyasa_rejimini_tespit_et()
 
-            # 2) Borsa senkronizasyonu
+            # Borsa senkronizasyonu
             try:
                 borsa_pozlar = exchange.fetch_positions()
                 borsa_acik = {}
@@ -561,7 +581,7 @@ def otomatik_arkaplan_tarayici():
             except Exception as e:
                 print(f"⚠️ senkron hata: {e}", flush=True)
 
-            # 2.5) YAZILIMSAL SL/TP KONTROLÜ
+            # Yazılımsal SL/TP kontrolü
             with state_lock:
                 kontrol_listesi = list(AKTIF_GRID_SISTEMLERI.items())
 
@@ -581,8 +601,7 @@ def otomatik_arkaplan_tarayici():
                     except Exception:
                         continue
 
-                    sl_vurdu = False
-                    tp_vurdu = False
+                    sl_vurdu = False                    tp_vurdu = False
 
                     if yon == "LONG":
                         if sl_f > 0 and anlik <= sl_f:
@@ -644,9 +663,7 @@ def otomatik_arkaplan_tarayici():
                 except Exception as e:
                     print(f"⚠️ SL/TP kontrol ({sym}): {e}", flush=True)
 
-            # ============================================
-            # ✅ YENİ: REJİM TREND'E DÖNDÜYSE TERS POZİSYONLARI KAPAT
-            # ============================================
+            # REJİM TREND'E DÖNDÜYSE TERS POZİSYONLARI KAPAT
             if piyasa_rejimi == "TREND":
                 with state_lock:
                     ters_pozisyonlar = []
@@ -713,7 +730,7 @@ def otomatik_arkaplan_tarayici():
                         f"⚡ YATAY→TREND geçişi, testere pozisyonu trend yönüne ters"
                     )
 
-            # 3) Yeni tarama
+            # Yeni tarama
             with state_lock:
                 toplam_aktif = len(AKTIF_GRID_SISTEMLERI)
 
@@ -762,11 +779,7 @@ def otomatik_arkaplan_tarayici():
                         tepeye_yakin = anlik >= (high_24h * 0.994)
                         dipe_yakin = anlik <= (low_24h * 1.006)
 
-                        # ============================================
-                        # YÖN BELİRLEME
-                        # ============================================
                         if piyasa_rejimi == "YATAY":
-                            # ✅ YENİ: BTC rejim geçiş uyarısı varsa YATAY'da işlem açma
                             if BTC_REJIM_GECISI_UYARI:
                                 print(
                                     f"🔍 [{symbol}] Fiyat:{anlik:.4f} | RSI:{rsi:.1f} | "
@@ -775,7 +788,6 @@ def otomatik_arkaplan_tarayici():
                                 )
                                 continue
 
-                            # ✅ YENİ: Trend öncesi sessizlik kontrolü
                             son_3_kapanis = df['close'].iloc[-3:].values
                             artan = all(son_3_kapanis[i] < son_3_kapanis[i+1] for i in range(len(son_3_kapanis)-1))
                             azalan = all(son_3_kapanis[i] > son_3_kapanis[i+1] for i in range(len(son_3_kapanis)-1))
@@ -793,7 +805,6 @@ def otomatik_arkaplan_tarayici():
                                 )
                                 continue
 
-                            # Normal testere mantığı
                             if rsi < 35:
                                 islem_yonu = "SHORT"
                                 sebep = f"Testere dibi (RSI {rsi:.1f}<35) → TERS SHORT"
@@ -844,7 +855,7 @@ def otomatik_arkaplan_tarayici():
                     except Exception as e:
                         print(f"⚠️ tarama ({symbol}): {e}", flush=True)
 
-                # 4) Emir aç
+                # Emir aç
                 for sinyal in taranan:
                     if not BOT_CALISIYOR_MU:
                         break
@@ -879,8 +890,9 @@ def otomatik_arkaplan_tarayici():
                         if kullan < 1.0:
                             continue
 
+                        # ✅ mod parametresi geçiliyor
                         tp, sl, kapat_yon, hedef_roe, ideal_giris = emir_defteri_duvar_analizi(
-                            sinyal["symbol"], sinyal["fiyat"], sinyal["yon"], sinyal["df"]
+                            sinyal["symbol"], sinyal["fiyat"], sinyal["yon"], sinyal["df"], sinyal["mod"]
                         )
 
                         contract_size = float(market.get('contractSize', 1.0) or 1.0)
@@ -904,7 +916,7 @@ def otomatik_arkaplan_tarayici():
                         except Exception as e:
                             print(f"   ❌ TP emri HATA: {e}", flush=True)
 
-                        # SL emri (Gate.io formatı)
+                        # SL emri
                         try:
                             sl_emir = exchange.create_order(
                                 sinyal["symbol"], 'stop', kapat_yon, miktar, sl,
@@ -948,7 +960,6 @@ def otomatik_arkaplan_tarayici():
                     except Exception as e:
                         print(f"⚠️ emir hatası: {e}", flush=True)
 
-            # 5) Durum cache güncelle
             durum_cache_guncelle()
 
         except Exception as e:
