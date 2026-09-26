@@ -21,7 +21,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from supabase import create_client, Client
 from flask import Flask
 
-# ==================== FLASK WEB SUNUCUSU (Render Port Desteği İçin) ====================
+# ==================== FLASK WEB SUNUCUSU ====================
 app = Flask(__name__)
 
 @app.route("/")
@@ -74,7 +74,6 @@ BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
 KALDIRAC = 5
 
-GLOBAL_COOLDOWN_BITIS = 0.0
 SON_BTC_YONU = "YATAY (Testere)"
 
 def hafizayi_yukle():
@@ -244,12 +243,13 @@ def telegram_mesaj_gonder(mesaj):
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}, timeout=5)
     except Exception: pass
 
-async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ==================== TELEGRAM KOMUTLARI (SENKRON & HIZLI) ====================
+def durum_komutu_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     try:
-        balance = await asyncio.to_thread(exchange.fetch_balance)
+        balance = exchange.fetch_balance()
         total = float(balance['total'].get('USDT', 0))
-        borsa_poslari = [p for p in await asyncio.to_thread(exchange.fetch_positions) if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
+        borsa_poslari = [p for p in exchange.fetch_positions() if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
         toplam_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in borsa_poslari)
         rejim, btc_yon = piyasa_rejimini_tespit_et()
         basarili = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0))
@@ -266,7 +266,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             yon = str(p.get('side', '')).upper() or "LONG"
             giris = float(p.get('entryPrice', 0))
             kaldirac_val = int(p.get('leverage', KALDIRAC))
-            ticker_data = await asyncio.to_thread(exchange.fetch_ticker, sym)
+            ticker_data = exchange.fetch_ticker(sym)
             guncel_fiyat = float(ticker_data['last'])
             fark = (guncel_fiyat - giris) / giris if yon == "LONG" else (giris - guncel_fiyat) / giris
             roe = fark * 100 * kaldirac_val
@@ -288,26 +288,26 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ Başarılı TP: `{basarili}` | ❌ Başarısız SL: `{basarisiz}`\n"
             f"📈 Başarı Oranı: `%{basari_orani:.1f}`"
         )
-        await update.message.reply_text(mesaj, parse_mode='Markdown')
+        update.message.reply_text(mesaj, parse_mode='Markdown')
     except Exception as e:
-        await update.message.reply_text(f"Hata: {e}")
+        update.message.reply_text(f"Hata: {e}")
 
-async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def baslat_komutu_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Duvar Analizli Kripto Botu (5x) aktif edildi!")
+    update.message.reply_text("🟢 Duvar Analizli Kripto Botu (5x) aktif edildi!")
 
-async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def durdur_komutu_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = False
-    await update.message.reply_text("⏸️ Bot durduruldu.")
+    update.message.reply_text("⏸️ Bot durduruldu.")
 
-async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def kapat_komutu_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     try:
-        positions = await asyncio.to_thread(exchange.fetch_positions)
+        positions = exchange.fetch_positions()
         for pos in positions:
             kontrat = float(pos.get('contracts', 0) or pos.get('size', 0) or 0)
             if kontrat > 0:
@@ -320,9 +320,24 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with state_lock:
             AKTIF_GRID_SISTEMLERI.clear()
         hafizayi_kaydet()
-        await update.message.reply_text("✅ Tüm pozisyonlar ve kayıtlar temizlendi.")
+        update.message.reply_text("✅ Tüm pozisyonlar ve kayıtlar temizlendi.")
     except Exception as e:
-        await update.message.reply_text(f"Hata: {e}")
+        update.message.reply_text(f"Hata: {e}")
+
+def telegram_bot_thread_fonksiyonu():
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True"
+        requests.get(url, timeout=10)
+    except Exception: pass
+
+    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app_tg.add_handler(CommandHandler("durum", durum_komutu_sync))
+    app_tg.add_handler(CommandHandler("baslat", baslat_komutu_sync))
+    app_tg.add_handler(CommandHandler("durdur", durdur_komutu_sync))
+    app_tg.add_handler(CommandHandler("kapat", kapat_komutu_sync))
+    
+    print("🤖 Telegram bot polling modunda ayrı thread'de başlatıldı...", flush=True)
+    app_tg.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 def otomatik_arkaplan_tarayici():
     print("🚀 [BAŞLANGIÇ] Emir Defteri Duvar Analizli Bot Devrede ve Canlı Log Modunda...", flush=True)
@@ -536,45 +551,15 @@ def otomatik_arkaplan_tarayici():
         print("💤 Döngü tamamlandı, 5 saniye sonra tekrar taranacak...", flush=True)
         time.sleep(5)
 
-async def main():
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True"
-        await asyncio.to_thread(requests.get, url, timeout=10)
-        await asyncio.sleep(2)
-    except Exception as e:
-        print(f"⚠️ Webhook silinirken hata: {e}", flush=True)
-
-    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
-    app_tg.add_handler(CommandHandler("durum", durum_komutu))
-    app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
-    app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
-    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
-    
-    await app_tg.initialize()
-    await app_tg.start()
-    
-    while True:
-        try:
-            await app_tg.updater.start_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
-            break
-        except Exception as e:
-            print(f"⚠️ Polling çakışması: {e}. Tekrar deneniyor...", flush=True)
-            await asyncio.sleep(5)
-
-    tarayici_text_thread = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
-    tarayici_text_thread.start()
-
-    stop_event = asyncio.Event()
-    await stop_event.wait()
-
 if __name__ == '__main__':
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.daemon = True
+    # 1. Flask Sunucusunu Başlat
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     print("🌐 Flask web sunucusu arka planda başlatıldı...", flush=True)
 
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        pass
+    # 2. Telegram Botunu Ayrı Thread'de Başlat
+    telegram_thread = threading.Thread(target=telegram_bot_thread_fonksiyonu, daemon=True)
+    telegram_thread.start()
+
+    # 3. Ana Borsa Tarama Döngüsünü Çalıştır
+    otomatik_arkaplan_tarayici()
