@@ -309,7 +309,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
     if str(update.effective_chat.id) != str(CHAT_ID): return
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif!")
+    await update.message.reply_text("🟢 Bot aktif! (Ters Mod Testere entegre edildi)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_CALISIYOR_MU
@@ -413,7 +413,7 @@ def durum_cache_guncelle():
 
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Bot devrede. SL emri borsaya gönderilmez, yazılımsal koruma aktiftir.", flush=True)
+    print("🚀 [BAŞLANGIÇ] Bot devrede. TERS MOD (Testere) + Sıkı RSI aktif.", flush=True)
     try:
         exchange.load_markets()
     except Exception as e:
@@ -522,7 +522,7 @@ def otomatik_arkaplan_tarayici():
             except Exception as e:
                 print(f"⚠️ senkron hata: {e}", flush=True)
 
-            # 2.5) YAZILIMSAL SL/TP KONTROLÜ (tek koruma katmanı)
+            # 2.5) YAZILIMSAL SL/TP KONTROLÜ
             with state_lock:
                 kontrol_listesi = list(AKTIF_GRID_SISTEMLERI.items())
 
@@ -643,51 +643,63 @@ def otomatik_arkaplan_tarayici():
                         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                         rsi = float(ta.momentum.rsi(df['close'], window=14).iloc[-1])
 
-                        bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
-                        bb_mid = float(bb.bollinger_mavg().iloc[-1])
-                        bb_up = float(bb.bollinger_hband().iloc[-1])
-                        bb_low = float(bb.bollinger_lband().iloc[-1])
-
+                        # Hacim
                         son_hacim = float(df['volume'].iloc[-2])
                         ort_hacim = float(df['volume'].iloc[-21:-1].mean())
                         hacim_orani = son_hacim / ort_hacim if ort_hacim > 0 else 1.0
 
                         atr = float(ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1])
 
+                        # 24 saat tepe/dip
+                        high_24h = float(ticker.get('high') or anlik * 1.02)
+                        low_24h = float(ticker.get('low') or anlik * 0.98)
+                        tepeye_yakin = anlik >= (high_24h * 0.994)
+                        dipe_yakin = anlik <= (low_24h * 1.006)
+
+                        # ============================================
+                        # YÖN BELİRLEME (TERS MOD Testere Entegre)
+                        # ============================================
                         if piyasa_rejimi == "YATAY":
-                            if anlik <= bb_low * 1.002:
-                                islem_yonu = "LONG"
-                                sebep = "BB alt bandına değdi (mean reversion)"
-                            elif anlik >= bb_up * 0.998:
+                            # ✅ TERS MOD: RSI düşük → SHORT, RSI yüksek → LONG
+                            if rsi < 35:
                                 islem_yonu = "SHORT"
-                                sebep = "BB üst bandına değdi (mean reversion)"
-                            elif anlik < bb_mid:
+                                sebep = f"Testere dibi (RSI {rsi:.1f}<35) → TERS SHORT"
+                            elif rsi > 65:
                                 islem_yonu = "LONG"
-                                sebep = "BB mid altı"
+                                sebep = f"Testere tepesi (RSI {rsi:.1f}>65) → TERS LONG"
                             else:
-                                islem_yonu = "SHORT"
-                                sebep = "BB mid üstü"
-                            mod_adi = "YATAY/MEAN-REV"
+                                print(
+                                    f"🔍 [{symbol}] Fiyat:{anlik:.4f} | RSI:{rsi:.1f} | "
+                                    f"Hacim x{hacim_orani:.2f} | ATR:{atr:.4f} | "
+                                    f"⛔ RSI nötr ({rsi:.1f}) — testere modu beklemede",
+                                    flush=True
+                                )
+                                continue
+                            mod_adi = "TERS MOD (Testere)"
                         else:
-                            islem_yonu = btc_yonu
-                            sebep = f"BTC trendi: {btc_yonu}"
+                            # TREND modu — normal yön
+                            if btc_yonu == "LONG" and rsi < 55 and not tepeye_yakin:
+                                islem_yonu = "LONG"
+                                sebep = f"BTC trendi LONG (RSI {rsi:.1f}, tepeden uzak)"
+                            elif btc_yonu == "SHORT" and rsi > 45 and not dipe_yakin:
+                                islem_yonu = "SHORT"
+                                sebep = f"BTC trendi SHORT (RSI {rsi:.1f}, dipten uzak)"
+                            else:
+                                print(
+                                    f"🔍 [{symbol}] Fiyat:{anlik:.4f} | RSI:{rsi:.1f} | "
+                                    f"BTC:{btc_yonu} | Tepe:{tepeye_yakin} Dip:{dipe_yakin} | "
+                                    f"⛔ Trend koşulları uygun değil",
+                                    flush=True
+                                )
+                                continue
                             mod_adi = "TREND"
 
                         print(
                             f"🔍 [{symbol}] Fiyat:{anlik:.4f} | RSI:{rsi:.1f} | "
-                            f"BB[mid:{bb_mid:.4f} up:{bb_up:.4f} low:{bb_low:.4f}] | "
                             f"Hacim x{hacim_orani:.2f} | ATR:{atr:.4f} | "
                             f"→ {islem_yonu} ({mod_adi}) [{sebep}]",
                             flush=True
                         )
-
-                        rsi_uygun = (
-                            (islem_yonu == "LONG" and rsi < 55) or
-                            (islem_yonu == "SHORT" and rsi > 45)
-                        )
-                        if not rsi_uygun:
-                            print(f"   ⛔ RSI uygun değil ({rsi:.1f})", flush=True)
-                            continue
 
                         if hacim_orani < HACIM_ESIGI:
                             print(f"   ⛔ Hacim çok düşük (x{hacim_orani:.2f})", flush=True)
@@ -750,7 +762,7 @@ def otomatik_arkaplan_tarayici():
                         giris_emir = exchange.create_order(sinyal["symbol"], 'market', emir_yonu, miktar)
                         gerceklesen = float(giris_emir.get('average', 0) or giris_emir.get('price', 0) or ideal_giris)
 
-                        # ✅ TP emri (limit reduce-only) — kâr garantisi için borsada dursun
+                        # ✅ TP emri (limit reduce-only)
                         try:
                             tp_emir = exchange.create_order(
                                 sinyal["symbol"], 'limit', kapat_yon, miktar, tp,
@@ -760,8 +772,8 @@ def otomatik_arkaplan_tarayici():
                         except Exception as e:
                             print(f"   ❌ TP emri HATA: {e}", flush=True)
 
-                        # ⚠️ SL emri YOK — Gate.io testnet stop emirleri güvenilmez
-                        print(f"   🛡️ SL yazılımsal aktif: {sl} (borsa SL emri gönderilmedi)", flush=True)
+                        # 🛡️ SL yazılımsal (borsa SL emri gönderilmedi)
+                        print(f"   🛡️ SL yazılımsal aktif: {sl}", flush=True)
 
                         with state_lock:
                             AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {
