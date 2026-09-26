@@ -71,10 +71,10 @@ BOT_CALISIYOR_MU = True
 state_lock = threading.RLock()
 KALDIRAC = 5
 MAKSIMUM_TOPLAM_POZISYON = 2
-COOLDOWN_SURESI_SANIYE = 10 * 60
+COOLDOWN_SURESI_SANIYE = 15 * 60   # ✅ 15 dakika
 TARAMA_ARALIGI = 10
 HACIM_ESIGI = 0.3
-MIN_TP_YUZDE = 0.005  # %0.5 minimum TP mesafesi
+MIN_TP_YUZDE = 0.005
 
 SON_BTC_YONU = "YATAY (Testere)"
 SON_REJIM = "YATAY"
@@ -138,7 +138,7 @@ AKTIF_GRID_SISTEMLERI = kalici_veri.get("aktif_sistemler", {})
 ANALITIK_HAFIZA = kalici_veri.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []})
 COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
-# ==================== PİYASA REJİMİ (AND MANTIĞI) ====================
+# ==================== PİYASA REJİMİ ====================
 def piyasa_rejimini_tespit_et():
     global SON_BTC_YONU, SON_REJIM, SON_BTC_ADX
     try:
@@ -214,7 +214,6 @@ def emir_defteri_duvar_analizi(symbol, anlik_fiyat, yon, df):
             else:
                 tp_fiyat = anlik_fiyat + (atr * 1.8)
 
-            # Minimum TP mesafesi kontrolü
             if (tp_fiyat - anlik_fiyat) < min_tp_mesafe:
                 tp_fiyat = anlik_fiyat + (atr * 1.8)
                 duvar_bilgisi += " (ATR-TP)"
@@ -237,7 +236,6 @@ def emir_defteri_duvar_analizi(symbol, anlik_fiyat, yon, df):
             else:
                 tp_fiyat = anlik_fiyat - (atr * 1.8)
 
-            # Minimum TP mesafesi kontrolü
             if (anlik_fiyat - tp_fiyat) < min_tp_mesafe:
                 tp_fiyat = anlik_fiyat - (atr * 1.8)
                 duvar_bilgisi += " (ATR-TP)"
@@ -280,7 +278,6 @@ def telegram_mesaj_gonder(mesaj):
     except Exception as e:
         print(f"⚠️ Telegram gönderim hatası: {e}", flush=True)
 
-# ✅ ASYNC HANDLER'LAR (python-telegram-bot v20+)
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if str(update.effective_chat.id) != str(CHAT_ID):
@@ -438,7 +435,7 @@ def otomatik_arkaplan_tarayici():
             # 1) Rejim
             piyasa_rejimi, btc_yonu = piyasa_rejimini_tespit_et()
 
-            # 2) Borsa senkronizasyonu (HEM EKLE HEM SİL)
+            # 2) Borsa senkronizasyonu (HEM EKLE HEM SİL + COOLDOWN SET ET)
             try:
                 borsa_pozlar = exchange.fetch_positions()
                 borsa_acik = {}
@@ -465,46 +462,27 @@ def otomatik_arkaplan_tarayici():
                                 "giris_zamani": time.time()
                             }
 
-                    # B) Hafızada olup borsada olmayanları SİL
+                    # B) Hafızada olup borsada olmayanları SİL + COOLDOWN SET ET
                     silinecek = [s for s in AKTIF_GRID_SISTEMLERI.keys() if s not in borsa_acik]
                     for s in silinecek:
-                        print(f"🗑️ [SENKRON] {s} borsada yok, hafızadan silindi", flush=True)
-                        del AKTIF_GRID_SISTEMLERI[s]
-
-                if silinecek:
-                    hafizayi_kaydet()
-            except Exception as e:
-                print(f"⚠️ senkron hata: {e}", flush=True)
-
-            # 3) Kapanan pozisyon kontrolü (TP/SL sonuçları)
-            with state_lock:
-                aktif_keys = list(AKTIF_GRID_SISTEMLERI.keys())
-
-            for sym in aktif_keys:
-                with state_lock:
-                    kayit = AKTIF_GRID_SISTEMLERI.get(sym)
-                if not kayit:
-                    continue
-                try:
-                    raw = exchange.fetch_positions([sym])
-                    poz_var = any(float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0 for p in raw)
-
-                    if not poz_var:
-                        giris = float(kayit.get("giris_fiyati", 0))
+                        kayit = AKTIF_GRID_SISTEMLERI[s]
                         yon = kayit.get("yon", "LONG")
+                        giris_f = float(kayit.get("giris_fiyati", 0))
                         tp_f = float(kayit.get("tp_fiyat", 0))
                         sl_f = float(kayit.get("sl_fiyat", 0))
 
+                        # Kapanış fiyatını bul
                         try:
-                            son_islemler = exchange.fetch_my_trades(sym, limit=5)
-                            cikis = float(son_islemler[-1]['price']) if son_islemler else giris
+                            son_islemler = exchange.fetch_my_trades(s, limit=5)
+                            cikis = float(son_islemler[-1]['price']) if son_islemler else giris_f
                         except Exception:
                             try:
-                                t = exchange.fetch_ticker(sym)
+                                t = exchange.fetch_ticker(s)
                                 cikis = float(t['last'])
                             except Exception:
-                                cikis = giris
+                                cikis = giris_f
 
+                        # TP mi SL mi tespit
                         tp_mesafe = abs(cikis - tp_f) if tp_f > 0 else float('inf')
                         sl_mesafe = abs(cikis - sl_f) if sl_f > 0 else float('inf')
 
@@ -513,43 +491,42 @@ def otomatik_arkaplan_tarayici():
                         elif sl_mesafe < tp_mesafe and sl_f > 0:
                             karlimi = False
                         else:
-                            if yon == "LONG":
-                                karlimi = cikis > giris
-                            else:
-                                karlimi = cikis < giris
+                            karlimi = (cikis > giris_f) if yon == "LONG" else (cikis < giris_f)
 
+                        # ROE hesapla
                         if yon == "LONG":
-                            pnl_yuzde = (cikis - giris) / giris * 100 * KALDIRAC
+                            pnl_yuzde = (cikis - giris_f) / giris_f * 100 * KALDIRAC
                         else:
-                            pnl_yuzde = (giris - cikis) / giris * 100 * KALDIRAC
+                            pnl_yuzde = (giris_f - cikis) / giris_f * 100 * KALDIRAC
 
-                        with state_lock:
-                            if karlimi:
-                                ANALITIK_HAFIZA["basarili_islem_sayisi"] = int(ANALITIK_HAFIZA.get("basarili_islem_sayisi", 0)) + 1
-                                tip = "✅ *KÂR İLE KAPANDI (TP)*"
-                            else:
-                                ANALITIK_HAFIZA["basarisiz_islem_sayisi"] = int(ANALITIK_HAFIZA.get("basarisiz_islem_sayisi", 0)) + 1
-                                tip = "❌ *ZARAR İLE KAPANDI (SL)*"
+                        if karlimi:
+                            ANALITIK_HAFIZA["basarili_islem_sayisi"] = int(ANALITIK_HAFIZA.get("basarili_islem_sayisi", 0)) + 1
+                            tip = "✅ *KÂR İLE KAPANDI (TP)*"
+                        else:
+                            ANALITIK_HAFIZA["basarisiz_islem_sayisi"] = int(ANALITIK_HAFIZA.get("basarisiz_islem_sayisi", 0)) + 1
+                            tip = "❌ *ZARAR İLE KAPANDI (SL)*"
 
-                            COIN_COOLDOWNLAR[sym] = {
-                                "zaman": float(time.time() + COOLDOWN_SURESI_SANIYE),
-                                "son_yon": yon
-                            }
-                            if sym in AKTIF_GRID_SISTEMLERI:
-                                del AKTIF_GRID_SISTEMLERI[sym]
+                        # COOLDOWN SET ET
+                        COIN_COOLDOWNLAR[s] = {
+                            "zaman": float(time.time() + COOLDOWN_SURESI_SANIYE),
+                            "son_yon": yon
+                        }
+                        del AKTIF_GRID_SISTEMLERI[s]
 
-                        hafizayi_kaydet()
+                        print(f"💰 [KAPANIŞ] {s} | {tip} | ROE:%{pnl_yuzde:+.2f}", flush=True)
                         telegram_mesaj_gonder(
                             f"{tip}\n"
-                            f"📌 `{sym}` | {yon}\n"
-                            f"📍 Giriş: `{giris}` → Çıkış: `{cikis}`\n"
-                            f"📊 Sonuç ROE: `%{pnl_yuzde:+.2f}`"
+                            f"📌 `{s}` | {yon}\n"
+                            f"📍 Giriş: `{giris_f}` → Çıkış: `{cikis}`\n"
+                            f"📊 Sonuç ROE: `%{pnl_yuzde:+.2f}`\n"
+                            f"⏳ Cooldown: {COOLDOWN_SURESI_SANIYE // 60} dakika"
                         )
-                        print(f"💰 [KAPANIŞ] {sym} | {tip} | ROE:%{pnl_yuzde:+.2f}", flush=True)
-                except Exception as e:
-                    print(f"⚠️ kapanış kontrolü ({sym}): {e}", flush=True)
 
-            # 4) Yeni tarama
+                hafizayi_kaydet()
+            except Exception as e:
+                print(f"⚠️ senkron hata: {e}", flush=True)
+
+            # 3) Yeni tarama
             with state_lock:
                 toplam_aktif = len(AKTIF_GRID_SISTEMLERI)
 
@@ -593,7 +570,6 @@ def otomatik_arkaplan_tarayici():
                         bb_up = float(bb.bollinger_hband().iloc[-1])
                         bb_low = float(bb.bollinger_lband().iloc[-1])
 
-                        # ✅ KAPANMIŞ MUM kullan (-2)
                         son_hacim = float(df['volume'].iloc[-2])
                         ort_hacim = float(df['volume'].iloc[-21:-1].mean())
                         hacim_orani = son_hacim / ort_hacim if ort_hacim > 0 else 1.0
@@ -646,13 +622,22 @@ def otomatik_arkaplan_tarayici():
                     except Exception as e:
                         print(f"⚠️ tarama ({symbol}): {e}", flush=True)
 
-                # 5) Emir aç (break YOK, döngü devam eder)
+                # 4) Emir aç (cooldown + zaten açık kontrolü ile)
                 for sinyal in taranan:
                     if not BOT_CALISIYOR_MU:
                         break
+
                     with state_lock:
                         if sinyal["symbol"] in AKTIF_GRID_SISTEMLERI:
+                            print(f"   ⛔ {sinyal['symbol']} zaten açık, atlanıyor", flush=True)
                             continue
+                        cd = COIN_COOLDOWNLAR.get(sinyal["symbol"])
+                        if cd:
+                            z = cd.get("zaman", 0) if isinstance(cd, dict) else float(cd)
+                            kalan = int(z - time.time())
+                            if kalan > 0:
+                                print(f"   ⛔ {sinyal['symbol']} cooldown ({kalan}s), atlanıyor", flush=True)
+                                continue
                         if len(AKTIF_GRID_SISTEMLERI) >= MAKSIMUM_TOPLAM_POZISYON:
                             break
 
@@ -724,11 +709,10 @@ def otomatik_arkaplan_tarayici():
                             f"🛑 SL: `{sl}`\n"
                             f"🔎 Sebep: {sinyal['sebep']}"
                         )
-                        # ❌ break YOK — döngü devam eder
                     except Exception as e:
                         print(f"⚠️ emir hatası: {e}", flush=True)
 
-            # 6) Durum cache güncelle
+            # 5) Durum cache güncelle
             durum_cache_guncelle()
 
         except Exception as e:
