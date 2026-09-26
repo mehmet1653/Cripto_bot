@@ -162,23 +162,96 @@ def piyasa_rejimini_tespit_et():
         print(f"⚠️ [BTC REJİM HATA] {e}", flush=True)
         return "YATAY", "YATAY (Testere)"
 
-def hedef_fiyatlari_hesapla(anlik_fiyat, yon, df, piyasa_rejimi):
-    atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
-    
-    tp_carpani = 2.0 if piyasa_rejimi == "TREND" else 1.6
-    sl_carpani = 1.3 if piyasa_rejimi == "TREND" else 1.2
-
-    if yon == 'LONG':
-        tp_fiyat = anlik_fiyat + (atr * tp_carpani)
-        sl_fiyat = anlik_fiyat - (atr * sl_carpani)
-        kapat_yon = 'sell'
-    else:
-        tp_fiyat = anlik_fiyat - (atr * tp_carpani)
-        sl_fiyat = anlik_fiyat + (atr * sl_carpani)
-        kapat_yon = 'buy'
+def emir_defteri_duvar_analizi(symbol, anlik_fiyat, yon, df):
+    """
+    Emir defterindeki (order book) yığılmaları (duvarları) tarar:
+    - Long için: En yakın büyük alış duvarının hemen üzerinden giriş, yukarıdaki satış duvarının hemen altından TP belirler.
+    - Short için: En yakın büyük satış duvarının hemen altından giriş, aşağıdaki alış duvarının hemen üstünden TP belirler.
+    Eğer defterde net duvar bulunamazsa ATR bazlı klasik güvenli hesaplamaya döner.
+    """
+    try:
+        order_book = exchange.fetch_order_book(symbol, limit=25)
+        bids = order_book.get('bids', []) # Alış emirleri [fiyat, miktar]
+        asks = order_book.get('asks', []) # Satış emirleri [fiyat, miktar]
         
-    hedef_roe = abs((tp_fiyat - anlik_fiyat) / anlik_fiyat) * 100 * KALDIRAC
-    return float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe)
+        atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
+
+        if not bids or not asks:
+            raise Exception("Order book boş döndü")
+
+        # Duvar tespiti için ortalama hacmin katları olan yığılmaları arayalım
+        bid_miktarlari = [b[1] for b in bids]
+        ask_miktarlari = [a[1] for a in asks]
+        
+        ortalama_bid = sum(bid_miktarlari) / len(bid_miktarlari) if bid_miktarlari else 1
+        ortalama_ask = sum(ask_miktarlari) / len(ask_miktarlari) if ask_miktarlari else 1
+
+        # En büyük alış duvarı (Destek yığılması)
+        en_iyi_alis_duvari = max(bids, key=lambda x: x[1]) if bids else [anlik_fiyat - atr, 0]
+        # En büyük satış duvarı (Direnç yığılması)
+        en_iyi_satis_duvari = max(asks, key=lambda x: x[1]) if asks else [anlik_fiyat + atr, 0]
+
+        duvar_bilgisi = "ATR Yedekli"
+
+        if yon == 'LONG':
+            # Senaryo: Altta 85'te yığılma var, biz 86-87'den (duvarın hemen üstünden) alacağız.
+            # Üstte 100'de yığılma var, biz 98-99'da (duvarın hemen altından) satacağız.
+            duvar_fiyat_alis = en_iyi_alis_duvari[0]
+            duvar_fiyat_satis = en_iyi_satis_duvari[0]
+
+            if duvar_fiyat_alis < anlik_fiyat and en_iyi_alis_duvari[1] > (ortalama_bid * 1.5):
+                # Duvarın hemen üzerinden giriş kademesi ayarla
+                giris_fiyati = duvar_fiyat_alis + (atr * 0.1) 
+                duvar_bilgisi = f"Alış Duvarı: {duvar_fiyat_alis}"
+            else:
+                giris_fiyati = anlik_fiyat
+
+            if duvar_fiyat_satis > anlik_fiyat and en_iyi_satis_duvari[1] > (ortalama_ask * 1.5):
+                # Satış duvarının hemen altında kâr al (TP)
+                tp_fiyat = duvar_fiyat_satis - (atr * 0.15)
+            else:
+                tp_fiyat = anlik_fiyat + (atr * 1.8)
+
+            sl_fiyat = giris_fiyati - (atr * 1.3)
+            kapat_yon = 'sell'
+
+        else: # SHORT
+            duvar_fiyat_alis = en_iyi_alis_duvari[0]
+            duvar_fiyat_satis = en_iyi_satis_duvari[0]
+
+            if duvar_fiyat_satis > anlik_fiyat and en_iyi_satis_duvari[1] > (ortalama_ask * 1.5):
+                # Satış duvarının hemen altından short giriş
+                giris_fiyati = duvar_fiyat_satis - (atr * 0.1)
+                duvar_bilgisi = f"Satış Duvarı: {duvar_fiyat_satis}"
+            else:
+                giris_fiyati = anlik_fiyat
+
+            if duvar_fiyat_alis < anlik_fiyat and en_iyi_alis_duvari[1] > (ortalama_bid * 1.5):
+                # Alış duvarının hemen üstünde kâr al (TP)
+                tp_fiyat = duvar_fiyat_alis + (atr * 0.15)
+            else:
+                tp_fiyat = anlik_fiyat - (atr * 1.8)
+
+            sl_fiyat = giris_fiyati + (atr * 1.3)
+            kapat_yon = 'buy'
+
+        hedef_roe = abs((tp_fiyat - giris_fiyati) / giris_fiyati) * 100 * KALDIRAC
+        print(f"🧱 [DUVAR ANALİZİ] {symbol} | {yon} | Strateji: {duvar_bilgisi} | Giriş: {giris_fiyati:.4f} | TP: {tp_fiyat:.4f} | SL: {sl_fiyat:.4f}", flush=True)
+        return float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe), float(giris_fiyati)
+
+    except Exception as e:
+        print(f"⚠️ Duvar analizi hata ({symbol}), ATR bazlı klasik hesaplamaya geçiliyor: {e}", flush=True)
+        atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
+        if yon == 'LONG':
+            tp_fiyat = anlik_fiyat + (atr * 1.8)
+            sl_fiyat = anlik_fiyat - (atr * 1.3)
+            kapat_yon = 'sell'
+        else:
+            tp_fiyat = anlik_fiyat - (atr * 1.8)
+            sl_fiyat = anlik_fiyat + (atr * 1.3)
+            kapat_yon = 'buy'
+        hedef_roe = abs((tp_fiyat - anlik_fiyat) / anlik_fiyat) * 100 * KALDIRAC
+        return float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe), float(anlik_fiyat)
 
 def telegram_mesaj_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID: return
@@ -212,7 +285,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 **BOT DURUM RAPORU (Anında Market Giriş - 5x)**\n\n"
+            f"📊 **BOT DURUM RAPORU (Emir Defteri Duvar Analizli - 5x)**\n\n"
             f"🌐 Piyasa Rejimi: `{rejim}` (BTC Yön: `{btc_yon}`)\n"
             f"💰 Kasa: `{total:.2f} USDT` | Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -228,7 +301,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Anında Giriş Botu (5x) aktif edildi!")
+    await update.message.reply_text("🟢 Duvar Analizli Kripto Botu (5x) aktif edildi!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -257,7 +330,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Anında Market Giriş Botu Devrede ve Canlı Log Modunda...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Emir Defteri Duvar Analizli Bot Devrede ve Canlı Log Modunda...", flush=True)
     try:
         exchange.load_markets()
     except Exception: pass
@@ -270,7 +343,7 @@ def otomatik_arkaplan_tarayici():
                 continue
 
             print("\n--------------------------------------------------", flush=True)
-            print("🔄 [YENİ DÖNGÜ] Piyasa ve coinler taranıyor...", flush=True)
+            print("🔄 [YENİ DÖNGÜ] Piyasa ve coinler duvar analiziyle taranıyor...", flush=True)
             piyasa_rejimi, btc_yonu = piyasa_rejimini_tespit_et()
 
             # --- BORSA İLE HAFIZA OTOMATİK SENKRONİZASYONU ---
@@ -419,14 +492,14 @@ def otomatik_arkaplan_tarayici():
                         print(f"⚠️ [BAKİYE YETERSİZ] Kullanılabilir bakiye çok düşük: {kullanilacak_tutar} USDT", flush=True)
                         continue
 
-                    giris_fiyati = sinyal["fiyat"]
-                    tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = hedef_fiyatlari_hesapla(
-                        giris_fiyati, sinyal["yon"], sinyal["df"], piyasa_rejimi
+                    # --- DUVAR ANALİZİ İLE GİRİŞ VE HEDEF FİYAT TAYİNİ ---
+                    tp_fiyat, sl_fiyat, kapat_yon, hedef_roe, ideal_giris = emir_defteri_duvar_analizi(
+                        sinyal["symbol"], sinyal["fiyat"], sinyal["yon"], sinyal["df"]
                     )
 
                     miktar = float(exchange.amount_to_precision(
                         sinyal["symbol"], 
-                        max((kullanilacak_tutar * KALDIRAC) / giris_fiyati / float(market.get('contractSize', 1.0)), 
+                        max((kullanilacak_tutar * KALDIRAC) / ideal_giris / float(market.get('contractSize', 1.0)), 
                         float(market['limits']['amount']['min'] or 1.0))
                     ))
                     
@@ -434,7 +507,7 @@ def otomatik_arkaplan_tarayici():
                     
                     print(f"🚀 [EMİR İLETİLİYOR] {sinyal['symbol']} için {sinyal['yon']} piyasa emri gönderiliyor...", flush=True)
                     giris_emir = exchange.create_order(sinyal["symbol"], 'market', emir_yonu, miktar)
-                    gerceklesen_giris = float(giris_emir.get('average', 0) or giris_emir.get('price', 0) or giris_fiyati)
+                    gerceklesen_giris = float(giris_emir.get('average', 0) or giris_emir.get('price', 0) or ideal_giris)
 
                     exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
                     exchange.create_order(sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
@@ -456,7 +529,7 @@ def otomatik_arkaplan_tarayici():
                     
                     print(f"✅ [İŞLEM BAŞARILI] {sinyal['symbol']} {sinyal['yon']} açıldı! Giriş: {gerceklesen_giris}", flush=True)
                     telegram_mesaj_gonder(
-                        f"🚀 *ANINDA MARKET GİRİŞİ YAPILDI ({sinyal['mod']} - 5x)*\n"
+                        f"🚀 *DUVAR ANALİZLİ İŞLEM AÇILDI ({sinyal['mod']} - 5x)*\n"
                         f"📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`\n"
                         f"📍 Giriş Fiyatı: `{gerceklesen_giris}`\n"
                         f"💰 Hedef TP: `{tp_fiyat}` (ROE: `%{hedef_roe:.1f}`)\n"
@@ -498,8 +571,8 @@ async def main():
             print(f"⚠️ Polling çakışması: {e}. Tekrar deneniyor...", flush=True)
             await asyncio.sleep(5)
 
-    tarayici_thread = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
-    tarayici_thread.start()
+    tarayici_text_thread = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
+    tarayici_text_thread.start()
 
     stop_event = asyncio.Event()
     await stop_event.wait()
