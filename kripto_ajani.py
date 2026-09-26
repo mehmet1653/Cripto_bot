@@ -273,6 +273,22 @@ def otomatik_arkaplan_tarayici():
             print("🔄 [YENİ DÖNGÜ] Piyasa ve coinler taranıyor...", flush=True)
             piyasa_rejimi, btc_yonu = piyasa_rejimini_tespit_et()
 
+            # --- BORSA İLE HAFIZA OTOMATİK SENKRONİZASYONU ---
+            try:
+                borsa_gercek_pozlar = exchange.fetch_positions()
+                acik_semboller = [p['symbol'] for p in borsa_gercek_pozlar if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
+                
+                with state_lock:
+                    hafiza_keys = list(AKTIF_GRID_SISTEMLERI.keys())
+                    for h_sym in hafiza_keys:
+                        if h_sym not in acik_semboller:
+                            print(f"🧹 [SENKRONİZASYON] {h_sym} borsada kapalı, hafızadan temizleniyor...", flush=True)
+                            del AKTIF_GRID_SISTEMLERI[h_sym]
+                            hafizayi_kaydet()
+            except Exception as sync_err:
+                print(f"⚠️ Senkronizasyon kontrolü sırasında hata: {sync_err}", flush=True)
+            # -----------------------------------------------
+
             with state_lock:
                 aktif_keys = list(AKTIF_GRID_SISTEMLERI.keys())
 
