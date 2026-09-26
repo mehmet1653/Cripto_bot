@@ -80,6 +80,11 @@ state_lock = threading.Lock()
 KALDIRAC = 5
 SON_BTC_YONU = "YATAY (Testere)"
 
+# ==================== MIN TP/SL TABANI (YENİ) ====================
+MIN_ATR_ORANI = 0.005   # Fiyatın en az %0.5'i ATR olarak kabul edilir
+# Bu sayede: TP en az %1.0, SL en az %0.75 olur
+# Komisyon (~%0.15) sonrası hâlâ kârlı kalır
+
 # ==================== HAFIZA ====================
 def hafizayi_yukle():
     print("💾 Hafıza Supabase'den yükleniyor...", flush=True)
@@ -132,7 +137,7 @@ COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 MAKSIMUM_TOPLAM_POZISYON = 2
 COOLDOWN_SURESI_SANIYE = 15 * 60
 
-# ==================== REJİM TESPİTİ (LOG EKLENDİ) ====================
+# ==================== REJİM TESPİTİ ====================
 def piyasa_rejimini_tespit_et():
     global SON_BTC_YONU
     try:
@@ -198,20 +203,36 @@ def emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker_data):
     except Exception:
         return {"tepeye_yakin": False, "dipe_yakin": False, "alis_orani": 50.0, "satis_orani": 50.0}
 
-# ==================== TP/SL HESABI ====================
+# ==================== TP/SL HESABI (MIN TABAN EKLENDİ) ====================
 def akilli_seviye_hesapla(anlik_fiyat, yon, df):
     atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
 
+    # 🆕 MİNİMUM ATR TABANI
+    # Piyasa çok sakinse (ATR küçükse) TP/SL komisyonu yenemez.
+    # Bu yüzden ATR'nin en az fiyatın %0.5'i kadar olmasını zorluyoruz.
+    # Sonuç: TP en az %1.0, SL en az %0.75
+    min_atr = anlik_fiyat * MIN_ATR_ORANI
+    kullanilacak_atr = max(atr, min_atr)
+
     if yon == 'LONG':
-        tp_fiyat = anlik_fiyat + (atr * 2.0)
-        sl_fiyat = anlik_fiyat - (atr * 1.5)
+        tp_fiyat = anlik_fiyat + (kullanilacak_atr * 2.0)
+        sl_fiyat = anlik_fiyat - (kullanilacak_atr * 1.5)
         kapat_yon = 'sell'
     else:
-        tp_fiyat = anlik_fiyat - (atr * 2.0)
-        sl_fiyat = anlik_fiyat + (atr * 1.5)
+        tp_fiyat = anlik_fiyat - (kullanilacak_atr * 2.0)
+        sl_fiyat = anlik_fiyat + (kullanilacak_atr * 1.5)
         kapat_yon = 'buy'
 
     hedef_roe = abs((tp_fiyat - anlik_fiyat) / anlik_fiyat) * 100 * KALDIRAC
+
+    # Log: ATR tabanı uygulandı mı?
+    if atr < min_atr:
+        print(
+            f"   🛡️ [MIN ATR] Gerçek ATR:{atr:.6f} → Kullanılan:{kullanilacak_atr:.6f} "
+            f"(TP:%{hedef_roe:.1f} RoE)",
+            flush=True
+        )
+
     return float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe)
 
 # ==================== TELEGRAM ====================
@@ -271,7 +292,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif edildi! (Ani Kırılım Koruması aktif)")
+    await update.message.reply_text("🟢 Bot aktif edildi! (Ani Kırılım + Min TP/SL Koruması aktif)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID):
@@ -301,7 +322,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Saf Teknik Bot + Ani Kırılım Koruması Aktif...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Saf Teknik Bot + Ani Kırılım + Min TP/SL Koruması Aktif...", flush=True)
     try:
         exchange.load_markets()
     except Exception:
@@ -501,7 +522,7 @@ def otomatik_arkaplan_tarayici():
             except Exception as e:
                 print(f"⚠️ Ani kırılım genel hata: {e}", flush=True)
 
-            # ==================== YENİ SİNYAL TARAMASI (LOG EKLENDİ) ====================
+            # ==================== YENİ SİNYAL TARAMASI ====================
             print(f"{'─'*55}", flush=True)
             print(f"🔍 [COİN TARAMA] Rejim: {piyasa_rejimi} | BTC: {btc_yonu}", flush=True)
             print(f"{'─'*55}", flush=True)
@@ -587,7 +608,7 @@ def otomatik_arkaplan_tarayici():
                     print(f"⚠️ Tarama hatası ({symbol}): {e}", flush=True)
                     continue
 
-            # ==================== EMİR AÇ (LOG EKLENDİ) ====================
+            # ==================== EMİR AÇ ====================
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU:
                     break
