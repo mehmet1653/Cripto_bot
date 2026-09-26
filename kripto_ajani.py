@@ -160,55 +160,23 @@ def piyasa_rejimini_tespit_et():
     except Exception:
         return "YATAY", "YATAY (Testere)"
 
-def emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker_data):
-    try:
-        high_24h = float(ticker_data.get('high') or anlik_fiyat * 1.02)
-        low_24h = float(ticker_data.get('low') or anlik_fiyat * 0.98)
-        
-        tepeye_yakin_mi = anlik_fiyat >= (high_24h * 0.994)
-        dipe_yakin_mi = anlik_fiyat <= (low_24h * 1.006)
-
-        order_book = exchange.fetch_order_book(symbol, limit=20)
-        bids = order_book.get('bids', [])
-        asks = order_book.get('asks', [])
-
-        toplam_alis_hacmi = sum([b[1] for b in bids]) if bids else 1.0
-        toplam_satis_hacmi = sum([a[1] for a in asks]) if asks else 1.0
-        toplam_hacim = toplam_alis_hacmi + toplam_satis_hacmi
-
-        alis_orani = (toplam_alis_hacmi / toplam_hacim) * 100
-        satis_orani = (toplam_satis_hacmi / toplam_hacim) * 100
-        
-        return {
-            "tepeye_yakin": tepeye_yakin_mi,
-            "dipe_yakin": dipe_yakin_mi,
-            "alis_orani": alis_orani,
-            "satis_orani": satis_orani
-        }
-    except Exception as e:
-        return {"tepeye_yakin": False, "dipe_yakin": False, "alis_orani": 50.0, "satis_orani": 50.0}
-
-def kademe_ve_atr_hesapla(anlik_fiyat, yon, df, piyasa_rejimi):
+def hedef_fiyatlari_hesapla(anlik_fiyat, yon, df, piyasa_rejimi):
     atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
     
-    # MESAFEYE DOKUNULMADI
-    giris_mesafe_carpani = 0.4 if piyasa_rejimi == "YATAY" else 0.2
     tp_carpani = 2.0 if piyasa_rejimi == "TREND" else 1.6
     sl_carpani = 1.3 if piyasa_rejimi == "TREND" else 1.2
 
     if yon == 'LONG':
-        giris_fiyati = anlik_fiyat - (atr * giris_mesafe_carpani)
-        tp_fiyat = giris_fiyati + (atr * tp_carpani)
-        sl_fiyat = giris_fiyati - (atr * sl_carpani)
+        tp_fiyat = anlik_fiyat + (atr * tp_carpani)
+        sl_fiyat = anlik_fiyat - (atr * sl_carpani)
         kapat_yon = 'sell'
     else:
-        giris_fiyati = anlik_fiyat + (atr * giris_mesafe_carpani)
-        tp_fiyat = giris_fiyati - (atr * tp_carpani)
-        sl_fiyat = giris_fiyati + (atr * sl_carpani)
+        tp_fiyat = anlik_fiyat - (atr * tp_carpani)
+        sl_fiyat = anlik_fiyat + (atr * sl_carpani)
         kapat_yon = 'buy'
         
-    hedef_roe = abs((tp_fiyat - giris_fiyati) / giris_fiyati) * 100 * KALDIRAC
-    return float(giris_fiyati), float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe)
+    hedef_roe = abs((tp_fiyat - anlik_fiyat) / anlik_fiyat) * 100 * KALDIRAC
+    return float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe)
 
 def telegram_mesaj_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID: return
@@ -242,7 +210,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 **BOT DURUM RAPORU (Tamamen Esnek Mod - 5x)**\n\n"
+            f"📊 **BOT DURUM RAPORU (Anında Market Giriş - 5x)**\n\n"
             f"🌐 Piyasa Rejimi: `{rejim}` (BTC Yön: `{btc_yon}`)\n"
             f"💰 Kasa: `{total:.2f} USDT` | Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -258,7 +226,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Esnek Bot (5x) aktif edildi!")
+    await update.message.reply_text("🟢 Anında Giriş Botu (5x) aktif edildi!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -287,7 +255,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Tamamen Esnek Bot Devrede...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Anında Market Giriş Botu Devrede...", flush=True)
     try:
         exchange.load_markets()
     except Exception: pass
@@ -309,39 +277,8 @@ def otomatik_arkaplan_tarayici():
                     if not kayit: continue
                     
                     durum = kayit.get("durum")
-                    order_id = kayit.get("order_id")
 
-                    if durum == "BEKLIYOR":
-                        order_info = exchange.fetch_order(order_id, eski_sym)
-                        order_status = order_info.get('status')
-
-                        if order_status == 'closed':
-                            kayit["durum"] = "DOLDURULDU"
-                            giris_fiyati = float(kayit["giris_fiyati"])
-                            tp_fiyat = float(kayit["tp_fiyat"])
-                            sl_fiyat = float(kayit["sl_fiyat"])
-                            kapat_yon = kayit["kapat_yon"]
-                            miktar = float(kayit["miktar"])
-
-                            try:
-                                exchange.create_order(eski_sym, 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
-                                exchange.create_order(eski_sym, 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
-                                print(f"🎯 [EMİR GERÇEKLEŞTİ] {eski_sym} için TP ve SL emirleri girildi.", flush=True)
-                                telegram_mesaj_gonder(
-                                    f"🎯 *KADEME LİMİTİ GERÇEKLEŞTİ (Pozisyon Açıldı)*\n"
-                                    f"📌 `{eski_sym}` | Giriş: `{giris_fiyati}`\n"
-                                    f"💰 TP: `{tp_fiyat}` | 🛑 SL: `{sl_fiyat}`"
-                                )
-                            except Exception as tp_err:
-                                print(f"⚠️ TP/SL basılırken hata: {tp_err}", flush=True)
-                            hafizayi_kaydet()
-
-                        elif order_status in ['canceled', 'rejected']:
-                            with state_lock:
-                                if eski_sym in AKTIF_GRID_SISTEMLERI: del AKTIF_GRID_SISTEMLERI[eski_sym]
-                            hafizayi_kaydet()
-
-                    elif durum == "DOLDURULDU":
+                    if durum == "DOLDURULDU":
                         raw_positions = exchange.fetch_positions([eski_sym])
                         pozisyon_var_mi = False
                         for p in raw_positions:
@@ -367,10 +304,10 @@ def otomatik_arkaplan_tarayici():
                                 
                                 if islem_karli_mi:
                                     bas_sayi += 1
-                                    sonuc_mesaj_tipi = "✅ *KADEME İŞLEMİ KÂRLA KAPANDI (TP)*"
+                                    sonuc_mesaj_tipi = "✅ *İŞLEM KÂRLA KAPANDI (TP)*"
                                 else:
                                     basarisiz_sayi += 1
-                                    sonuc_mesaj_tipi = "❌ *KADEME İŞLEMİ ZARARLA KAPANDI (SL)*"
+                                    sonuc_mesaj_tipi = "❌ *İŞLEM ZARARLA KAPANDI (SL)*"
                                     
                                 ANALitik_HAFIZA["basarili_islem_sayisi"] = bas_sayi
                                 ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
@@ -404,7 +341,9 @@ def otomatik_arkaplan_tarayici():
                     anlik_fiyat = float(ticker['last'])
                     
                     open_orders = exchange.fetch_open_orders(symbol)
-                    if len(open_orders) > 0: continue
+                    if len(open_orders) > 0:
+                        try: exchange.cancel_all_orders(symbol)
+                        except Exception: pass
 
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -413,7 +352,6 @@ def otomatik_arkaplan_tarayici():
                     indicator_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
                     bb_mid = indicator_bb.bollinger_mavg().iloc[-1]
 
-                    # KESİN ÇÖZÜM: Artık RSI eşik filtresi tamamen kaldırıldı! Sadece Bollinger orta çizgisinin altı/üstü baz alınıyor.
                     if piyasa_rejimi == "YATAY":
                         if anlik_fiyat < bb_mid:
                             islem_yonu = "LONG"
@@ -427,7 +365,7 @@ def otomatik_arkaplan_tarayici():
                             islem_yonu = "SHORT"
                         mod_adi = "NORMAL TREND"
 
-                    print(f"🎯 [UYGUN KADEME BULUNDU] [{mod_adi}] {symbol} 👉 {islem_yonu} | RSI: {rsi:.2f}", flush=True)
+                    print(f"🎯 [UYGUN FIRSAT BULUNDU] [{mod_adi}] {symbol} 👉 {islem_yonu} | RSI: {rsi:.2f}", flush=True)
 
                     taranan_sinyaller.append({
                         "symbol": symbol, "yon": islem_yonu, "rsi": rsi, "fiyat": anlik_fiyat, "df": df, "mod": mod_adi
@@ -452,8 +390,9 @@ def otomatik_arkaplan_tarayici():
                     kullanilacak_tutar = min(toplam_bakiye * 0.4, serbest_bakiye)
                     if kullanilacak_tutar < 1.0: continue
 
-                    giris_fiyati, tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = kademe_ve_atr_hesapla(
-                        sinyal["fiyat"], sinyal["yon"], sinyal["df"], piyasa_rejimi
+                    giris_fiyati = sinyal["fiyat"]
+                    tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = hedef_fiyatlari_hesapla(
+                        giris_fiyati, sinyal["yon"], sinyal["df"], piyasa_rejimi
                     )
 
                     miktar = float(exchange.amount_to_precision(
@@ -464,14 +403,19 @@ def otomatik_arkaplan_tarayici():
                     
                     emir_yonu = 'buy' if sinyal["yon"] == 'LONG' else 'sell'
                     
-                    giris_emir = exchange.create_order(sinyal["symbol"], 'limit', emir_yonu, miktar, giris_fiyati)
-                    order_id = giris_emir['id']
+                    # Doğrudan Market Emri İle Anında Giriş Yapılıyor
+                    giris_emir = exchange.create_order(sinyal["symbol"], 'market', emir_yonu, miktar)
+                    gerceklesen_giris = float(giris_emir.get('average', 0) or giris_emir.get('price', 0) or giris_fiyati)
+
+                    # TP ve SL Emirlerini Bas
+                    exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
+                    exchange.create_order(sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
 
                     with state_lock:
                         AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {
-                            "order_id": order_id,
-                            "durum": "BEKLIYOR",
-                            "giris_fiyati": giris_fiyati,
+                            "order_id": giris_emir['id'],
+                            "durum": "DOLDURULDU",
+                            "giris_fiyati": gerceklesen_giris,
                             "tp_fiyat": tp_fiyat,
                             "sl_fiyat": sl_fiyat,
                             "kapat_yon": kapat_yon,
@@ -483,9 +427,9 @@ def otomatik_arkaplan_tarayici():
                     hafizayi_kaydet()
                     
                     telegram_mesaj_gonder(
-                        f"🎯 *LİMİT GİRİŞ EMRİ BIRAKILDI ({sinyal['mod']} - 5x)*\n"
+                        f"🚀 *ANINDA MARKET GİRİŞİ YAPILDI ({sinyal['mod']} - 5x)*\n"
                         f"📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`\n"
-                        f"📍 Hedef Kademe: `{giris_fiyati}` (Bekleniyor)\n"
+                        f"📍 Giriş Fiyatı: `{gerceklesen_giris}`\n"
                         f"💰 Hedef TP: `{tp_fiyat}` (ROE: `%{hedef_roe:.1f}`)\n"
                         f"🛑 Stop-Loss: `{sl_fiyat}`"
                     )
