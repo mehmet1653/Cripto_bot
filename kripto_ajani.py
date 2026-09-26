@@ -44,9 +44,6 @@ CHAT_ID = os.environ.get("CHAT_ID", "").strip()
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
 
-print(f"DEBUG -> SUPABASE_URL Kontrolü: {'DOLU (' + SUPABASE_URL[:10] + '...)' if SUPABASE_URL else 'BOŞ!'}", flush=True)
-print(f"DEBUG -> SUPABASE_KEY Kontrolü: {'DOLU (Karakter Sayısı: ' + str(len(SUPABASE_KEY)) + ')' if SUPABASE_KEY else 'BOŞ!'}", flush=True)
-
 if not SUPABASE_URL or not SUPABASE_KEY:
     print("❌ KRİTİK HATA: SUPABASE_URL veya SUPABASE_KEY tanımlı değil!", flush=True)
     sys.exit(1)
@@ -135,7 +132,6 @@ COOLDOWN_SURESI_SANIYE = 10 * 60
 
 def piyasa_rejimini_tespit_et():
     global SON_BTC_YONU
-    print("🌐 [PİYASA] Sertleştirilmiş rejim analizi yapılıyor...", flush=True)
     try:
         ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=40)
         df_btc = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -160,10 +156,8 @@ def piyasa_rejimini_tespit_et():
             trend_yonu = "LONG" if ema9 > ema21 else "SHORT"
             SON_BTC_YONU = trend_yonu
             
-        print(f"🌐 [PİYASA SONUÇ] Rejim: {rejim} | Yön: {trend_yonu} | ADX: {adx_1h:.2f} | BB Genişlik: {bb_bandwidth:.4f} | Fark: %{fark_yuzdesi:.3f}", flush=True)
         return rejim, trend_yonu
-    except Exception as e:
-        print(f"⚠️ [PİYASA HATA] {e}. Varsayılan YATAY", flush=True)
+    except Exception:
         return "YATAY", "YATAY (Testere)"
 
 def emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker_data):
@@ -282,7 +276,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Düz Akış Botu Aktif (Order Book + Düz Yönlü Rejim)...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Düz Akış Botu Aktif (Tarama Sonuçları Gösteriliyor)...", flush=True)
     try:
         exchange.load_markets()
     except Exception: pass
@@ -370,37 +364,41 @@ def otomatik_arkaplan_tarayici():
                     alis_orani = emir_analizi["alis_orani"]
                     satis_orani = emir_analizi["satis_orani"]
 
-                    # DÜZELTİLEN KISIM: Testerede tersine değil, normal akışa uyuyoruz!
                     if piyasa_rejimi == "YATAY":
                         if rsi > 65: 
-                            islem_yonu = "LONG"    # Yüksek RSI -> Long Devam
+                            islem_yonu = "LONG"
                         elif rsi < 35: 
-                            islem_yonu = "SHORT"  # Düşük RSI -> Short Devam
+                            islem_yonu = "SHORT"
                         else: 
+                            print(f"🔍 [TARAMA] {symbol} | Rejim: {piyasa_rejimi} | RSI: {rsi:.2f} (Eşik dışı, pas geçildi)", flush=True)
                             continue
                         
-                        # Emir defteri teyidi (Düz akış)
                         if islem_yonu == "LONG" and not (alis_orani >= 52.0 or dipe_yakin):
+                            print(f"🔍 [TARAMA] {symbol} | Long yönlü ancak Alış OB oranı yetersiz (%{alis_orani:.1f})", flush=True)
                             continue
                         if islem_yonu == "SHORT" and not (satis_orani >= 52.0 or tepeye_yakin):
+                            print(f"🔍 [TARAMA] {symbol} | Short yönlü ancak Satış OB oranı yetersiz (%{satis_orani:.1f})", flush=True)
                             continue
                             
-                        mod_adi = "YATAY AKIŞ MODU (OB Teyitli)"
+                        mod_adi = "YATAY AKIŞ MODU"
                     else:
                         if btc_yonu == "LONG" and rsi < 55 and alis_orani >= 48.0:
                             islem_yonu = "LONG"
                         elif btc_yonu == "SHORT" and rsi > 45 and satis_orani >= 48.0:
                             islem_yonu = "SHORT"
                         else:
+                            print(f"🔍 [TARAMA] {symbol} | Trend uyumsuzluğu (BTC: {btc_yonu}, RSI: {rsi:.2f})", flush=True)
                             continue
                         mod_adi = "NORMAL TREND MODU"
 
-                    print(f"🔄 [{mod_adi}] {symbol} karar verildi 👉 {islem_yonu} | RSI: {rsi:.2f} | Alış%: {alis_orani:.1f} | Satış%: {satis_orani:.1f}", flush=True)
+                    print(f"🎯 [UYGUN SİNYAL BULUNDU] [{mod_adi}] {symbol} 👉 {islem_yonu} | RSI: {rsi:.2f} | Alış%: {alis_orani:.1f} | Satış%: {satis_orani:.1f}", flush=True)
 
                     taranan_sinyaller.append({
                         "symbol": symbol, "yon": islem_yonu, "rsi": rsi, "fiyat": anlik_fiyat, "df": df, "mod": mod_adi
                     })
-                except Exception: continue
+                except Exception as e:
+                    print(f"⚠️ [TARAMA HATA] {symbol}: {e}", flush=True)
+                    continue
 
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
@@ -461,7 +459,6 @@ def otomatik_arkaplan_tarayici():
         time.sleep(5)
 
 async def main():
-    # Çakışma hatasını önlemek için webhook'u temizle ve bekleyen güncellemeleri düşür
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True"
         await asyncio.to_thread(requests.get, url, timeout=10)
@@ -479,7 +476,6 @@ async def main():
     await app_tg.initialize()
     await app_tg.start()
     
-    # Döngü içinde çakışmaya karşı korumalı polling başlatma
     while True:
         try:
             await app_tg.updater.start_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
@@ -495,13 +491,11 @@ async def main():
     await stop_event.wait()
 
 if __name__ == '__main__':
-    # 1. Flask web sunucusunu Render port sorununu çözmek için arka planda başlatıyoruz
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
     print("🌐 Flask web sunucusu arka planda başlatıldı, port dinleniyor...", flush=True)
 
-    # 2. Botun ana asenkron döngüsünü başlatıyoruz
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
