@@ -163,51 +163,38 @@ def piyasa_rejimini_tespit_et():
         return "YATAY", "YATAY (Testere)"
 
 def emir_defteri_duvar_analizi(symbol, anlik_fiyat, yon, df):
-    """
-    Emir defterindeki (order book) yığılmaları (duvarları) tarar:
-    - Long için: En yakın büyük alış duvarının hemen üzerinden giriş, yukarıdaki satış duvarının hemen altından TP belirler.
-    - Short için: En yakın büyük satış duvarının hemen altından giriş, aşağıdaki alış duvarının hemen üstünden TP belirler.
-    Eğer defterde net duvar bulunamazsa ATR bazlı klasik güvenli hesaplamaya döner.
-    """
     try:
         order_book = exchange.fetch_order_book(symbol, limit=25)
-        bids = order_book.get('bids', []) # Alış emirleri [fiyat, miktar]
-        asks = order_book.get('asks', []) # Satış emirleri [fiyat, miktar]
+        bids = order_book.get('bids', []) 
+        asks = order_book.get('asks', []) 
         
         atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
 
         if not bids or not asks:
             raise Exception("Order book boş döndü")
 
-        # Duvar tespiti için ortalama hacmin katları olan yığılmaları arayalım
         bid_miktarlari = [b[1] for b in bids]
         ask_miktarlari = [a[1] for a in asks]
         
         ortalama_bid = sum(bid_miktarlari) / len(bid_miktarlari) if bid_miktarlari else 1
         ortalama_ask = sum(ask_miktarlari) / len(ask_miktarlari) if ask_miktarlari else 1
 
-        # En büyük alış duvarı (Destek yığılması)
         en_iyi_alis_duvari = max(bids, key=lambda x: x[1]) if bids else [anlik_fiyat - atr, 0]
-        # En büyük satış duvarı (Direnç yığılması)
         en_iyi_satis_duvari = max(asks, key=lambda x: x[1]) if asks else [anlik_fiyat + atr, 0]
 
         duvar_bilgisi = "ATR Yedekli"
 
         if yon == 'LONG':
-            # Senaryo: Altta 85'te yığılma var, biz 86-87'den (duvarın hemen üstünden) alacağız.
-            # Üstte 100'de yığılma var, biz 98-99'da (duvarın hemen altından) satacağız.
             duvar_fiyat_alis = en_iyi_alis_duvari[0]
             duvar_fiyat_satis = en_iyi_satis_duvari[0]
 
             if duvar_fiyat_alis < anlik_fiyat and en_iyi_alis_duvari[1] > (ortalama_bid * 1.5):
-                # Duvarın hemen üzerinden giriş kademesi ayarla
                 giris_fiyati = duvar_fiyat_alis + (atr * 0.1) 
                 duvar_bilgisi = f"Alış Duvarı: {duvar_fiyat_alis}"
             else:
                 giris_fiyati = anlik_fiyat
 
             if duvar_fiyat_satis > anlik_fiyat and en_iyi_satis_duvari[1] > (ortalama_ask * 1.5):
-                # Satış duvarının hemen altında kâr al (TP)
                 tp_fiyat = duvar_fiyat_satis - (atr * 0.15)
             else:
                 tp_fiyat = anlik_fiyat + (atr * 1.8)
@@ -215,19 +202,17 @@ def emir_defteri_duvar_analizi(symbol, anlik_fiyat, yon, df):
             sl_fiyat = giris_fiyati - (atr * 1.3)
             kapat_yon = 'sell'
 
-        else: # SHORT
+        else: 
             duvar_fiyat_alis = en_iyi_alis_duvari[0]
             duvar_fiyat_satis = en_iyi_satis_duvari[0]
 
             if duvar_fiyat_satis > anlik_fiyat and en_iyi_satis_duvari[1] > (ortalama_ask * 1.5):
-                # Satış duvarının hemen altından short giriş
                 giris_fiyati = duvar_fiyat_satis - (atr * 0.1)
                 duvar_bilgisi = f"Satış Duvarı: {duvar_fiyat_satis}"
             else:
                 giris_fiyati = anlik_fiyat
 
             if duvar_fiyat_alis < anlik_fiyat and en_iyi_alis_duvari[1] > (ortalama_bid * 1.5):
-                # Alış duvarının hemen üstünde kâr al (TP)
                 tp_fiyat = duvar_fiyat_alis + (atr * 0.15)
             else:
                 tp_fiyat = anlik_fiyat - (atr * 1.8)
@@ -273,6 +258,9 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         basari_orani = (basarili / toplam_islem * 100) if toplam_islem > 0 else 0.0
 
         pos_detaylari = ""
+        with state_lock:
+            aktif_sistemler_kopya = dict(AKTIF_GRID_SISTEMLERI)
+
         for p in borsa_poslari:
             sym = p['symbol']
             yon = str(p.get('side', '')).upper() or "LONG"
@@ -282,7 +270,14 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             guncel_fiyat = float(ticker_data['last'])
             fark = (guncel_fiyat - giris) / giris if yon == "LONG" else (giris - guncel_fiyat) / giris
             roe = fark * 100 * kaldirac_val
-            pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
+            
+            kayit_bilgi = aktif_sistemler_kopya.get(sym, {})
+            tp_fiyat = kayit_bilgi.get("tp_fiyat", 0)
+            if tp_fiyat > 0:
+                hedef_fark = abs((tp_fiyat - giris) / giris) * 100 * kaldirac_val
+                pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}` | Hedef TP: `{tp_fiyat}` (`%{hedef_fark:.1f}`)"
+            else:
+                pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
             f"📊 **BOT DURUM RAPORU (Emir Defteri Duvar Analizli - 5x)**\n\n"
@@ -346,7 +341,6 @@ def otomatik_arkaplan_tarayici():
             print("🔄 [YENİ DÖNGÜ] Piyasa ve coinler duvar analiziyle taranıyor...", flush=True)
             piyasa_rejimi, btc_yonu = piyasa_rejimini_tespit_et()
 
-            # --- BORSA İLE HAFIZA OTOMATİK SENKRONİZASYONU ---
             try:
                 borsa_gercek_pozlar = exchange.fetch_positions()
                 acik_semboller = [p['symbol'] for p in borsa_gercek_pozlar if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
@@ -355,12 +349,10 @@ def otomatik_arkaplan_tarayici():
                     hafiza_keys = list(AKTIF_GRID_SISTEMLERI.keys())
                     for h_sym in hafiza_keys:
                         if h_sym not in acik_semboller:
-                            print(f"🧹 [SENKRONİZASYON] {h_sym} borsada kapalı, hafızadan temizleniyor...", flush=True)
                             del AKTIF_GRID_SISTEMLERI[h_sym]
                             hafizayi_kaydet()
             except Exception as sync_err:
                 print(f"⚠️ Senkronizasyon kontrolü sırasında hata: {sync_err}", flush=True)
-            # -----------------------------------------------
 
             with state_lock:
                 aktif_keys = list(AKTIF_GRID_SISTEMLERI.keys())
@@ -492,7 +484,6 @@ def otomatik_arkaplan_tarayici():
                         print(f"⚠️ [BAKİYE YETERSİZ] Kullanılabilir bakiye çok düşük: {kullanilacak_tutar} USDT", flush=True)
                         continue
 
-                    # --- DUVAR ANALİZİ İLE GİRİŞ VE HEDEF FİYAT TAYİNİ ---
                     tp_fiyat, sl_fiyat, kapat_yon, hedef_roe, ideal_giris = emir_defteri_duvar_analizi(
                         sinyal["symbol"], sinyal["fiyat"], sinyal["yon"], sinyal["df"]
                     )
