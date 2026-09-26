@@ -71,7 +71,7 @@ BOT_CALISIYOR_MU = True
 state_lock = threading.RLock()
 KALDIRAC = 5
 MAKSIMUM_TOPLAM_POZISYON = 2
-COOLDOWN_SURESI_SANIYE = 15 * 60   # ✅ 15 dakika
+COOLDOWN_SURESI_SANIYE = 15 * 60   # 15 dakika
 TARAMA_ARALIGI = 10
 HACIM_ESIGI = 0.3
 MIN_TP_YUZDE = 0.005
@@ -392,7 +392,7 @@ def durum_cache_guncelle():
 
             if tp_fiyat > 0:
                 hedef_roe = abs((tp_fiyat - giris) / giris) * 100 * lev
-                sl_roe = abs((sl_fiyat - giris) / giris) * 100 * lev
+                sl_roe = abs((sl_fiyat - giris) / giris) * 100 * lev if sl_fiyat > 0 else 0
                 detay += (
                     f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n"
                     f"  Anlık ROE: `%{roe:+.2f}`\n"
@@ -493,7 +493,6 @@ def otomatik_arkaplan_tarayici():
                         else:
                             karlimi = (cikis > giris_f) if yon == "LONG" else (cikis < giris_f)
 
-                        # ROE hesapla
                         if yon == "LONG":
                             pnl_yuzde = (cikis - giris_f) / giris_f * 100 * KALDIRAC
                         else:
@@ -506,7 +505,6 @@ def otomatik_arkaplan_tarayici():
                             ANALITIK_HAFIZA["basarisiz_islem_sayisi"] = int(ANALITIK_HAFIZA.get("basarisiz_islem_sayisi", 0)) + 1
                             tip = "❌ *ZARAR İLE KAPANDI (SL)*"
 
-                        # COOLDOWN SET ET
                         COIN_COOLDOWNLAR[s] = {
                             "zaman": float(time.time() + COOLDOWN_SURESI_SANIYE),
                             "son_yon": yon
@@ -525,6 +523,89 @@ def otomatik_arkaplan_tarayici():
                 hafizayi_kaydet()
             except Exception as e:
                 print(f"⚠️ senkron hata: {e}", flush=True)
+
+            # 2.5) YAZILIMSAL SL/TP KONTROLÜ (borsa SL emrine güvenmiyoruz)
+            with state_lock:
+                kontrol_listesi = list(AKTIF_GRID_SISTEMLERI.items())
+
+            for sym, kayit in kontrol_listesi:
+                try:
+                    sl_f = float(kayit.get("sl_fiyat", 0) or 0)
+                    tp_f = float(kayit.get("tp_fiyat", 0) or 0)
+                    if sl_f <= 0 and tp_f <= 0:
+                        continue
+
+                    yon = kayit.get("yon", "LONG")
+                    giris = float(kayit.get("giris_fiyati", 0))
+
+                    try:
+                        t = exchange.fetch_ticker(sym)
+                        anlik = float(t['last'])
+                    except Exception:
+                        continue
+
+                    sl_vurdu = False
+                    tp_vurdu = False
+
+                    if yon == "LONG":
+                        if sl_f > 0 and anlik <= sl_f:
+                            sl_vurdu = True
+                        if tp_f > 0 and anlik >= tp_f:
+                            tp_vurdu = True
+                    else:
+                        if sl_f > 0 and anlik >= sl_f:
+                            sl_vurdu = True
+                        if tp_f > 0 and anlik <= tp_f:
+                            tp_vurdu = True
+
+                    if sl_vurdu or tp_vurdu:
+                        tip = "🛑 *SL VURDU (Yazılımsal)*" if sl_vurdu else "🎯 *TP VURDU (Yazılımsal)*"
+                        print(f"⚡ [MANUEL KAPAT] {sym} | {tip} | Anlık:{anlik} | SL:{sl_f} | TP:{tp_f}", flush=True)
+
+                        try:
+                            try:
+                                exchange.cancel_all_orders(sym)
+                            except Exception:
+                                pass
+                            positions = exchange.fetch_positions([sym])
+                            for p in positions:
+                                kontrat = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+                                if kontrat > 0:
+                                    kapatma_yon = 'sell' if yon == 'LONG' else 'buy'
+                                    exchange.create_order(sym, 'market', kapatma_yon, kontrat, None, {'reduceOnly': True})
+                                    print(f"   ✅ {sym} manuel kapatıldı ({kontrat} kontrat)", flush=True)
+                        except Exception as e:
+                            print(f"   ⚠️ Manuel kapatma hatası: {e}", flush=True)
+
+                        if yon == "LONG":
+                            pnl_yuzde = (anlik - giris) / giris * 100 * KALDIRAC
+                        else:
+                            pnl_yuzde = (giris - anlik) / giris * 100 * KALDIRAC
+
+                        with state_lock:
+                            if sl_vurdu:
+                                ANALITIK_HAFIZA["basarisiz_islem_sayisi"] = int(ANALITIK_HAFIZA.get("basarisiz_islem_sayisi", 0)) + 1
+                            else:
+                                ANALITIK_HAFIZA["basarili_islem_sayisi"] = int(ANALITIK_HAFIZA.get("basarili_islem_sayisi", 0)) + 1
+
+                            COIN_COOLDOWNLAR[sym] = {
+                                "zaman": float(time.time() + COOLDOWN_SURESI_SANIYE),
+                                "son_yon": yon
+                            }
+                            if sym in AKTIF_GRID_SISTEMLERI:
+                                del AKTIF_GRID_SISTEMLERI[sym]
+
+                        hafizayi_kaydet()
+
+                        telegram_mesaj_gonder(
+                            f"{tip}\n"
+                            f"📌 `{sym}` | {yon}\n"
+                            f"📍 Giriş: `{giris}` → Çıkış: `{anlik}`\n"
+                            f"📊 Sonuç ROE: `%{pnl_yuzde:+.2f}`\n"
+                            f"⏳ Cooldown: {COOLDOWN_SURESI_SANIYE // 60} dakika"
+                        )
+                except Exception as e:
+                    print(f"⚠️ SL/TP kontrol ({sym}): {e}", flush=True)
 
             # 3) Yeni tarama
             with state_lock:
@@ -622,7 +703,7 @@ def otomatik_arkaplan_tarayici():
                     except Exception as e:
                         print(f"⚠️ tarama ({symbol}): {e}", flush=True)
 
-                # 4) Emir aç (cooldown + zaten açık kontrolü ile)
+                # 4) Emir aç
                 for sinyal in taranan:
                     if not BOT_CALISIYOR_MU:
                         break
@@ -672,18 +753,42 @@ def otomatik_arkaplan_tarayici():
                         giris_emir = exchange.create_order(sinyal["symbol"], 'market', emir_yonu, miktar)
                         gerceklesen = float(giris_emir.get('average', 0) or giris_emir.get('price', 0) or ideal_giris)
 
+                        # ✅ TP emri (limit reduce-only)
                         try:
-                            exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp, {'reduceOnly': True})
-                        except Exception as e:
-                            print(f"⚠️ TP emri hatası: {e}", flush=True)
-
-                        try:
-                            exchange.create_order(
-                                sinyal["symbol"], 'stop', kapat_yon, miktar, None,
-                                {'stopPrice': sl, 'reduceOnly': True}
+                            tp_emir = exchange.create_order(
+                                sinyal["symbol"], 'limit', kapat_yon, miktar, tp,
+                                {'reduceOnly': True}
                             )
+                            print(f"   ✅ TP emri gönderildi: {tp} (id:{tp_emir.get('id','?')})", flush=True)
                         except Exception as e:
-                            print(f"⚠️ SL emri hatası: {e}", flush=True)
+                            print(f"   ❌ TP emri HATA: {e}", flush=True)
+
+                        # ✅ SL emri (stop-market, Gate.io çoklu deneme)
+                        sl_gonderildi = False
+                        sl_denemeler = [
+                            {'stopPrice': sl, 'reduceOnly': True, 'type': 'market', 'trigger': 'last'},
+                            {'stopPrice': sl, 'reduceOnly': True, 'type': 'market', 'trigger': 'mark'},
+                            {'stopPrice': sl, 'reduceOnly': True},
+                        ]
+                        for idx, params in enumerate(sl_denemeler, 1):
+                            try:
+                                sl_emir = exchange.create_order(
+                                    sinyal["symbol"], 'stop', kapat_yon, miktar, None, params
+                                )
+                                print(f"   ✅ SL emri gönderildi (deneme {idx}): {sl} | id:{sl_emir.get('id','?')}", flush=True)
+                                sl_gonderildi = True
+                                break
+                            except Exception as e:
+                                print(f"   ⚠️ SL deneme {idx} hata: {e}", flush=True)
+
+                        if not sl_gonderildi:
+                            print(f"   🚨 SL EMRİ GÖNDERİLEMEDİ — yazılımsal koruma devrede!", flush=True)
+                            telegram_mesaj_gonder(
+                                f"🚨 *SL EMRİ GÖNDERİLEMEDİ*\n"
+                                f"📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`\n"
+                                f"🛑 Yazılımsal SL: `{sl}`\n"
+                                f"⏱️ Bot her 10 sn'de kontrol edip manuel kapatacak."
+                            )
 
                         with state_lock:
                             AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {
