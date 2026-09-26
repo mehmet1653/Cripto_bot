@@ -241,7 +241,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 **BOT DURUM RAPORU (Hibrit Mod - 5x)**\n\n"
+            f"📊 **BOT DURUM RAPORU (Düz Akış Modu - 5x)**\n\n"
             f"🌐 Piyasa Rejimi: `{rejim}` (BTC Yön: `{btc_yon}`)\n"
             f"💰 Kasa: `{total:.2f} USDT` | Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -257,7 +257,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Hibrit Bot (5x) aktif edildi!")
+    await update.message.reply_text("🟢 Düz Akış Botu (5x) aktif edildi!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -282,7 +282,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Hibrit Bot Aktif (Order Book + Sertleştirilmiş Rejim)...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Düz Akış Botu Aktif (Order Book + Düz Yönlü Rejim)...", flush=True)
     try:
         exchange.load_markets()
     except Exception: pass
@@ -370,22 +370,22 @@ def otomatik_arkaplan_tarayici():
                     alis_orani = emir_analizi["alis_orani"]
                     satis_orani = emir_analizi["satis_orani"]
 
+                    # DÜZELTİLEN KISIM: Testerede tersine değil, normal akışa uyuyoruz!
                     if piyasa_rejimi == "YATAY":
-                        if rsi < 35: 
-                            ham_yon = "LONG"
-                        elif rsi > 65: 
-                            ham_yon = "SHORT"
+                        if rsi > 65: 
+                            islem_yonu = "LONG"    # Yüksek RSI -> Long Devam
+                        elif rsi < 35: 
+                            islem_yonu = "SHORT"  # Düşük RSI -> Short Devam
                         else: 
                             continue
                         
-                        islem_yonu = "SHORT" if ham_yon == "LONG" else "LONG"
-                        
-                        if islem_yonu == "SHORT" and not (satis_orani >= 52.0 or tepeye_yakin):
-                            continue
+                        # Emir defteri teyidi (Düz akış)
                         if islem_yonu == "LONG" and not (alis_orani >= 52.0 or dipe_yakin):
                             continue
+                        if islem_yonu == "SHORT" and not (satis_orani >= 52.0 or tepeye_yakin):
+                            continue
                             
-                        mod_adi = "TERS MOD (Testere + OB Teyitli)"
+                        mod_adi = "YATAY AKIŞ MODU (OB Teyitli)"
                     else:
                         if btc_yonu == "LONG" and rsi < 55 and alis_orani >= 48.0:
                             islem_yonu = "LONG"
