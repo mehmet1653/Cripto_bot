@@ -76,14 +76,20 @@ TAKIP_EDILENLER = [
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
-KALDIRAC = 5
 SON_BTC_YONU = "YATAY (Testere)"
 
-# ==================== ÇOKLU ZAMAN DİLİMİ ATR AYARLARI ====================
-KOMISYON_ORANI = 0.0015        # %0.15 (giriş + çıkış toplam)
+# ==================== DİNAMİK KALDIRAÇ AYARLARI ====================
+KALDIRAC_MIN = 5
+KALDIRAC_ORTA = 6
+KALDIRAC_MAX = 7
+ATR_ESIK_YUKSEK = 0.008   # ATR > %0.8 → 5x (volatil)
+ATR_ESIK_DUSUK = 0.004    # ATR < %0.4 → 7x (sakin)
+
+# ==================== TP/SL AYARLARI ====================
+KOMISYON_ORANI = 0.0015          # %0.15 (giriş + çıkış + spread payı)
 BEKLENEN_HAREKET_TP_ORANI = 0.5  # Beklenen hareketin %50'si TP
-BEKLENEN_HAREKET_SL_ORANI = 0.33 # Beklenen hareketin %33'ü SL (R/R ~1.5)
-MIN_NET_RR = 1.2               # Minimum net R/R (komisyon sonrası)
+BEKLENEN_HAREKET_SL_ORANI = 0.33 # Beklenen hareketin %33'ü SL
+MIN_NET_RR = 1.2                 # Minimum net R/R
 
 # ==================== HAFIZA ====================
 def hafizayi_yukle():
@@ -136,6 +142,29 @@ COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
 MAKSIMUM_TOPLAM_POZISYON = 2
 COOLDOWN_SURESI_SANIYE = 15 * 60
+
+# ==================== DİNAMİK KALDIRAÇ HESABI ====================
+def dinamik_kaldirac_hesapla(symbol, anlik_fiyat):
+    """
+    Coinin ATR oranına göre kaldıraç belirler.
+    Sakin piyasa → yüksek kaldıraç (7x) → komisyonu yen
+    Volatil piyasa → düşük kaldıraç (5x) → gereksiz risk alma
+    """
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=30)
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
+        atr_orani = atr / anlik_fiyat
+
+        if atr_orani < ATR_ESIK_DUSUK:
+            return KALDIRAC_MAX, atr_orani       # 7x
+        elif atr_orani < ATR_ESIK_YUKSEK:
+            return KALDIRAC_ORTA, atr_orani      # 6x
+        else:
+            return KALDIRAC_MIN, atr_orani       # 5x
+    except Exception as e:
+        print(f"⚠️ Kaldıraç hesap hatası ({symbol}): {e}", flush=True)
+        return KALDIRAC_MIN, 0.01  # Güvenli taraf
 
 # ==================== REJİM TESPİTİ ====================
 def piyasa_rejimini_tespit_et():
@@ -221,7 +250,6 @@ def beklenen_hareket_hesapla(symbol, anlik_fiyat, ticker_data):
     tahminler = []
 
     try:
-        # 15m ATR × 4 = 1 saatlik potansiyel
         ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=30)
         df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         atr_15m = ta.volatility.AverageTrueRange(df_15m['high'], df_15m['low'], df_15m['close'], window=14).average_true_range().iloc[-1]
@@ -230,7 +258,6 @@ def beklenen_hareket_hesapla(symbol, anlik_fiyat, ticker_data):
         pass
 
     try:
-        # 1h ATR × 2 = 2 saatlik potansiyel
         ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=30)
         df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         atr_1h = ta.volatility.AverageTrueRange(df_1h['high'], df_1h['low'], df_1h['close'], window=14).average_true_range().iloc[-1]
@@ -239,7 +266,6 @@ def beklenen_hareket_hesapla(symbol, anlik_fiyat, ticker_data):
         pass
 
     try:
-        # 4h ATR = 4 saatlik potansiyel
         ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=30)
         df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         atr_4h = ta.volatility.AverageTrueRange(df_4h['high'], df_4h['low'], df_4h['close'], window=14).average_true_range().iloc[-1]
@@ -248,7 +274,6 @@ def beklenen_hareket_hesapla(symbol, anlik_fiyat, ticker_data):
         pass
 
     try:
-        # 24h range'in %30'u (günlük potansiyelin bir kısmı)
         high_24h = float(ticker_data.get('high') or anlik_fiyat)
         low_24h = float(ticker_data.get('low') or anlik_fiyat)
         gunluk_range = high_24h - low_24h
@@ -256,30 +281,22 @@ def beklenen_hareket_hesapla(symbol, anlik_fiyat, ticker_data):
     except Exception:
         pass
 
-    # Eğer hiç tahmin yoksa, 15m ATR'ye fallback
     if not tahminler:
-        return anlik_fiyat * 0.005  # %0.5 varsayılan
+        return anlik_fiyat * 0.005
 
-    # En büyük potansiyel
     beklenen = max(tahminler)
-
-    # Çok agresif olmamak için üst sınır: fiyatın %5'i
     max_hareket = anlik_fiyat * 0.05
     beklenen = min(beklenen, max_hareket)
 
     return float(beklenen)
 
-# ==================== TP/SL HESABI (ÇOKLU ZAMAN DİLİMİ) ====================
-def akilli_seviye_hesapla(symbol, anlik_fiyat, yon, ticker_data):
-    # Çoklu zaman dilimi beklenen hareket
+# ==================== TP/SL HESABI ====================
+def akilli_seviye_hesapla(symbol, anlik_fiyat, yon, ticker_data, kaldirac):
     beklenen_hareket = beklenen_hareket_hesapla(symbol, anlik_fiyat, ticker_data)
 
-    # TP = beklenen hareketin %50'si
     tp_mesafe = beklenen_hareket * BEKLENEN_HAREKET_TP_ORANI
-    # SL = beklenen hareketin %33'ü (R/R ~1.5)
     sl_mesafe = beklenen_hareket * BEKLENEN_HAREKET_SL_ORANI
 
-    # Komisyon hesabı (net R/R kontrolü için)
     komisyon = anlik_fiyat * KOMISYON_ORANI
     net_kar = tp_mesafe - komisyon
     net_zarar = sl_mesafe + komisyon
@@ -294,7 +311,7 @@ def akilli_seviye_hesapla(symbol, anlik_fiyat, yon, ticker_data):
         sl_fiyat = anlik_fiyat + sl_mesafe
         kapat_yon = 'buy'
 
-    hedef_roe = (tp_mesafe / anlik_fiyat) * 100 * KALDIRAC
+    hedef_roe = (tp_mesafe / anlik_fiyat) * 100 * kaldirac
 
     return float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe), float(net_rr)
 
@@ -330,12 +347,12 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sym = p['symbol']
             yon = str(p.get('side', '')).upper() or "LONG"
             giris = float(p.get('entryPrice', 0))
-            kaldirac_val = int(p.get('leverage', KALDIRAC))
+            kaldirac_val = int(p.get('leverage', 5))
             ticker_data = await asyncio.to_thread(exchange.fetch_ticker, sym)
             guncel_fiyat = float(ticker_data['last'])
             fark = (guncel_fiyat - giris) / giris if yon == "LONG" else (giris - guncel_fiyat) / giris
             roe = fark * 100 * kaldirac_val
-            pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
+            pos_detaylari += f"\n• `{sym}` | {yon} ({kaldirac_val}x) | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
             f"📊 *BOT DURUM RAPORU*\n\n"
@@ -355,7 +372,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (Çoklu zaman dilimi ATR + komisyon filtresi)")
+    await update.message.reply_text("🟢 Bot aktif! (Dinamik kaldıraç 5x-7x + komisyon filtresi)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID):
@@ -385,7 +402,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Bot Aktif (Çoklu zaman dilimi ATR + komisyon filtresi)...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Bot Aktif (Dinamik kaldıraç + çoklu zaman dilimi ATR + komisyon filtresi)...", flush=True)
     try:
         exchange.load_markets()
     except Exception:
@@ -437,11 +454,8 @@ def otomatik_arkaplan_tarayici():
                         try:
                             ticker = exchange.fetch_ticker(eski_sym)
                             cikis_fiyati = float(ticker['last'])
-
-                            # TP/SL mesafesine göre hangisine yakın kapandı?
                             tp_uzaklik = abs(cikis_fiyati - tp_kayitli)
                             sl_uzaklik = abs(cikis_fiyati - sl_kayitli)
-
                             islem_karli_mi = tp_uzaklik < sl_uzaklik
                         except Exception:
                             islem_karli_mi = cikis_fiyati > giris_fiyati if yon == "LONG" else cikis_fiyati < giris_fiyati
@@ -562,9 +576,9 @@ def otomatik_arkaplan_tarayici():
                                 print(f"   ⚠️ Kapatma hatası: {e}", flush=True)
 
                             if yon_k == "LONG":
-                                pnl_yuzde = (anlik_k - giris_k) / giris_k * 100 * KALDIRAC
+                                pnl_yuzde = (anlik_k - giris_k) / giris_k * 100 * 5
                             else:
-                                pnl_yuzde = (giris_k - anlik_k) / giris_k * 100 * KALDIRAC
+                                pnl_yuzde = (giris_k - anlik_k) / giris_k * 100 * 5
 
                             with state_lock:
                                 if pnl_yuzde > 0:
@@ -630,11 +644,9 @@ def otomatik_arkaplan_tarayici():
                         if rsi < 35:
                             islem_yonu = "SHORT"
                             mod_adi = "TERS MOD (Testere)"
-                            sebep_log = f"Testere dibi (RSI {rsi:.1f}<35) → TERS SHORT"
                         elif rsi > 65:
                             islem_yonu = "LONG"
                             mod_adi = "TERS MOD (Testere)"
-                            sebep_log = f"Testere tepesi (RSI {rsi:.1f}>65) → TERS LONG"
                         else:
                             print(f"🔍 [{symbol}] RSI {rsi:.1f} nötr — beklemede", flush=True)
                             continue
@@ -642,33 +654,34 @@ def otomatik_arkaplan_tarayici():
                         if btc_yonu == "LONG" and rsi < 55:
                             islem_yonu = "LONG"
                             mod_adi = "NORMAL TREND MODU"
-                            sebep_log = f"BTC trendi LONG (RSI {rsi:.1f})"
                         elif btc_yonu == "SHORT" and rsi > 45:
                             islem_yonu = "SHORT"
                             mod_adi = "NORMAL TREND MODU"
-                            sebep_log = f"BTC trendi SHORT (RSI {rsi:.1f})"
                         else:
                             print(f"🔍 [{symbol}] Trend koşulu uygun değil (RSI {rsi:.1f})", flush=True)
                             continue
 
-                    # 🆕 ÇOKLU ZAMAN DİLİMİ TP/SL HESABI
+                    # 🆕 DİNAMİK KALDIRAÇ
+                    kaldirac, atr_orani = dinamik_kaldirac_hesapla(symbol, anlik_fiyat)
+
+                    # TP/SL hesabı (dinamik kaldıraç ile)
                     tp_fiyat, sl_fiyat, kapat_yon, hedef_roe, net_rr = akilli_seviye_hesapla(
-                        symbol, anlik_fiyat, islem_yonu, ticker
+                        symbol, anlik_fiyat, islem_yonu, ticker, kaldirac
                     )
 
                     # 🆕 KOMİSYON FİLTRESİ
                     if net_rr < MIN_NET_RR:
                         print(
-                            f"⏭️ [{symbol}] Net R/R düşük ({net_rr:.2f} < {MIN_NET_RR}) — "
-                            f"TP:%{hedef_roe:.1f} RoE, komisyon yenmiyor",
+                            f"⏭️ [{symbol}] Net R/R düşük ({net_rr:.2f} < {MIN_NET_RR}) | "
+                            f"{kaldirac}x | TP:%{hedef_roe:.1f} RoE",
                             flush=True
                         )
                         continue
 
                     print(
                         f"🔍 [{symbol}] Fiyat:{anlik_fiyat:.4f} | RSI:{rsi:.1f} | "
-                        f"Hacim x{hacim_orani_log:.2f} | ATR:{atr_log:.4f} | "
-                        f"→ {islem_yonu} ({mod_adi}) | TP:%{hedef_roe:.1f} RoE | Net R/R:{net_rr:.2f} ✅",
+                        f"ATR:%{atr_orani*100:.2f} | Kaldıraç:{kaldirac}x | "
+                        f"→ {islem_yonu} | TP:%{hedef_roe:.1f} RoE | Net R/R:{net_rr:.2f} ✅",
                         flush=True
                     )
 
@@ -676,7 +689,8 @@ def otomatik_arkaplan_tarayici():
                         "symbol": symbol, "yon": islem_yonu, "rsi": rsi,
                         "fiyat": anlik_fiyat, "df": df, "mod": mod_adi,
                         "tp_fiyat": tp_fiyat, "sl_fiyat": sl_fiyat,
-                        "kapat_yon": kapat_yon, "hedef_roe": hedef_roe
+                        "kapat_yon": kapat_yon, "hedef_roe": hedef_roe,
+                        "kaldirac": kaldirac
                     })
                 except Exception as e:
                     print(f"⚠️ Tarama hatası ({symbol}): {e}", flush=True)
@@ -692,13 +706,14 @@ def otomatik_arkaplan_tarayici():
                     break
 
                 try:
-                    print(f"🚀 [EMİR GÖNDERİLİYOR] {sinyal['symbol']} | {sinyal['yon']} | {sinyal['mod']}", flush=True)
+                    print(f"🚀 [EMİR GÖNDERİLİYOR] {sinyal['symbol']} | {sinyal['yon']} | {sinyal['mod']} | {sinyal['kaldirac']}x", flush=True)
 
                     bakiye_bilgisi = exchange.fetch_balance()
                     toplam_bakiye = float(bakiye_bilgisi['total'].get('USDT', 0))
                     serbest_bakiye = float(bakiye_bilgisi.get('free', {}).get('USDT', 0) or 0)
 
-                    exchange.set_leverage(KALDIRAC, sinyal["symbol"])
+                    kaldirac = sinyal["kaldirac"]
+                    exchange.set_leverage(kaldirac, sinyal["symbol"])
                     market = exchange.market(sinyal["symbol"])
 
                     kullanilacak_tutar = min(toplam_bakiye * 0.4, serbest_bakiye)
@@ -714,7 +729,7 @@ def otomatik_arkaplan_tarayici():
 
                     miktar = float(exchange.amount_to_precision(
                         sinyal["symbol"],
-                        max((kullanilacak_tutar * KALDIRAC) / giris_fiyati / float(market.get('contractSize', 1.0)),
+                        max((kullanilacak_tutar * kaldirac) / giris_fiyati / float(market.get('contractSize', 1.0)),
                             float(market['limits']['amount']['min'] or 1.0))
                     ))
 
@@ -737,15 +752,16 @@ def otomatik_arkaplan_tarayici():
                             "sl_fiyat": sl_fiyat,
                             "giris_rsi": float(sinyal["rsi"]),
                             "giris_zamani": time.time(),
-                            "mod": sinyal["mod"]
+                            "mod": sinyal["mod"],
+                            "kaldirac": kaldirac
                         }
                         aktif_semboller_listesi.append(sinyal["symbol"])
                     hafizayi_kaydet()
 
-                    print(f"✅ [AÇILDI] {sinyal['symbol']} {sinyal['yon']} @ {giris_fiyati} | TP:{tp_fiyat} SL:{sl_fiyat} | RoE:%{hedef_roe:.1f}", flush=True)
+                    print(f"✅ [AÇILDI] {sinyal['symbol']} {sinyal['yon']} @ {giris_fiyati} ({kaldirac}x) | TP:{tp_fiyat} SL:{sl_fiyat} | RoE:%{hedef_roe:.1f}", flush=True)
 
                     telegram_mesaj_gonder(
-                        f"🎯 *İŞLEM GİRİŞİ ({sinyal['mod']} - 5x)*\n"
+                        f"🎯 *İŞLEM GİRİŞİ ({sinyal['mod']} - {kaldirac}x)*\n"
                         f"📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`\n"
                         f"🎯 Giriş: `{giris_fiyati}`\n"
                         f"💰 Hedef TP: `{tp_fiyat}` (Hedef ROE: `%{hedef_roe:.1f}`)\n"
