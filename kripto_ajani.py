@@ -364,7 +364,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (Mod 3 ters mantık)")
+    await update.message.reply_text("🟢 Bot aktif! (Mod 3 düz mantık + SL koruması)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -389,7 +389,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] 3 Mod + Mod3 ters mantık...", flush=True)
+    print("🚀 [BAŞLANGIÇ] 3 Mod + Mod3 düz mantık + SL koruması...", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -510,7 +510,7 @@ def otomatik_arkaplan_tarayici():
 
                     elif piyasa_rejimi in ["TREND", "TREND_ZAYIF"]:
                         if kirilim_var:
-                            # MOD 1: BTC yönünde kırılım
+                            # MOD 1
                             if btc_yonu == "SHORT" and kirilim_yonu == "SHORT":
                                 islem_yonu = "SHORT"
                                 mod = f"MOD1 TREND (BTC+Kırılım SHORT)"
@@ -521,13 +521,13 @@ def otomatik_arkaplan_tarayici():
                                 print(f"⏭️ [{symbol}] MOD1 BTC:{btc_yonu} vs Kırılım:{kirilim_yonu}", flush=True)
                                 continue
                         else:
-                            # 🆕 MOD 3: TERS MANTIK (RSI ters)
+                            # 🆕 MOD 3: DÜZ MANTIK
                             if rsi < COIN_TESTERE_RSI_ALT:
-                                islem_yonu = "LONG"   # 🆕 Ters: RSI<45 → LONG
-                                mod = f"MOD3 TERS (RSI:{rsi:.1f}<45→LONG)"
+                                islem_yonu = "SHORT"  # Düz: RSI<45 → SHORT
+                                mod = f"MOD3 DÜZ (RSI:{rsi:.1f}<45→SHORT)"
                             elif rsi > COIN_TESTERE_RSI_UST:
-                                islem_yonu = "SHORT"  # 🆕 Ters: RSI>55 → SHORT
-                                mod = f"MOD3 TERS (RSI:{rsi:.1f}>55→SHORT)"
+                                islem_yonu = "LONG"   # Düz: RSI>55 → LONG
+                                mod = f"MOD3 DÜZ (RSI:{rsi:.1f}>55→LONG)"
                             else:
                                 print(f"🔍 [{symbol}] MOD3 RSI {rsi:.1f} nötr", flush=True)
                                 continue
@@ -576,7 +576,7 @@ def otomatik_arkaplan_tarayici():
                 if sinyal["symbol"] in aktif_semboller_listesi: continue
 
                 try:
-                    print(f"🚀 [EMİR] {sinyal['symbol']} | {sinyal['yon']} | {sinyal['kaldirac']}x | {sinyal['mod'][:30]}", flush=True)
+                    print(f"🚀 [EMİR] {sinyal['symbol']} | {sinyal['yon']} | {sinyal['kaldirac']}x", flush=True)
 
                     bakiye = exchange.fetch_balance()
                     toplam_b = float(bakiye['total'].get('USDT', 0))
@@ -604,11 +604,23 @@ def otomatik_arkaplan_tarayici():
                     exchange.create_order(sinyal["symbol"], 'market', islem_y, miktar)
                     time.sleep(0.5)
 
+                    # 🆕 SL EMİR KONTROLÜ
+                    sl_basarili = False
                     try:
                         exchange.create_order(sinyal["symbol"], 'limit', kapat_y, miktar, tp, {'reduceOnly': True})
                         exchange.create_order(sinyal["symbol"], 'stop', kapat_y, miktar, sl, {'stopPrice': sl, 'reduceOnly': True})
+                        sl_basarili = True
                     except Exception as e:
-                        print(f"   ⚠️ TP/SL: {e}", flush=True)
+                        print(f"   ⚠️ TP/SL emir hatası: {e}", flush=True)
+
+                    # 🆕 SL emri basmazsa pozisyonu hemen kapat
+                    if not sl_basarili:
+                        print(f"   🚨 SL emri basılamadı, pozisyon acil kapatılıyor!", flush=True)
+                        try:
+                            exchange.create_order(sinyal["symbol"], 'market', kapat_y, miktar, None, {'reduceOnly': True})
+                        except Exception as e2:
+                            print(f"   🚨 Acil kapatma hatası: {e2}", flush=True)
+                        continue
 
                     with state_lock:
                         AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {
