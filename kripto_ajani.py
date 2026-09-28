@@ -78,9 +78,8 @@ MIN_NET_RR = 0.8
 RSI_ASIRI_UST = 85
 RSI_ASIRI_ALT = 15
 
-# ==================== MOD 3 EŞİKLERİ (GEVŞETİLDİ) ====================
-COIN_TESTERE_RSI_UST = 55   # 🆕 65 → 55
-COIN_TESTERE_RSI_ALT = 45   # 🆕 35 → 45
+COIN_TESTERE_RSI_UST = 55
+COIN_TESTERE_RSI_ALT = 45
 
 TREND_SKOR_ESIK = 6
 ZAYIF_TREND_ESIK = 4
@@ -365,7 +364,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (3 Mod + gevşetilmiş eşikler)")
+    await update.message.reply_text("🟢 Bot aktif! (Mod 3 ters mantık)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -390,7 +389,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] 3 Mod + gevşetilmiş eşikler...", flush=True)
+    print("🚀 [BAŞLANGIÇ] 3 Mod + Mod3 ters mantık...", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -498,20 +497,20 @@ def otomatik_arkaplan_tarayici():
 
                     # ==================== MOD SEÇİMİ ====================
                     if piyasa_rejimi == "YATAY":
-                        # MOD 2
+                        # MOD 2: Testere ters
                         if rsi < COIN_TESTERE_RSI_ALT:
                             islem_yonu = "SHORT"
-                            mod = "MOD2 YATAY (Testere)"
+                            mod = "MOD2 YATAY (RSI<45→SHORT)"
                         elif rsi > COIN_TESTERE_RSI_UST:
                             islem_yonu = "LONG"
-                            mod = "MOD2 YATAY (Testere)"
+                            mod = "MOD2 YATAY (RSI>55→LONG)"
                         else:
                             print(f"🔍 [{symbol}] MOD2 RSI {rsi:.1f} nötr", flush=True)
                             continue
 
                     elif piyasa_rejimi in ["TREND", "TREND_ZAYIF"]:
                         if kirilim_var:
-                            # MOD 1
+                            # MOD 1: BTC yönünde kırılım
                             if btc_yonu == "SHORT" and kirilim_yonu == "SHORT":
                                 islem_yonu = "SHORT"
                                 mod = f"MOD1 TREND (BTC+Kırılım SHORT)"
@@ -522,15 +521,15 @@ def otomatik_arkaplan_tarayici():
                                 print(f"⏭️ [{symbol}] MOD1 BTC:{btc_yonu} vs Kırılım:{kirilim_yonu}", flush=True)
                                 continue
                         else:
-                            # MOD 3
-                            if btc_yonu == "SHORT" and rsi < COIN_TESTERE_RSI_ALT:
-                                islem_yonu = "SHORT"
-                                mod = f"MOD3 COİN TESTERE (BTC:SHORT RSI:{rsi:.1f}<{COIN_TESTERE_RSI_ALT})"
-                            elif btc_yonu == "LONG" and rsi > COIN_TESTERE_RSI_UST:
-                                islem_yonu = "LONG"
-                                mod = f"MOD3 COİN TESTERE (BTC:LONG RSI:{rsi:.1f}>{COIN_TESTERE_RSI_UST})"
+                            # 🆕 MOD 3: TERS MANTIK (RSI ters)
+                            if rsi < COIN_TESTERE_RSI_ALT:
+                                islem_yonu = "LONG"   # 🆕 Ters: RSI<45 → LONG
+                                mod = f"MOD3 TERS (RSI:{rsi:.1f}<45→LONG)"
+                            elif rsi > COIN_TESTERE_RSI_UST:
+                                islem_yonu = "SHORT"  # 🆕 Ters: RSI>55 → SHORT
+                                mod = f"MOD3 TERS (RSI:{rsi:.1f}>55→SHORT)"
                             else:
-                                print(f"🔍 [{symbol}] MOD3 uygun değil (BTC:{btc_yonu} RSI:{rsi:.1f})", flush=True)
+                                print(f"🔍 [{symbol}] MOD3 RSI {rsi:.1f} nötr", flush=True)
                                 continue
                     else:
                         continue
@@ -566,7 +565,7 @@ def otomatik_arkaplan_tarayici():
             if taranan:
                 print(f"\n📊 [SIRALAMA] {len(taranan)} sinyal:", flush=True)
                 for i, s in enumerate(taranan, 1):
-                    print(f"   {i}. {s['symbol']} | R/R:{s['net_rr']:.2f} | {s['kaldirac']}x | {s['yon']} | {s['mod'][:20]}", flush=True)
+                    print(f"   {i}. {s['symbol']} | R/R:{s['net_rr']:.2f} | {s['kaldirac']}x | {s['yon']} | {s['mod'][:25]}", flush=True)
 
             acilan = 0
 
