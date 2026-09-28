@@ -77,8 +77,10 @@ MIN_NET_RR = 0.8
 
 RSI_ASIRI_UST = 85
 RSI_ASIRI_ALT = 15
-COIN_TESTERE_RSI_UST = 65   # 🆕 Mod 3 için
-COIN_TESTERE_RSI_ALT = 35   # 🆕 Mod 3 için
+
+# ==================== MOD 3 EŞİKLERİ (GEVŞETİLDİ) ====================
+COIN_TESTERE_RSI_UST = 55   # 🆕 65 → 55
+COIN_TESTERE_RSI_ALT = 45   # 🆕 35 → 45
 
 TREND_SKOR_ESIK = 6
 ZAYIF_TREND_ESIK = 4
@@ -252,9 +254,9 @@ def kirilim_tespit_et(symbol):
         if ema_alt: asagi_kriter += 1
 
         if yukari_kriter >= KIRILIM_MIN_KRITER:
-            return "LONG", True, f"Yukarı ({yukari_kriter}/4) Hacim x{hacim_orani:.1f}"
+            return "LONG", True, f"Yukarı ({yukari_kriter}/4) x{hacim_orani:.1f}"
         elif asagi_kriter >= KIRILIM_MIN_KRITER:
-            return "SHORT", True, f"Aşağı ({asagi_kriter}/4) Hacim x{hacim_orani:.1f}"
+            return "SHORT", True, f"Aşağı ({asagi_kriter}/4) x{hacim_orani:.1f}"
         else:
             return "NONE", False, f"Yok (Üst:{yukari_kriter}/4 Alt:{asagi_kriter}/4)"
     except Exception as e:
@@ -363,7 +365,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (3 Mod: TREND / YATAY / COİN TESTERE)")
+    await update.message.reply_text("🟢 Bot aktif! (3 Mod + gevşetilmiş eşikler)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -388,7 +390,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] 3 Mod aktif (TREND / YATAY / COİN TESTERE)...", flush=True)
+    print("🚀 [BAŞLANGIÇ] 3 Mod + gevşetilmiş eşikler...", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -488,7 +490,6 @@ def otomatik_arkaplan_tarayici():
                     ticker = exchange.fetch_ticker(symbol)
                     fiyat = float(ticker['last'])
 
-                    # RSI ve kırılım
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
@@ -497,7 +498,7 @@ def otomatik_arkaplan_tarayici():
 
                     # ==================== MOD SEÇİMİ ====================
                     if piyasa_rejimi == "YATAY":
-                        # MOD 2: BTC testere
+                        # MOD 2
                         if rsi < COIN_TESTERE_RSI_ALT:
                             islem_yonu = "SHORT"
                             mod = "MOD2 YATAY (Testere)"
@@ -510,7 +511,7 @@ def otomatik_arkaplan_tarayici():
 
                     elif piyasa_rejimi in ["TREND", "TREND_ZAYIF"]:
                         if kirilim_var:
-                            # MOD 1: Kırılım var
+                            # MOD 1
                             if btc_yonu == "SHORT" and kirilim_yonu == "SHORT":
                                 islem_yonu = "SHORT"
                                 mod = f"MOD1 TREND (BTC+Kırılım SHORT)"
@@ -521,7 +522,7 @@ def otomatik_arkaplan_tarayici():
                                 print(f"⏭️ [{symbol}] MOD1 BTC:{btc_yonu} vs Kırılım:{kirilim_yonu}", flush=True)
                                 continue
                         else:
-                            # 🆕 MOD 3: Kırılım yok, coin testere
+                            # MOD 3
                             if btc_yonu == "SHORT" and rsi < COIN_TESTERE_RSI_ALT:
                                 islem_yonu = "SHORT"
                                 mod = f"MOD3 COİN TESTERE (BTC:SHORT RSI:{rsi:.1f}<{COIN_TESTERE_RSI_ALT})"
