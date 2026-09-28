@@ -86,11 +86,11 @@ KALDIRAC_MAX = 7
 ATR_ESIK_YUKSEK = 0.008
 ATR_ESIK_DUSUK = 0.004
 
-# ==================== TP/SL AYARLARI (GÜNCELLENDİ) ====================
-KOMISYON_ORANI = 0.0015
-BEKLENEN_HAREKET_TP_ORANI = 0.50   # 🆕 0.65 → 0.50 (TP yakınlaştı)
-BEKLENEN_HAREKET_SL_ORANI = 0.35   # 🆕 0.30 → 0.35 (SL uzaklaştı)
-MIN_NET_RR = 1.2
+# ==================== TP/SL AYARLARI ====================
+KOMISYON_ORANI = 0.0008            # 🆕 %0.08 (gerçek komisyon)
+BEKLENEN_HAREKET_TP_ORANI = 0.50
+BEKLENEN_HAREKET_SL_ORANI = 0.35
+MIN_NET_RR = 0.8                   # 🆕 1.2 → 0.8 (sadece zararı engeller)
 
 # ==================== HAFIZA ====================
 def hafizayi_yukle():
@@ -144,7 +144,7 @@ COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 MAKSIMUM_TOPLAM_POZISYON = 2
 COOLDOWN_SURESI_SANIYE = 15 * 60
 
-# ==================== DİNAMİK KALDIRAÇ HESABI ====================
+# ==================== DİNAMİK KALDIRAÇ ====================
 def dinamik_kaldirac_hesapla(symbol, anlik_fiyat):
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=30)
@@ -198,8 +198,7 @@ def piyasa_rejimini_tespit_et():
 
         print(
             f"📊 [BTC REJİM] Rejim: {rejim} | Yön: {trend_yonu} | "
-            f"ADX: {adx_1h:.1f} | BBW: {bb_bandwidth:.4f} | EMA%: {fark_yuzdesi:.2f} | "
-            f"({karar_sebebi})",
+            f"ADX: {adx_1h:.1f} | BBW: {bb_bandwidth:.4f} | EMA%: {fark_yuzdesi:.2f}",
             flush=True
         )
         return rejim, trend_yonu
@@ -207,7 +206,7 @@ def piyasa_rejimini_tespit_et():
         print(f"⚠️ Rejim tespit hatası: {e}", flush=True)
         return "YATAY", "YATAY (Testere)"
 
-# ==================== EMİR DEFTERİ ANALİZİ ====================
+# ==================== EMİR DEFTERİ ====================
 def emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker_data):
     try:
         high_24h = float(ticker_data.get('high') or anlik_fiyat * 1.02)
@@ -363,7 +362,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (TP yakın + SL uzak)")
+    await update.message.reply_text("🟢 Bot aktif! (Komisyon %0.08, Net R/R eşiği 0.8)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID):
@@ -393,7 +392,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Bot Aktif (TP yakın + SL uzak)...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Bot Aktif (Komisyon %0.08, eşik 0.8)...", flush=True)
     try:
         exchange.load_markets()
     except Exception:
@@ -432,6 +431,7 @@ def otomatik_arkaplan_tarayici():
                 aktif_borsa_map = {}
                 aktif_semboller_listesi = []
 
+            # ==================== POZİSYON KAPANIŞ ====================
             try:
                 anlik_aktif_semboller = [p['symbol'] for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                 for eski_sym in list(AKTIF_GRID_SISTEMLERI.keys()):
@@ -480,7 +480,7 @@ def otomatik_arkaplan_tarayici():
             except Exception as e:
                 print(f"⚠️ Kapanış kontrol hatası: {e}", flush=True)
 
-            # ==================== ANİ TREND KIRILIM KONTROLÜ ====================
+            # ==================== ANİ TREND KIRILIM ====================
             try:
                 with state_lock:
                     aktif_pozisyonlar = list(AKTIF_GRID_SISTEMLERI.items())
@@ -599,7 +599,7 @@ def otomatik_arkaplan_tarayici():
             except Exception as e:
                 print(f"⚠️ Ani kırılım genel hata: {e}", flush=True)
 
-            # ==================== YENİ SİNYAL TARAMASI ====================
+            # ==================== SİNYAL TARAMASI ====================
             print(f"{'─'*55}", flush=True)
             print(f"🔍 [COİN TARAMA] Rejim: {piyasa_rejimi} | BTC: {btc_yonu}", flush=True)
             print(f"{'─'*55}", flush=True)
@@ -662,7 +662,7 @@ def otomatik_arkaplan_tarayici():
 
                     if net_rr < MIN_NET_RR:
                         print(
-                            f"⏭️ [{symbol}] Net R/R düşük ({net_rr:.2f} < {MIN_NET_RR}) | "
+                            f"⏭️ [{symbol}] Net R/R çok düşük ({net_rr:.2f} < {MIN_NET_RR}) | "
                             f"{kaldirac}x | TP:%{hedef_roe:.1f} RoE",
                             flush=True
                         )
@@ -686,15 +686,13 @@ def otomatik_arkaplan_tarayici():
                     print(f"⚠️ Tarama hatası ({symbol}): {e}", flush=True)
                     continue
 
-            # ==================== SKOR SIRALAMASI ====================
             taranan_sinyaller.sort(key=lambda x: x["net_rr"], reverse=True)
 
             if taranan_sinyaller:
-                print(f"\n📊 [SKOR SIRALAMASI] {len(taranan_sinyaller)} sinyal bulundu:", flush=True)
+                print(f"\n📊 [SKOR SIRALAMASI] {len(taranan_sinyaller)} sinyal:", flush=True)
                 for i, s in enumerate(taranan_sinyaller, 1):
                     print(f"   {i}. {s['symbol']} | Net R/R: {s['net_rr']:.2f} | {s['kaldirac']}x | TP:%{s['hedef_roe']:.1f} RoE", flush=True)
 
-            # ==================== EN İYİ 2'Yİ AÇ ====================
             acilan_sayisi = 0
 
             for sinyal in taranan_sinyaller:
@@ -709,7 +707,7 @@ def otomatik_arkaplan_tarayici():
                     continue
 
                 try:
-                    print(f"🚀 [EMİR GÖNDERİLİYOR] {sinyal['symbol']} | {sinyal['yon']} | {sinyal['mod']} | {sinyal['kaldirac']}x | Net R/R:{sinyal['net_rr']:.2f}", flush=True)
+                    print(f"🚀 [EMİR] {sinyal['symbol']} | {sinyal['yon']} | {sinyal['kaldirac']}x | Net R/R:{sinyal['net_rr']:.2f}", flush=True)
 
                     bakiye_bilgisi = exchange.fetch_balance()
                     toplam_bakiye = float(bakiye_bilgisi['total'].get('USDT', 0))
@@ -764,7 +762,7 @@ def otomatik_arkaplan_tarayici():
 
                     hafizayi_kaydet()
 
-                    print(f"✅ [AÇILDI] {sinyal['symbol']} {sinyal['yon']} @ {giris_fiyati} ({kaldirac}x) | TP:{tp_fiyat} SL:{sl_fiyat} | RoE:%{hedef_roe:.1f} | Açılan: {acilan_sayisi}/{MAKSIMUM_TOPLAM_POZISYON}", flush=True)
+                    print(f"✅ [AÇILDI] {sinyal['symbol']} {sinyal['yon']} @ {giris_fiyati} ({kaldirac}x) | TP:{tp_fiyat} SL:{sl_fiyat} | RoE:%{hedef_roe:.1f}", flush=True)
 
                     telegram_mesaj_gonder(
                         f"🎯 *İŞLEM GİRİŞİ ({sinyal['mod']} - {kaldirac}x)*\n"
