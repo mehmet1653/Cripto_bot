@@ -77,12 +77,13 @@ MIN_NET_RR = 0.8
 
 RSI_ASIRI_UST = 85
 RSI_ASIRI_ALT = 15
+COIN_TESTERE_RSI_UST = 65   # 🆕 Mod 3 için
+COIN_TESTERE_RSI_ALT = 35   # 🆕 Mod 3 için
 
 TREND_SKOR_ESIK = 6
 ZAYIF_TREND_ESIK = 4
 
-# ==================== KIRILIM AYARLARI ====================
-KIRILIM_MIN_KRITER = 3   # 4 kriterden en az 3'ü uyumlu olmalı
+KIRILIM_MIN_KRITER = 3
 
 def hafizayi_yukle():
     print("💾 Hafıza yükleniyor...", flush=True)
@@ -129,7 +130,6 @@ COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 MAKSIMUM_TOPLAM_POZISYON = 2
 COOLDOWN_SURESI_SANIYE = 15 * 60
 
-# ==================== DİNAMİK KALDIRAÇ ====================
 def dinamik_kaldirac_hesapla(symbol, anlik_fiyat):
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=30)
@@ -147,7 +147,6 @@ def dinamik_kaldirac_hesapla(symbol, anlik_fiyat):
         print(f"⚠️ Kaldıraç: {e}", flush=True)
         return KALDIRAC_MIN, 0.01
 
-# ==================== REJİM ====================
 def piyasa_rejimini_tespit_et():
     global SON_BTC_YONU
     try:
@@ -212,20 +211,13 @@ def piyasa_rejimini_tespit_et():
         print(f"⚠️ Rejim: {e}", flush=True)
         return "YATAY", "YATAY (Testere)"
 
-# ==================== 15M KIRILIM TESPİTİ ====================
 def kirilim_tespit_et(symbol):
-    """
-    15m bazlı kırılım tespiti.
-    4 kriter kontrol edilir, en az 3'ü uyumlu olmalı.
-    Return: (kirilim_yonu, kirilim_var, sebep)
-    """
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
         fiyat = df['close'].iloc[-1]
 
-        # 1. Bollinger Bandı kırılımı
         bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
         bb_ust = bb.bollinger_hband().iloc[-1]
         bb_alt = bb.bollinger_lband().iloc[-1]
@@ -233,49 +225,42 @@ def kirilim_tespit_et(symbol):
         bb_ust_kirilim = fiyat > bb_ust
         bb_alt_kirilim = fiyat < bb_alt
 
-        # 2. Son 3 mum yönü
         son_3 = df['close'].iloc[-3:].values
         artan = all(son_3[i] < son_3[i+1] for i in range(len(son_3)-1))
         azalan = all(son_3[i] > son_3[i+1] for i in range(len(son_3)-1))
 
-        # 3. Hacim onayı
         son_hacim = float(df['volume'].iloc[-1])
         ort_hacim = float(df['volume'].iloc[-21:-1].mean()) if len(df) >= 21 else 1.0
         hacim_orani = son_hacim / ort_hacim if ort_hacim > 0 else 1.0
         hacim_onay = hacim_orani > 1.3
 
-        # 4. EMA kırılımı
         ema9 = ta.trend.ema_indicator(df['close'], window=9).iloc[-1]
         ema21 = ta.trend.ema_indicator(df['close'], window=21).iloc[-1]
         ema_ust = ema9 > ema21
         ema_alt = ema9 < ema21
 
-        # ==================== YUKARI KIRILIM ====================
         yukari_kriter = 0
         if bb_ust_kirilim: yukari_kriter += 1
         if artan: yukari_kriter += 1
         if hacim_onay: yukari_kriter += 1
         if ema_ust: yukari_kriter += 1
 
-        # ==================== AŞAĞI KIRILIM ====================
         asagi_kriter = 0
         if bb_alt_kirilim: asagi_kriter += 1
         if azalan: asagi_kriter += 1
         if hacim_onay: asagi_kriter += 1
         if ema_alt: asagi_kriter += 1
 
-        # ==================== KARAR ====================
         if yukari_kriter >= KIRILIM_MIN_KRITER:
-            return "LONG", True, f"Yukarı kırılım ({yukari_kriter}/4) | Hacim x{hacim_orani:.1f}"
+            return "LONG", True, f"Yukarı ({yukari_kriter}/4) Hacim x{hacim_orani:.1f}"
         elif asagi_kriter >= KIRILIM_MIN_KRITER:
-            return "SHORT", True, f"Aşağı kırılım ({asagi_kriter}/4) | Hacim x{hacim_orani:.1f}"
+            return "SHORT", True, f"Aşağı ({asagi_kriter}/4) Hacim x{hacim_orani:.1f}"
         else:
-            return "NONE", False, f"Kırılım yok (Üst:{yukari_kriter}/4, Alt:{asagi_kriter}/4)"
+            return "NONE", False, f"Yok (Üst:{yukari_kriter}/4 Alt:{asagi_kriter}/4)"
     except Exception as e:
-        print(f"⚠️ Kırılım hatası ({symbol}): {e}", flush=True)
+        print(f"⚠️ Kırılım ({symbol}): {e}", flush=True)
         return "NONE", False, "Hata"
 
-# ==================== BEKLENEN HAREKET ====================
 def beklenen_hareket_hesapla(symbol, anlik_fiyat, ticker_data):
     tahminler = []
     try:
@@ -362,7 +347,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} ({kaldirac_val}x) | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 *BOT DURUM* [15m KIRILIM MODU]\n\n"
+            f"📊 *BOT DURUM* [3 MOD]\n\n"
             f"🌐 Rejim: `{rejim}` (BTC: `{btc_yon}`)\n"
             f"💰 Kasa: `{total:.2f} USDT` | PnL: `{toplam_pnl:+.2f}`\n"
             f"📌 Açık: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -378,7 +363,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (15m kırılım bazlı)")
+    await update.message.reply_text("🟢 Bot aktif! (3 Mod: TREND / YATAY / COİN TESTERE)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -403,7 +388,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] 15m kırılım bazlı sistem...", flush=True)
+    print("🚀 [BAŞLANGIÇ] 3 Mod aktif (TREND / YATAY / COİN TESTERE)...", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -503,40 +488,49 @@ def otomatik_arkaplan_tarayici():
                     ticker = exchange.fetch_ticker(symbol)
                     fiyat = float(ticker['last'])
 
-                    # 🆕 15M KIRILIM KONTROLÜ
+                    # RSI ve kırılım
+                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
+                    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
+
                     kirilim_yonu, kirilim_var, sebep = kirilim_tespit_et(symbol)
 
+                    # ==================== MOD SEÇİMİ ====================
                     if piyasa_rejimi == "YATAY":
-                        # Testere modu — RSI kalıyor (mean-reversion için şart)
-                        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
-                        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                        rsi = ta.momentum.rsi(df['close'], window=14).iloc[-1]
-
-                        if rsi < 35:
+                        # MOD 2: BTC testere
+                        if rsi < COIN_TESTERE_RSI_ALT:
                             islem_yonu = "SHORT"
-                            mod = "TERS MOD (Testere)"
-                        elif rsi > 65:
+                            mod = "MOD2 YATAY (Testere)"
+                        elif rsi > COIN_TESTERE_RSI_UST:
                             islem_yonu = "LONG"
-                            mod = "TERS MOD (Testere)"
+                            mod = "MOD2 YATAY (Testere)"
                         else:
-                            print(f"🔍 [{symbol}] RSI {rsi:.1f} nötr", flush=True)
+                            print(f"🔍 [{symbol}] MOD2 RSI {rsi:.1f} nötr", flush=True)
                             continue
+
                     elif piyasa_rejimi in ["TREND", "TREND_ZAYIF"]:
-                        # 🆕 TREND: BTC yönünde aç, 15m kırılım onayı
-                        if not kirilim_var:
-                            print(f"🔍 [{symbol}] {sebep}", flush=True)
-                            continue
-
-                        # BTC yönünde olmalı
-                        if btc_yonu == "SHORT" and kirilim_yonu == "SHORT":
-                            islem_yonu = "SHORT"
-                            mod = f"TREND SHORT + {sebep}"
-                        elif btc_yonu == "LONG" and kirilim_yonu == "LONG":
-                            islem_yonu = "LONG"
-                            mod = f"TREND LONG + {sebep}"
+                        if kirilim_var:
+                            # MOD 1: Kırılım var
+                            if btc_yonu == "SHORT" and kirilim_yonu == "SHORT":
+                                islem_yonu = "SHORT"
+                                mod = f"MOD1 TREND (BTC+Kırılım SHORT)"
+                            elif btc_yonu == "LONG" and kirilim_yonu == "LONG":
+                                islem_yonu = "LONG"
+                                mod = f"MOD1 TREND (BTC+Kırılım LONG)"
+                            else:
+                                print(f"⏭️ [{symbol}] MOD1 BTC:{btc_yonu} vs Kırılım:{kirilim_yonu}", flush=True)
+                                continue
                         else:
-                            print(f"⏭️ [{symbol}] BTC:{btc_yonu} vs Kırılım:{kirilim_yonu} uyumsuz", flush=True)
-                            continue
+                            # 🆕 MOD 3: Kırılım yok, coin testere
+                            if btc_yonu == "SHORT" and rsi < COIN_TESTERE_RSI_ALT:
+                                islem_yonu = "SHORT"
+                                mod = f"MOD3 COİN TESTERE (BTC:SHORT RSI:{rsi:.1f}<{COIN_TESTERE_RSI_ALT})"
+                            elif btc_yonu == "LONG" and rsi > COIN_TESTERE_RSI_UST:
+                                islem_yonu = "LONG"
+                                mod = f"MOD3 COİN TESTERE (BTC:LONG RSI:{rsi:.1f}>{COIN_TESTERE_RSI_UST})"
+                            else:
+                                print(f"🔍 [{symbol}] MOD3 uygun değil (BTC:{btc_yonu} RSI:{rsi:.1f})", flush=True)
+                                continue
                     else:
                         continue
 
@@ -551,7 +545,7 @@ def otomatik_arkaplan_tarayici():
                         continue
 
                     print(
-                        f"✅ [{symbol}] {islem_yonu} | {kaldirac}x | TP:%{hedef_roe:.1f} R/R:{net_rr:.2f} | {sebep}",
+                        f"✅ [{symbol}] {islem_yonu} | {mod} | {kaldirac}x | TP:%{hedef_roe:.1f} R/R:{net_rr:.2f}",
                         flush=True
                     )
 
@@ -571,7 +565,7 @@ def otomatik_arkaplan_tarayici():
             if taranan:
                 print(f"\n📊 [SIRALAMA] {len(taranan)} sinyal:", flush=True)
                 for i, s in enumerate(taranan, 1):
-                    print(f"   {i}. {s['symbol']} | R/R:{s['net_rr']:.2f} | {s['kaldirac']}x | {s['yon']}", flush=True)
+                    print(f"   {i}. {s['symbol']} | R/R:{s['net_rr']:.2f} | {s['kaldirac']}x | {s['yon']} | {s['mod'][:20]}", flush=True)
 
             acilan = 0
 
@@ -582,7 +576,7 @@ def otomatik_arkaplan_tarayici():
                 if sinyal["symbol"] in aktif_semboller_listesi: continue
 
                 try:
-                    print(f"🚀 [EMİR] {sinyal['symbol']} | {sinyal['yon']} | {sinyal['kaldirac']}x", flush=True)
+                    print(f"🚀 [EMİR] {sinyal['symbol']} | {sinyal['yon']} | {sinyal['kaldirac']}x | {sinyal['mod'][:30]}", flush=True)
 
                     bakiye = exchange.fetch_balance()
                     toplam_b = float(bakiye['total'].get('USDT', 0))
