@@ -70,14 +70,11 @@ KALDIRAC_MAX = 7
 ATR_ESIK_YUKSEK = 0.008
 ATR_ESIK_DUSUK = 0.004
 
-# ==================== TP/SL ORANLARI ====================
 KOMISYON_ORANI = 0.0008
 
-# Genel (Mod 1 ve Mod 2)
 BEKLENEN_HAREKET_TP_ORANI = 0.50
 BEKLENEN_HAREKET_SL_ORANI = 0.35
 
-# 🆕 Mod 3 özel (TP yakın, SL uzak)
 MOD3_TP_ORANI = 0.35
 MOD3_SL_ORANI = 0.50
 
@@ -306,13 +303,12 @@ def beklenen_hareket_hesapla(symbol, anlik_fiyat, ticker_data):
 def akilli_seviye_hesapla(symbol, anlik_fiyat, yon, ticker_data, kaldirac, mod=""):
     beklenen = beklenen_hareket_hesapla(symbol, anlik_fiyat, ticker_data)
 
-    # 🆕 Mod 3 için özel oranlar
     if "MOD3" in mod:
-        tp_orani = MOD3_TP_ORANI   # 0.35
-        sl_orani = MOD3_SL_ORANI   # 0.50
+        tp_orani = MOD3_TP_ORANI
+        sl_orani = MOD3_SL_ORANI
     else:
-        tp_orani = BEKLENEN_HAREKET_TP_ORANI   # 0.50
-        sl_orani = BEKLENEN_HAREKET_SL_ORANI   # 0.35
+        tp_orani = BEKLENEN_HAREKET_TP_ORANI
+        sl_orani = BEKLENEN_HAREKET_SL_ORANI
 
     tp_mesafe = beklenen * tp_orani
     sl_mesafe = beklenen * sl_orani
@@ -381,7 +377,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (Mod3: TP %35/SL %50 ters)")
+    await update.message.reply_text("🟢 Bot aktif! (Mod3 R/R filtresi kaldırıldı)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -406,7 +402,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Mod3: TP %35/SL %50 ters...", flush=True)
+    print("🚀 [BAŞLANGIÇ] 3 Mod + Mod3 filtresiz...", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -533,7 +529,6 @@ def otomatik_arkaplan_tarayici():
                                 print(f"⏭️ [{symbol}] MOD1 BTC:{btc_yonu} vs Kırılım:{kirilim_yonu}", flush=True)
                                 continue
                         else:
-                            # MOD 3: TERS
                             if rsi < COIN_TESTERE_RSI_ALT:
                                 islem_yonu = "LONG"
                                 mod = f"MOD3 TERS (RSI:{rsi:.1f}<45→LONG)"
@@ -552,7 +547,8 @@ def otomatik_arkaplan_tarayici():
                         symbol, fiyat, islem_yonu, ticker, kaldirac, mod
                     )
 
-                    if net_rr < MIN_NET_RR:
+                    # 🆕 MOD3 İÇİN R/R FİLTRESİ YOK
+                    if "MOD3" not in mod and net_rr < MIN_NET_RR:
                         print(f"⏭️ [{symbol}] R/R {net_rr:.2f} < {MIN_NET_RR}", flush=True)
                         continue
 
