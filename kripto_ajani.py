@@ -79,7 +79,7 @@ state_lock = threading.Lock()
 tarayici_kilidi = threading.Lock()
 SON_BTC_YONU = "YATAY (Testere)"
 
-# ==================== DİNAMİK KALDIRAÇ AYARLARI ====================
+# ==================== DİNAMİK KALDIRAÇ ====================
 KALDIRAC_MIN = 5
 KALDIRAC_ORTA = 6
 KALDIRAC_MAX = 7
@@ -87,10 +87,14 @@ ATR_ESIK_YUKSEK = 0.008
 ATR_ESIK_DUSUK = 0.004
 
 # ==================== TP/SL AYARLARI ====================
-KOMISYON_ORANI = 0.0008            # 🆕 %0.08 (gerçek komisyon)
+KOMISYON_ORANI = 0.0008
 BEKLENEN_HAREKET_TP_ORANI = 0.50
 BEKLENEN_HAREKET_SL_ORANI = 0.35
-MIN_NET_RR = 0.8                   # 🆕 1.2 → 0.8 (sadece zararı engeller)
+MIN_NET_RR = 0.8
+
+# ==================== RSI AŞIRI UÇ EŞİKLERİ ====================
+RSI_ASIRI_UST = 85   # RSI 85 üstü → LONG açma
+RSI_ASIRI_ALT = 15   # RSI 15 altı → SHORT açma
 
 # ==================== HAFIZA ====================
 def hafizayi_yukle():
@@ -185,16 +189,13 @@ def piyasa_rejimini_tespit_et():
             rejim = "TREND"
             trend_yonu = "LONG" if ema9 > ema21 else "SHORT"
             SON_BTC_YONU = trend_yonu
-            karar_sebebi = f"ADX güçlü ({adx_1h:.1f}) → TREND"
         elif adx_1h < 35.0 or bb_bandwidth < 0.04 or fark_yuzdesi < 0.3:
             rejim = "YATAY"
             trend_yonu = "YATAY (Testere)"
-            karar_sebebi = "Koşullar zayıf → YATAY"
         else:
             rejim = "TREND"
             trend_yonu = "LONG" if ema9 > ema21 else "SHORT"
             SON_BTC_YONU = trend_yonu
-            karar_sebebi = "3 koşul uygun → TREND"
 
         print(
             f"📊 [BTC REJİM] Rejim: {rejim} | Yön: {trend_yonu} | "
@@ -362,7 +363,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (Komisyon %0.08, Net R/R eşiği 0.8)")
+    await update.message.reply_text("🟢 Bot aktif! (BTC yönüne uyumlu, RSI sadece aşırı uçlarda red)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID):
@@ -392,7 +393,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Bot Aktif (Komisyon %0.08, eşik 0.8)...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Bot Aktif (BTC yönüne uyumlu, RSI aşırı uç filtresi)...", flush=True)
     try:
         exchange.load_markets()
     except Exception:
@@ -634,6 +635,7 @@ def otomatik_arkaplan_tarayici():
                     emir_analizi = emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker)
 
                     if piyasa_rejimi == "YATAY":
+                        # Testere modu — RSI ana sinyal
                         if rsi < 35:
                             islem_yonu = "SHORT"
                             mod_adi = "TERS MOD (Testere)"
@@ -644,14 +646,21 @@ def otomatik_arkaplan_tarayici():
                             print(f"🔍 [{symbol}] RSI {rsi:.1f} nötr — beklemede", flush=True)
                             continue
                     else:
-                        if btc_yonu == "LONG" and rsi < 55:
+                        # Trend modu — BTC yönü ana sinyal, RSI sadece aşırı uçlarda red
+                        if btc_yonu == "LONG":
+                            if rsi >= RSI_ASIRI_UST:
+                                print(f"⏭️ [{symbol}] BTC LONG ama RSI {rsi:.1f} ≥ {RSI_ASIRI_UST} (aşırı alım) — beklemede", flush=True)
+                                continue
                             islem_yonu = "LONG"
-                            mod_adi = "NORMAL TREND MODU"
-                        elif btc_yonu == "SHORT" and rsi > 45:
+                            mod_adi = "SAF TREND LONG"
+                        elif btc_yonu == "SHORT":
+                            if rsi <= RSI_ASIRI_ALT:
+                                print(f"⏭️ [{symbol}] BTC SHORT ama RSI {rsi:.1f} ≤ {RSI_ASIRI_ALT} (aşırı satım) — beklemede", flush=True)
+                                continue
                             islem_yonu = "SHORT"
-                            mod_adi = "NORMAL TREND MODU"
+                            mod_adi = "SAF TREND SHORT"
                         else:
-                            print(f"🔍 [{symbol}] Trend koşulu uygun değil (RSI {rsi:.1f})", flush=True)
+                            print(f"🔍 [{symbol}] BTC yönü belirsiz", flush=True)
                             continue
 
                     kaldirac, atr_orani = dinamik_kaldirac_hesapla(symbol, anlik_fiyat)
@@ -671,7 +680,7 @@ def otomatik_arkaplan_tarayici():
                     print(
                         f"✅ [{symbol}] Fiyat:{anlik_fiyat:.4f} | RSI:{rsi:.1f} | "
                         f"ATR:%{atr_orani*100:.2f} | {kaldirac}x | "
-                        f"→ {islem_yonu} | TP:%{hedef_roe:.1f} RoE | Net R/R:{net_rr:.2f}",
+                        f"→ {islem_yonu} ({mod_adi}) | TP:%{hedef_roe:.1f} RoE | Net R/R:{net_rr:.2f}",
                         flush=True
                     )
 
