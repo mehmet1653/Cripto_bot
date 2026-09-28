@@ -76,7 +76,7 @@ TAKIP_EDILENLER = [
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
-tarayici_kilidi = threading.Lock()   # 🆕 Döngü çakışmasını engeller
+tarayici_kilidi = threading.Lock()
 SON_BTC_YONU = "YATAY (Testere)"
 
 # ==================== DİNAMİK KALDIRAÇ AYARLARI ====================
@@ -86,10 +86,10 @@ KALDIRAC_MAX = 7
 ATR_ESIK_YUKSEK = 0.008
 ATR_ESIK_DUSUK = 0.004
 
-# ==================== TP/SL AYARLARI ====================
+# ==================== TP/SL AYARLARI (GÜNCELLENDİ) ====================
 KOMISYON_ORANI = 0.0015
-BEKLENEN_HAREKET_TP_ORANI = 0.65
-BEKLENEN_HAREKET_SL_ORANI = 0.30
+BEKLENEN_HAREKET_TP_ORANI = 0.50   # 🆕 0.65 → 0.50 (TP yakınlaştı)
+BEKLENEN_HAREKET_SL_ORANI = 0.35   # 🆕 0.30 → 0.35 (SL uzaklaştı)
 MIN_NET_RR = 1.2
 
 # ==================== HAFIZA ====================
@@ -363,7 +363,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (En iyi 2 seçim + dinamik kaldıraç)")
+    await update.message.reply_text("🟢 Bot aktif! (TP yakın + SL uzak)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID):
@@ -393,7 +393,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ANA DÖNGÜ ====================
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Bot Aktif (En iyi 2 seçim + dinamik kaldıraç)...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Bot Aktif (TP yakın + SL uzak)...", flush=True)
     try:
         exchange.load_markets()
     except Exception:
@@ -402,7 +402,6 @@ def otomatik_arkaplan_tarayici():
     dongu_sayaci = 0
 
     while True:
-        # 🆕 DÖNGÜ ÇAKIŞMA KİLİDİ
         if not tarayici_kilidi.acquire(blocking=False):
             time.sleep(2)
             continue
@@ -433,7 +432,6 @@ def otomatik_arkaplan_tarayici():
                 aktif_borsa_map = {}
                 aktif_semboller_listesi = []
 
-            # ==================== POZİSYON KAPANIŞ TESPİTİ ====================
             try:
                 anlik_aktif_semboller = [p['symbol'] for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                 for eski_sym in list(AKTIF_GRID_SISTEMLERI.keys()):
@@ -601,7 +599,7 @@ def otomatik_arkaplan_tarayici():
             except Exception as e:
                 print(f"⚠️ Ani kırılım genel hata: {e}", flush=True)
 
-            # ==================== YENİ SİNYAL TARAMASI (TÜM COİNLER) ====================
+            # ==================== YENİ SİNYAL TARAMASI ====================
             print(f"{'─'*55}", flush=True)
             print(f"🔍 [COİN TARAMA] Rejim: {piyasa_rejimi} | BTC: {btc_yonu}", flush=True)
             print(f"{'─'*55}", flush=True)
@@ -688,7 +686,7 @@ def otomatik_arkaplan_tarayici():
                     print(f"⚠️ Tarama hatası ({symbol}): {e}", flush=True)
                     continue
 
-            # ==================== SKOR SIRALAMASI (EN İYİ ÖNCE) ====================
+            # ==================== SKOR SIRALAMASI ====================
             taranan_sinyaller.sort(key=lambda x: x["net_rr"], reverse=True)
 
             if taranan_sinyaller:
@@ -703,7 +701,7 @@ def otomatik_arkaplan_tarayici():
                 if not BOT_CALISIYOR_MU:
                     break
                 if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
-                    print(f"   ⛔ Max pozisyon ({MAKSIMUM_TOPLAM_POZISYON}) dolu, dur.", flush=True)
+                    print(f"   ⛔ Max pozisyon dolu, dur.", flush=True)
                     break
                 if acilan_sayisi >= MAKSIMUM_TOPLAM_POZISYON:
                     break
@@ -761,7 +759,6 @@ def otomatik_arkaplan_tarayici():
                             "kaldirac": kaldirac
                         }
                         aktif_semboller_listesi.append(sinyal["symbol"])
-                        # 🆕 BUG FIX: Map'i anında güncelle
                         aktif_borsa_map[sinyal["symbol"]] = {"dummy": True, "symbol": sinyal["symbol"], "contracts": 1}
                         acilan_sayisi += 1
 
@@ -784,7 +781,6 @@ def otomatik_arkaplan_tarayici():
         except Exception as e:
             print(f"⚠️ Ana döngü hatası: {e}", flush=True)
         finally:
-            # 🆕 KİLİDİ SERBEST BIRAK
             try:
                 tarayici_kilidi.release()
             except Exception:
