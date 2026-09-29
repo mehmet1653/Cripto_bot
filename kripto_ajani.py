@@ -57,13 +57,20 @@ exchange = ccxt.gate({
 })
 exchange.set_sandbox_mode(True)
 
+# 🆕 HARIÇ TUTULANLAR (testnet'te bug'lu)
+HARIC_TUTULANLAR = ['BTC/USDT:USDT', 'ETH/USDT:USDT']
+
 # 🆕 FALLBACK LISTE (volatilite taraması başarısız olursa)
-YEDEK_LISTE = ['SOL/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'LTC/USDT:USDT', 'LINK/USDT:USDT']
+YEDEK_LISTE = [
+    'SOL/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT',
+    'LTC/USDT:USDT', 'LINK/USDT:USDT',
+    'AVAX/USDT:USDT', 'ADA/USDT:USDT', 'DOT/USDT:USDT'
+]
 
 # 🆕 VOLATİLİTE AYARLARI
-COIN_SAYISI = 10                    # Kaç coin taranacak
-MIN_HACIM_USD = 10_000_000          # Minimum 24h hacim (10M USDT)
-CACHE_SURESI = 30 * 60              # Liste 30 dk cache'lensin
+COIN_SAYISI = 10
+MIN_HACIM_USD = 10_000_000
+CACHE_SURESI = 30 * 60
 TAKIP_EDILENLER = YEDEK_LISTE.copy()
 SON_LISTE_GUNCELLE = 0
 
@@ -104,59 +111,56 @@ KIRILIM_KORUMA_BEKLEME = 300
 KIRILIM_HACIM_BB = 2.5
 KIRILIM_HACIM_MUM = 2.0
 
-# 🆕 VOLATİL COİN SEÇİMİ
 def volatil_coinleri_bul():
     global TAKIP_EDILENLER, SON_LISTE_GUNCELLE
-    
+
     with liste_kilidi:
-        # Cache kontrolü
         if time.time() - SON_LISTE_GUNCELLE < CACHE_SURESI and TAKIP_EDILENLER:
             return TAKIP_EDILENLER
-    
+
     print("🔍 [COİN SEÇİMİ] Volatil coinler taranıyor...", flush=True)
-    
+
     try:
         tickers = exchange.fetch_tickers()
-        
+
         skorlar = []
         for sym, t in tickers.items():
-            # Sadece USDT perpetual
             if not sym.endswith(':USDT'):
                 continue
-            if sym == 'BTC/USDT:USDT':  # BTC hariç (referans)
+            # 🆕 BTC ve ETH hariç
+            if sym in HARIC_TUTULANLAR:
                 continue
-            
+
             try:
                 high = float(t.get('high') or 0)
                 low = float(t.get('low') or 0)
                 vol = float(t.get('quoteVolume') or 0)
-                
+
                 if high <= 0 or low <= 0 or vol < MIN_HACIM_USD:
                     continue
-                
-                # Volatilite skoru: range × √hacim
+
                 range_orani = (high - low) / low
                 skor = range_orani * (vol ** 0.5)
-                
+
                 skorlar.append((sym, skor, range_orani, vol))
             except:
                 continue
-        
+
         if not skorlar:
             print("⚠️ [COİN SEÇİMİ] Hiç coin bulunamadı, yedek liste kullanılıyor", flush=True)
             return YEDEK_LISTE
-        
+
         skorlar.sort(key=lambda x: x[1], reverse=True)
         secilenler = [s[0] for s in skorlar[:COIN_SAYISI]]
-        
+
         print(f"📊 [COİN SEÇİMİ] {len(skorlar)} coin arasından ilk {len(secilenler)} seçildi:", flush=True)
         for i, s in enumerate(skorlar[:COIN_SAYISI], 1):
             print(f"   {i}. {s[0]} | Range:%{s[2]*100:.2f} | Hacim:{s[3]/1_000_000:.1f}M | Skor:{s[1]:.0f}", flush=True)
-        
+
         with liste_kilidi:
             TAKIP_EDILENLER = secilenler
             SON_LISTE_GUNCELLE = time.time()
-        
+
         return secilenler
     except Exception as e:
         print(f"⚠️ [COİN SEÇİMİ] Hata: {e} — yedek liste kullanılıyor", flush=True)
@@ -451,7 +455,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (Dinamik coin seçimi - 10 coin)")
+    await update.message.reply_text("🟢 Bot aktif! (Dinamik coin - BTC/ETH hariç)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -476,7 +480,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Dinamik coin seçimi aktif...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Dinamik coin (BTC/ETH hariç) aktif...", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -497,7 +501,6 @@ def otomatik_arkaplan_tarayici():
             print(f"\n{'='*55}", flush=True)
             print(f"🔄 [DÖNGÜ #{dongu_sayaci}] {time.strftime('%H:%M:%S')}", flush=True)
 
-            # 🆕 DİNAMİK COİN LİSTESİ
             volatil_coinleri_bul()
 
             piyasa_rejimi, btc_yonu = piyasa_rejimini_tespit_et()
@@ -679,7 +682,7 @@ def otomatik_arkaplan_tarayici():
                         z = cd.get("zaman", 0) if isinstance(cd, dict) else float(cd)
                         kalan = int(z - time.time())
                         if kalan > 0:
-                            continue  # sessizce atla (log kalabalığı olmasın)
+                            continue
 
                 try:
                     ticker = exchange.fetch_ticker(symbol)
