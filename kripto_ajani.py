@@ -75,27 +75,26 @@ KOMISYON_ORANI = 0.0008
 BEKLENEN_HAREKET_TP_ORANI = 0.50
 BEKLENEN_HAREKET_SL_ORANI = 0.35
 
-MOD3_TP_ORANI = 0.35
-MOD3_SL_ORANI = 0.50
+# 🆕 MOD3 TP/SL ORANI MOD2 İLE AYNI YAPILDI
+MOD3_TP_ORANI = 0.50
+MOD3_SL_ORANI = 0.35
 
 MIN_NET_RR = 0.8
 
 RSI_ASIRI_UST = 85
 RSI_ASIRI_ALT = 15
 
-# 🆕 RSI EŞİKLERİ SERTLEŞTİRİLDİ (45/55 → 40/60)
-COIN_TESTERE_RSI_UST = 60
-COIN_TESTERE_RSI_ALT = 40
+COIN_TESTERE_RSI_UST = 65
+COIN_TESTERE_RSI_ALT = 35
 
 TREND_SKOR_ESIK = 6
 ZAYIF_TREND_ESIK = 4
 
 KIRILIM_MIN_KRITER = 3
 
-# 🆕 ANİ KIRILIM AYARLARI
-KIRILIM_KORUMA_BEKLEME = 300       # İlk 5 dakika koruma kapalı
-KIRILIM_HACIM_BB = 2.5             # BB kırılımı için min hacim
-KIRILIM_HACIM_MUM = 2.0            # 3 mum kırılımı için min hacim
+KIRILIM_KORUMA_BEKLEME = 300
+KIRILIM_HACIM_BB = 2.5
+KIRILIM_HACIM_MUM = 2.0
 
 def hafizayi_yukle():
     print("💾 Hafıza yükleniyor...", flush=True)
@@ -383,7 +382,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (RSI 40/60 + ani kırılım koruması)")
+    await update.message.reply_text("🟢 Bot aktif! (Mod3 TP/SL Mod2 ile aynı)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -408,7 +407,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] 3 Mod + RSI 40/60 + ani kırılım koruması...", flush=True)
+    print("🚀 [BAŞLANGIÇ] 3 Mod + RSI 35/65 + Mod3 TP/SL eşitlendi...", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -485,7 +484,7 @@ def otomatik_arkaplan_tarayici():
             except Exception as e:
                 print(f"⚠️ Kapanış: {e}", flush=True)
 
-            # 🆕 ANİ KIRILIM KORUMASI (Mod 2 + Mod 3 için)
+            # ANİ KIRILIM KORUMASI
             try:
                 with state_lock:
                     aktif_p = list(AKTIF_GRID_SISTEMLERI.items())
@@ -499,11 +498,9 @@ def otomatik_arkaplan_tarayici():
                     giris_zaman = float(kayit_k.get("giris_zamani", 0))
                     mod_k = str(kayit_k.get("mod", ""))
 
-                    # İlk 5 dakika koruma kapalı
                     if time.time() - giris_zaman < KIRILIM_KORUMA_BEKLEME:
                         continue
 
-                    # Sadece Mod 2 ve Mod 3 için
                     if "MOD2" not in mod_k and "MOD3" not in mod_k:
                         continue
 
