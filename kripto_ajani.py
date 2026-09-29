@@ -57,11 +57,20 @@ exchange = ccxt.gate({
 })
 exchange.set_sandbox_mode(True)
 
-TAKIP_EDILENLER = ['SOL/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'LTC/USDT:USDT', 'LINK/USDT:USDT']
+# 🆕 FALLBACK LISTE (volatilite taraması başarısız olursa)
+YEDEK_LISTE = ['SOL/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'LTC/USDT:USDT', 'LINK/USDT:USDT']
+
+# 🆕 VOLATİLİTE AYARLARI
+COIN_SAYISI = 10                    # Kaç coin taranacak
+MIN_HACIM_USD = 10_000_000          # Minimum 24h hacim (10M USDT)
+CACHE_SURESI = 30 * 60              # Liste 30 dk cache'lensin
+TAKIP_EDILENLER = YEDEK_LISTE.copy()
+SON_LISTE_GUNCELLE = 0
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
 tarayici_kilidi = threading.Lock()
+liste_kilidi = threading.Lock()
 SON_BTC_YONU = "YATAY (Testere)"
 
 KALDIRAC_MIN = 5
@@ -75,7 +84,6 @@ KOMISYON_ORANI = 0.0008
 BEKLENEN_HAREKET_TP_ORANI = 0.50
 BEKLENEN_HAREKET_SL_ORANI = 0.35
 
-# 🆕 MOD3 TP/SL ORANI MOD2 İLE AYNI YAPILDI
 MOD3_TP_ORANI = 0.50
 MOD3_SL_ORANI = 0.35
 
@@ -95,6 +103,64 @@ KIRILIM_MIN_KRITER = 3
 KIRILIM_KORUMA_BEKLEME = 300
 KIRILIM_HACIM_BB = 2.5
 KIRILIM_HACIM_MUM = 2.0
+
+# 🆕 VOLATİL COİN SEÇİMİ
+def volatil_coinleri_bul():
+    global TAKIP_EDILENLER, SON_LISTE_GUNCELLE
+    
+    with liste_kilidi:
+        # Cache kontrolü
+        if time.time() - SON_LISTE_GUNCELLE < CACHE_SURESI and TAKIP_EDILENLER:
+            return TAKIP_EDILENLER
+    
+    print("🔍 [COİN SEÇİMİ] Volatil coinler taranıyor...", flush=True)
+    
+    try:
+        tickers = exchange.fetch_tickers()
+        
+        skorlar = []
+        for sym, t in tickers.items():
+            # Sadece USDT perpetual
+            if not sym.endswith(':USDT'):
+                continue
+            if sym == 'BTC/USDT:USDT':  # BTC hariç (referans)
+                continue
+            
+            try:
+                high = float(t.get('high') or 0)
+                low = float(t.get('low') or 0)
+                vol = float(t.get('quoteVolume') or 0)
+                
+                if high <= 0 or low <= 0 or vol < MIN_HACIM_USD:
+                    continue
+                
+                # Volatilite skoru: range × √hacim
+                range_orani = (high - low) / low
+                skor = range_orani * (vol ** 0.5)
+                
+                skorlar.append((sym, skor, range_orani, vol))
+            except:
+                continue
+        
+        if not skorlar:
+            print("⚠️ [COİN SEÇİMİ] Hiç coin bulunamadı, yedek liste kullanılıyor", flush=True)
+            return YEDEK_LISTE
+        
+        skorlar.sort(key=lambda x: x[1], reverse=True)
+        secilenler = [s[0] for s in skorlar[:COIN_SAYISI]]
+        
+        print(f"📊 [COİN SEÇİMİ] {len(skorlar)} coin arasından ilk {len(secilenler)} seçildi:", flush=True)
+        for i, s in enumerate(skorlar[:COIN_SAYISI], 1):
+            print(f"   {i}. {s[0]} | Range:%{s[2]*100:.2f} | Hacim:{s[3]/1_000_000:.1f}M | Skor:{s[1]:.0f}", flush=True)
+        
+        with liste_kilidi:
+            TAKIP_EDILENLER = secilenler
+            SON_LISTE_GUNCELLE = time.time()
+        
+        return secilenler
+    except Exception as e:
+        print(f"⚠️ [COİN SEÇİMİ] Hata: {e} — yedek liste kullanılıyor", flush=True)
+        return YEDEK_LISTE
 
 def hafizayi_yukle():
     print("💾 Hafıza yükleniyor...", flush=True)
@@ -365,11 +431,14 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             roe = fark * 100 * kaldirac_val
             pos_detaylari += f"\n• `{sym}` | {yon} ({kaldirac_val}x) | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
+        liste_str = ", ".join([s.split('/')[0] for s in TAKIP_EDILENLER[:10]])
+
         mesaj = (
-            f"📊 *BOT DURUM* [3 MOD]\n\n"
+            f"📊 *BOT DURUM* [DİNAMİK COİN]\n\n"
             f"🌐 Rejim: `{rejim}` (BTC: `{btc_yon}`)\n"
             f"💰 Kasa: `{total:.2f} USDT` | PnL: `{toplam_pnl:+.2f}`\n"
-            f"📌 Açık: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
+            f"📌 Açık: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n"
+            f"🎯 Takip: `{liste_str}`"
             f"{pos_detaylari}\n\n"
             f"✅ TP: `{basarili}` | ❌ SL: `{basarisiz}`\n"
             f"📈 Başarı: `%{basari_orani:.1f}`"
@@ -382,7 +451,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (Mod3 TP/SL Mod2 ile aynı)")
+    await update.message.reply_text("🟢 Bot aktif! (Dinamik coin seçimi - 10 coin)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -407,7 +476,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] 3 Mod + RSI 35/65 + Mod3 TP/SL eşitlendi...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Dinamik coin seçimi aktif...", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -427,6 +496,9 @@ def otomatik_arkaplan_tarayici():
             dongu_sayaci += 1
             print(f"\n{'='*55}", flush=True)
             print(f"🔄 [DÖNGÜ #{dongu_sayaci}] {time.strftime('%H:%M:%S')}", flush=True)
+
+            # 🆕 DİNAMİK COİN LİSTESİ
+            volatil_coinleri_bul()
 
             piyasa_rejimi, btc_yonu = piyasa_rejimini_tespit_et()
 
@@ -593,7 +665,7 @@ def otomatik_arkaplan_tarayici():
                 print(f"⚠️ Kırılım genel: {e}", flush=True)
 
             print(f"{'─'*55}", flush=True)
-            print(f"🔍 [TARAMA] Rejim: {piyasa_rejimi} | BTC: {btc_yonu}", flush=True)
+            print(f"🔍 [TARAMA] Rejim: {piyasa_rejimi} | BTC: {btc_yonu} | {len(TAKIP_EDILENLER)} coin", flush=True)
             print(f"{'─'*55}", flush=True)
 
             taranan = []
@@ -607,8 +679,7 @@ def otomatik_arkaplan_tarayici():
                         z = cd.get("zaman", 0) if isinstance(cd, dict) else float(cd)
                         kalan = int(z - time.time())
                         if kalan > 0:
-                            print(f"⏳ [{symbol}] Cooldown: {kalan}s", flush=True)
-                            continue
+                            continue  # sessizce atla (log kalabalığı olmasın)
 
                 try:
                     ticker = exchange.fetch_ticker(symbol)
@@ -623,34 +694,31 @@ def otomatik_arkaplan_tarayici():
                     if piyasa_rejimi == "YATAY":
                         if rsi < COIN_TESTERE_RSI_ALT:
                             islem_yonu = "SHORT"
-                            mod = f"MOD2 YATAY (RSI<{COIN_TESTERE_RSI_ALT}→SHORT)"
+                            mod = f"MOD2 YATAY (RSI<{COIN_TESTERE_RSI_ALT})"
                         elif rsi > COIN_TESTERE_RSI_UST:
                             islem_yonu = "LONG"
-                            mod = f"MOD2 YATAY (RSI>{COIN_TESTERE_RSI_UST}→LONG)"
+                            mod = f"MOD2 YATAY (RSI>{COIN_TESTERE_RSI_UST})"
                         else:
-                            print(f"🔍 [{symbol}] MOD2 RSI {rsi:.1f} nötr", flush=True)
                             continue
 
                     elif piyasa_rejimi in ["TREND", "TREND_ZAYIF"]:
                         if kirilim_var:
                             if btc_yonu == "SHORT" and kirilim_yonu == "SHORT":
                                 islem_yonu = "SHORT"
-                                mod = f"MOD1 TREND (BTC+Kırılım SHORT)"
+                                mod = f"MOD1 TREND SHORT"
                             elif btc_yonu == "LONG" and kirilim_yonu == "LONG":
                                 islem_yonu = "LONG"
-                                mod = f"MOD1 TREND (BTC+Kırılım LONG)"
+                                mod = f"MOD1 TREND LONG"
                             else:
-                                print(f"⏭️ [{symbol}] MOD1 BTC:{btc_yonu} vs Kırılım:{kirilim_yonu}", flush=True)
                                 continue
                         else:
                             if rsi < COIN_TESTERE_RSI_ALT:
                                 islem_yonu = "LONG"
-                                mod = f"MOD3 TERS (RSI:{rsi:.1f}<{COIN_TESTERE_RSI_ALT}→LONG)"
+                                mod = f"MOD3 TERS (RSI:{rsi:.1f})"
                             elif rsi > COIN_TESTERE_RSI_UST:
                                 islem_yonu = "SHORT"
-                                mod = f"MOD3 TERS (RSI:{rsi:.1f}>{COIN_TESTERE_RSI_UST}→SHORT)"
+                                mod = f"MOD3 TERS (RSI:{rsi:.1f})"
                             else:
-                                print(f"🔍 [{symbol}] MOD3 RSI {rsi:.1f} nötr", flush=True)
                                 continue
                     else:
                         continue
@@ -662,7 +730,6 @@ def otomatik_arkaplan_tarayici():
                     )
 
                     if "MOD3" not in mod and net_rr < MIN_NET_RR:
-                        print(f"⏭️ [{symbol}] R/R {net_rr:.2f} < {MIN_NET_RR}", flush=True)
                         continue
 
                     print(
@@ -678,7 +745,6 @@ def otomatik_arkaplan_tarayici():
                         "kaldirac": kaldirac, "net_rr": net_rr
                     })
                 except Exception as e:
-                    print(f"⚠️ Tarama: {e}", flush=True)
                     continue
 
             taranan.sort(key=lambda x: x["net_rr"], reverse=True)
@@ -731,14 +797,13 @@ def otomatik_arkaplan_tarayici():
                         exchange.create_order(sinyal["symbol"], 'stop', kapat_y, miktar, sl, {'stopPrice': sl, 'reduceOnly': True})
                         sl_basarili = True
                     except Exception as e:
-                        print(f"   ⚠️ TP/SL emir hatası: {e}", flush=True)
+                        print(f"   ⚠️ TP/SL hatası: {e}", flush=True)
 
                     if not sl_basarili:
-                        print(f"   🚨 SL emri basılamadı, pozisyon acil kapatılıyor!", flush=True)
+                        print(f"   🚨 SL basılamadı, acil kapatma!", flush=True)
                         try:
                             exchange.create_order(sinyal["symbol"], 'market', kapat_y, miktar, None, {'reduceOnly': True})
-                        except Exception as e2:
-                            print(f"   🚨 Acil kapatma hatası: {e2}", flush=True)
+                        except: pass
                         continue
 
                     with state_lock:
