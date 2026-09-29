@@ -83,13 +83,19 @@ MIN_NET_RR = 0.8
 RSI_ASIRI_UST = 85
 RSI_ASIRI_ALT = 15
 
-COIN_TESTERE_RSI_UST = 55
-COIN_TESTERE_RSI_ALT = 45
+# 🆕 RSI EŞİKLERİ SERTLEŞTİRİLDİ (45/55 → 40/60)
+COIN_TESTERE_RSI_UST = 60
+COIN_TESTERE_RSI_ALT = 40
 
 TREND_SKOR_ESIK = 6
 ZAYIF_TREND_ESIK = 4
 
 KIRILIM_MIN_KRITER = 3
+
+# 🆕 ANİ KIRILIM AYARLARI
+KIRILIM_KORUMA_BEKLEME = 300       # İlk 5 dakika koruma kapalı
+KIRILIM_HACIM_BB = 2.5             # BB kırılımı için min hacim
+KIRILIM_HACIM_MUM = 2.0            # 3 mum kırılımı için min hacim
 
 def hafizayi_yukle():
     print("💾 Hafıza yükleniyor...", flush=True)
@@ -377,7 +383,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (Mod3 R/R filtresi kaldırıldı)")
+    await update.message.reply_text("🟢 Bot aktif! (RSI 40/60 + ani kırılım koruması)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -402,7 +408,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] 3 Mod + Mod3 filtresiz...", flush=True)
+    print("🚀 [BAŞLANGIÇ] 3 Mod + RSI 40/60 + ani kırılım koruması...", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -440,6 +446,7 @@ def otomatik_arkaplan_tarayici():
                 aktif_borsa_map = {}
                 aktif_semboller_listesi = []
 
+            # POZİSYON KAPANIŞ
             try:
                 anlik_aktif = [p['symbol'] for p in raw_positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                 for eski_sym in list(AKTIF_GRID_SISTEMLERI.keys()):
@@ -478,6 +485,116 @@ def otomatik_arkaplan_tarayici():
             except Exception as e:
                 print(f"⚠️ Kapanış: {e}", flush=True)
 
+            # 🆕 ANİ KIRILIM KORUMASI (Mod 2 + Mod 3 için)
+            try:
+                with state_lock:
+                    aktif_p = list(AKTIF_GRID_SISTEMLERI.items())
+
+                for sym_k, kayit_k in aktif_p:
+                    if sym_k not in AKTIF_GRID_SISTEMLERI:
+                        continue
+
+                    yon_k = kayit_k.get("yon", "LONG")
+                    giris_k = float(kayit_k.get("giris_fiyati", 0))
+                    giris_zaman = float(kayit_k.get("giris_zamani", 0))
+                    mod_k = str(kayit_k.get("mod", ""))
+
+                    # İlk 5 dakika koruma kapalı
+                    if time.time() - giris_zaman < KIRILIM_KORUMA_BEKLEME:
+                        continue
+
+                    # Sadece Mod 2 ve Mod 3 için
+                    if "MOD2" not in mod_k and "MOD3" not in mod_k:
+                        continue
+
+                    try:
+                        t_k = exchange.fetch_ticker(sym_k)
+                        anlik_k = float(t_k['last'])
+                    except Exception:
+                        continue
+
+                    try:
+                        ohlcv_k = exchange.fetch_ohlcv(sym_k, timeframe='15m', limit=25)
+                        df_k = pd.DataFrame(ohlcv_k, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+
+                        bb_k = ta.volatility.BollingerBands(close=df_k['close'], window=20, window_dev=2)
+                        bb_ust_k = float(bb_k.bollinger_hband().iloc[-1])
+                        bb_alt_k = float(bb_k.bollinger_lband().iloc[-1])
+
+                        bb_disari = False
+                        bb_yon_k = ""
+                        if anlik_k > bb_ust_k:
+                            bb_disari = True
+                            bb_yon_k = "yukarı"
+                        elif anlik_k < bb_alt_k:
+                            bb_disari = True
+                            bb_yon_k = "aşağı"
+
+                        son_hacim_k = float(df_k['volume'].iloc[-1])
+                        ort_hacim_k = float(df_k['volume'].iloc[-21:-1].mean()) if len(df_k) >= 21 else 1.0
+                        hacim_orani_k = son_hacim_k / ort_hacim_k if ort_hacim_k > 0 else 1.0
+                        hacim_patlama = hacim_orani_k > KIRILIM_HACIM_BB
+
+                        son_3_k = df_k['close'].iloc[-3:].values
+                        artan_k = all(son_3_k[i] < son_3_k[i+1] for i in range(len(son_3_k)-1))
+                        azalan_k = all(son_3_k[i] > son_3_k[i+1] for i in range(len(son_3_k)-1))
+                        mum_kirilim = artan_k or azalan_k
+
+                        kirilim_var = False
+                        kirilim_sebep = ""
+
+                        if bb_disari and hacim_patlama:
+                            if yon_k == "LONG" and bb_yon_k == "aşağı":
+                                kirilim_var = True
+                                kirilim_sebep = f"BB↓ Hacim x{hacim_orani_k:.1f}"
+                            elif yon_k == "SHORT" and bb_yon_k == "yukarı":
+                                kirilim_var = True
+                                kirilim_sebep = f"BB↑ Hacim x{hacim_orani_k:.1f}"
+                        elif mum_kirilim and hacim_orani_k > KIRILIM_HACIM_MUM:
+                            if yon_k == "LONG" and azalan_k:
+                                kirilim_var = True
+                                kirilim_sebep = f"3 mum↓ x{hacim_orani_k:.1f}"
+                            elif yon_k == "SHORT" and artan_k:
+                                kirilim_var = True
+                                kirilim_sebep = f"3 mum↑ x{hacim_orani_k:.1f}"
+
+                        if kirilim_var:
+                            print(f"🚨 [ANİ KIRILIM] {sym_k} | {yon_k} | {kirilim_sebep}", flush=True)
+
+                            try:
+                                try: exchange.cancel_all_orders(sym_k)
+                                except: pass
+                                tum = exchange.fetch_positions()
+                                pos_list = [p for p in tum if p['symbol'] == sym_k]
+                                for p in pos_list:
+                                    kontrat = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+                                    if kontrat > 0:
+                                        kapat_y = 'sell' if yon_k == 'LONG' else 'buy'
+                                        exchange.create_order(sym_k, 'market', kapat_y, kontrat, None, {'reduceOnly': True})
+                            except Exception as e:
+                                print(f"   ⚠️ Kapatma: {e}", flush=True)
+
+                            pnl = (anlik_k - giris_k) / giris_k * 100 * 5 if yon_k == "LONG" else (giris_k - anlik_k) / giris_k * 100 * 5
+
+                            with state_lock:
+                                if pnl > 0:
+                                    ANALitik_HAFIZA["basarili_islem_sayisi"] = int(ANALitik_HAFIZA.get("basarili_islem_sayisi", 0)) + 1
+                                else:
+                                    ANALitik_HAFIZA["basarisiz_islem_sayisi"] = int(ANALitik_HAFIZA.get("basarisiz_islem_sayisi", 0)) + 1
+                                COIN_COOLDOWNLAR[sym_k] = {"zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), "son_yon": yon_k}
+                                if sym_k in AKTIF_GRID_SISTEMLERI:
+                                    del AKTIF_GRID_SISTEMLERI[sym_k]
+
+                            hafizayi_kaydet()
+                            telegram_mesaj_gonder(
+                                f"🚨 *ANİ KIRILIM*\n📌 `{sym_k}` | {yon_k}\n"
+                                f"📍 {giris_k} → {anlik_k}\n📊 ROE: %{pnl:+.2f}\n⚡ {kirilim_sebep}"
+                            )
+                    except Exception as e:
+                        print(f"   ⚠️ Kırılım: {e}", flush=True)
+            except Exception as e:
+                print(f"⚠️ Kırılım genel: {e}", flush=True)
+
             print(f"{'─'*55}", flush=True)
             print(f"🔍 [TARAMA] Rejim: {piyasa_rejimi} | BTC: {btc_yonu}", flush=True)
             print(f"{'─'*55}", flush=True)
@@ -509,10 +626,10 @@ def otomatik_arkaplan_tarayici():
                     if piyasa_rejimi == "YATAY":
                         if rsi < COIN_TESTERE_RSI_ALT:
                             islem_yonu = "SHORT"
-                            mod = "MOD2 YATAY (RSI<45→SHORT)"
+                            mod = f"MOD2 YATAY (RSI<{COIN_TESTERE_RSI_ALT}→SHORT)"
                         elif rsi > COIN_TESTERE_RSI_UST:
                             islem_yonu = "LONG"
-                            mod = "MOD2 YATAY (RSI>55→LONG)"
+                            mod = f"MOD2 YATAY (RSI>{COIN_TESTERE_RSI_UST}→LONG)"
                         else:
                             print(f"🔍 [{symbol}] MOD2 RSI {rsi:.1f} nötr", flush=True)
                             continue
@@ -531,10 +648,10 @@ def otomatik_arkaplan_tarayici():
                         else:
                             if rsi < COIN_TESTERE_RSI_ALT:
                                 islem_yonu = "LONG"
-                                mod = f"MOD3 TERS (RSI:{rsi:.1f}<45→LONG)"
+                                mod = f"MOD3 TERS (RSI:{rsi:.1f}<{COIN_TESTERE_RSI_ALT}→LONG)"
                             elif rsi > COIN_TESTERE_RSI_UST:
                                 islem_yonu = "SHORT"
-                                mod = f"MOD3 TERS (RSI:{rsi:.1f}>55→SHORT)"
+                                mod = f"MOD3 TERS (RSI:{rsi:.1f}>{COIN_TESTERE_RSI_UST}→SHORT)"
                             else:
                                 print(f"🔍 [{symbol}] MOD3 RSI {rsi:.1f} nötr", flush=True)
                                 continue
@@ -547,7 +664,6 @@ def otomatik_arkaplan_tarayici():
                         symbol, fiyat, islem_yonu, ticker, kaldirac, mod
                     )
 
-                    # 🆕 MOD3 İÇİN R/R FİLTRESİ YOK
                     if "MOD3" not in mod and net_rr < MIN_NET_RR:
                         print(f"⏭️ [{symbol}] R/R {net_rr:.2f} < {MIN_NET_RR}", flush=True)
                         continue
