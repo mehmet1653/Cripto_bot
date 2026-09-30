@@ -85,22 +85,16 @@ ATR_ESIK_DUSUK = 0.004
 
 KOMISYON_ORANI = 0.0008
 
-# Genel (Mod 1 + Mod 3)
 BEKLENEN_HAREKET_TP_ORANI = 0.50
 BEKLENEN_HAREKET_SL_ORANI = 0.35
 
-# 🆕 Mod 2 (Testere) — daha yakın TP/SL
 MOD2_TP_ORANI = 0.30
 MOD2_SL_ORANI = 0.20
 
-# Mod 3
 MOD3_TP_ORANI = 0.50
 MOD3_SL_ORANI = 0.35
 
 MIN_NET_RR = 0.8
-
-RSI_ASIRI_UST = 85
-RSI_ASIRI_ALT = 15
 
 COIN_TESTERE_RSI_UST = 65
 COIN_TESTERE_RSI_ALT = 35
@@ -113,6 +107,10 @@ KIRILIM_MIN_KRITER = 3
 KIRILIM_KORUMA_BEKLEME = 300
 KIRILIM_HACIM_BB = 2.5
 KIRILIM_HACIM_MUM = 2.0
+
+# 🆕 15M BTC HIZLI TREND AYARLARI
+BTC_15M_ADX_ESIK = 25         # 15m ADX > 25 → trend
+BTC_15M_HAREKET_ESIK = 0.015  # Son 3 mum %1.5+ hareket → trend
 
 def volatil_coinleri_bul():
     global TAKIP_EDILENLER, SON_LISTE_GUNCELLE
@@ -157,7 +155,7 @@ def volatil_coinleri_bul():
 
         print(f"📊 [COİN SEÇİMİ] {len(skorlar)} coin arasından ilk {len(secilenler)} seçildi:", flush=True)
         for i, s in enumerate(skorlar[:COIN_SAYISI], 1):
-            print(f"   {i}. {s[0]} | Range:%{s[2]*100:.2f} | Hacim:{s[3]/1_000_000:.1f}M | Skor:{s[1]:.0f}", flush=True)
+            print(f"   {i}. {s[0]} | Range:%{s[2]*100:.2f} | Hacim:{s[3]/1_000_000:.1f}M", flush=True)
 
         with liste_kilidi:
             TAKIP_EDILENLER = secilenler
@@ -227,68 +225,127 @@ def dinamik_kaldirac_hesapla(symbol, anlik_fiyat):
         else:
             return KALDIRAC_MIN, atr_orani
     except Exception as e:
-        print(f"⚠️ Kaldıraç: {e}", flush=True)
         return KALDIRAC_MIN, 0.01
 
+# 🆕 YENİ REJİM TESPİTİ (1h + 15m)
 def piyasa_rejimini_tespit_et():
     global SON_BTC_YONU
     try:
-        ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=50)
-        df = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        # ==================== 1H ANALİZ ====================
+        ohlcv_1h = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=50)
+        df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-        adx_ind = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14)
-        adx = adx_ind.adx().iloc[-1]
-        adx_pos = adx_ind.adx_pos().iloc[-1]
-        adx_neg = adx_ind.adx_neg().iloc[-1]
+        adx_ind_1h = ta.trend.ADXIndicator(df_1h['high'], df_1h['low'], df_1h['close'], window=14)
+        adx_1h = adx_ind_1h.adx().iloc[-1]
+        adx_pos_1h = adx_ind_1h.adx_pos().iloc[-1]
+        adx_neg_1h = adx_ind_1h.adx_neg().iloc[-1]
 
-        bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
-        bbw = (bb.bollinger_hband().iloc[-1] - bb.bollinger_lband().iloc[-1]) / bb.bollinger_mavg().iloc[-1]
+        bb_1h = ta.volatility.BollingerBands(close=df_1h['close'], window=20, window_dev=2)
+        bbw_1h = (bb_1h.bollinger_hband().iloc[-1] - bb_1h.bollinger_lband().iloc[-1]) / bb_1h.bollinger_mavg().iloc[-1]
 
-        ema9 = ta.trend.ema_indicator(df['close'], window=9).iloc[-1]
-        ema21 = ta.trend.ema_indicator(df['close'], window=21).iloc[-1]
-        ema50 = ta.trend.ema_indicator(df['close'], window=50).iloc[-1]
-        ema_fark = abs(ema9 - ema21) / ema21 * 100
+        ema9_1h = ta.trend.ema_indicator(df_1h['close'], window=9).iloc[-1]
+        ema21_1h = ta.trend.ema_indicator(df_1h['close'], window=21).iloc[-1]
+        ema50_1h = ta.trend.ema_indicator(df_1h['close'], window=50).iloc[-1]
+        ema_fark_1h = abs(ema9_1h - ema21_1h) / ema21_1h * 100
 
-        fiyat = df['close'].iloc[-1]
-        ema50_fark = abs(fiyat - ema50) / ema50 * 100
+        fiyat_1h = df_1h['close'].iloc[-1]
+        ema50_fark_1h = abs(fiyat_1h - ema50_1h) / ema50_1h * 100
 
-        son_10 = df['close'].iloc[-10:].values
-        yukari = sum(1 for i in range(1, len(son_10)) if son_10[i] > son_10[i-1])
-        tek_yonlu = max(yukari, len(son_10) - 1 - yukari) >= 7
+        son_10_1h = df_1h['close'].iloc[-10:].values
+        yukari_1h = sum(1 for i in range(1, len(son_10_1h)) if son_10_1h[i] > son_10_1h[i-1])
+        tek_yonlu_1h = max(yukari_1h, len(son_10_1h) - 1 - yukari_1h) >= 7
 
-        atr_seri = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range()
-        atr_simdi = atr_seri.iloc[-1]
-        atr_once = atr_seri.iloc[-11] if len(atr_seri) >= 11 else atr_simdi
-        atr_artiyor = atr_simdi > atr_once * 1.1
+        atr_seri_1h = ta.volatility.AverageTrueRange(df_1h['high'], df_1h['low'], df_1h['close'], window=14).average_true_range()
+        atr_simdi_1h = atr_seri_1h.iloc[-1]
+        atr_once_1h = atr_seri_1h.iloc[-11] if len(atr_seri_1h) >= 11 else atr_simdi_1h
+        atr_artiyor_1h = atr_simdi_1h > atr_once_1h * 1.1
 
-        skor = 0
-        if adx >= 30: skor += 2
-        if adx >= 45: skor += 1
-        if bbw >= 0.03: skor += 2
-        if bbw >= 0.05: skor += 1
-        if ema_fark >= 0.5: skor += 2
-        if ema50_fark >= 1.0: skor += 1
-        if tek_yonlu: skor += 2
-        if atr_artiyor: skor += 1
+        skor_1h = 0
+        if adx_1h >= 30: skor_1h += 2
+        if adx_1h >= 45: skor_1h += 1
+        if bbw_1h >= 0.03: skor_1h += 2
+        if bbw_1h >= 0.05: skor_1h += 1
+        if ema_fark_1h >= 0.5: skor_1h += 2
+        if ema50_fark_1h >= 1.0: skor_1h += 1
+        if tek_yonlu_1h: skor_1h += 2
+        if atr_artiyor_1h: skor_1h += 1
 
-        if skor >= TREND_SKOR_ESIK:
-            rejim = "TREND"
-            if adx_pos > adx_neg and ema9 > ema21:
-                trend_yonu = "LONG"
-            elif adx_neg > adx_pos and ema9 < ema21:
-                trend_yonu = "SHORT"
+        # 1h rejim
+        if skor_1h >= TREND_SKOR_ESIK:
+            rejim_1h = "TREND"
+            if adx_pos_1h > adx_neg_1h and ema9_1h > ema21_1h:
+                yon_1h = "LONG"
+            elif adx_neg_1h > adx_pos_1h and ema9_1h < ema21_1h:
+                yon_1h = "SHORT"
             else:
-                trend_yonu = "LONG" if ema9 > ema21 else "SHORT"
-            SON_BTC_YONU = trend_yonu
-        elif skor >= ZAYIF_TREND_ESIK:
-            rejim = "TREND_ZAYIF"
-            trend_yonu = "LONG" if ema9 > ema21 else "SHORT"
-            SON_BTC_YONU = trend_yonu
+                yon_1h = "LONG" if ema9_1h > ema21_1h else "SHORT"
+        elif skor_1h >= ZAYIF_TREND_ESIK:
+            rejim_1h = "TREND_ZAYIF"
+            yon_1h = "LONG" if ema9_1h > ema21_1h else "SHORT"
+        else:
+            rejim_1h = "YATAY"
+            yon_1h = "YATAY"
+
+        # ==================== 15M ANALİZ (HIZLI TREND) ====================
+        ohlcv_15m = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=50)
+        df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+
+        # 15m ADX
+        adx_15m = ta.trend.ADXIndicator(df_15m['high'], df_15m['low'], df_15m['close'], window=14).adx().iloc[-1]
+
+        # 15m EMA yönü
+        ema9_15m = ta.trend.ema_indicator(df_15m['close'], window=9).iloc[-1]
+        ema21_15m = ta.trend.ema_indicator(df_15m['close'], window=21).iloc[-1]
+
+        # 15m son 3 mum hareket
+        son_3_15m = df_15m['close'].iloc[-3:].values
+        hareket_15m = abs(son_3_15m[-1] - son_3_15m[0]) / son_3_15m[0]
+        hizli_yukari_15m = son_3_15m[0] < son_3_15m[1] < son_3_15m[2]
+        hizli_asagi_15m = son_3_15m[0] > son_3_15m[1] > son_3_15m[2]
+
+        # 15m sert hareket kontrolü
+        if hareket_15m >= BTC_15M_HAREKET_ESIK and hizli_yukari_15m:
+            rejim_15m = "TREND"
+            yon_15m = "LONG"
+        elif hareket_15m >= BTC_15M_HAREKET_ESIK and hizli_asagi_15m:
+            rejim_15m = "TREND"
+            yon_15m = "SHORT"
+        elif adx_15m >= BTC_15M_ADX_ESIK:
+            rejim_15m = "TREND"
+            yon_15m = "LONG" if ema9_15m > ema21_15m else "SHORT"
+        else:
+            rejim_15m = "YATAY"
+            yon_15m = "YATAY"
+
+        # ==================== BİRLEŞTİR ====================
+        # İkisi de TREND ve aynı yön → TREND
+        if rejim_1h in ["TREND", "TREND_ZAYIF"] and rejim_15m == "TREND" and yon_1h == yon_15m:
+            rejim = "TREND"
+            trend_yonu = yon_1h
+            sebep = f"1h+15m uyumlu ({yon_1h})"
+        # 1h YATAY ama 15m TREND → HIZLI TREND
+        elif rejim_1h == "YATAY" and rejim_15m == "TREND":
+            rejim = "TREND"
+            trend_yonu = yon_15m
+            sebep = f"15m hızlı trend ({yon_15m})"
+        # 1h TREND ama 15m YATAY → 1h'ye güven
+        elif rejim_1h in ["TREND", "TREND_ZAYIF"]:
+            rejim = "TREND"
+            trend_yonu = yon_1h
+            sebep = f"1h trend ({yon_1h})"
+        # İkisi de YATAY → YATAY
         else:
             rejim = "YATAY"
             trend_yonu = "YATAY (Testere)"
+            sebep = "ikisi de yatay"
 
-        print(f"📊 [REJİM] {rejim} | {trend_yonu} | Skor:{skor}/12 | ADX:{adx:.1f}", flush=True)
+        SON_BTC_YONU = trend_yonu
+
+        print(
+            f"📊 [REJİM] {rejim} | {trend_yonu} | {sebep} | "
+            f"1h Skor:{skor_1h}/12 ADX:{adx_1h:.1f} | 15m ADX:{adx_15m:.1f} Hrk:%{hareket_15m*100:.2f}",
+            flush=True
+        )
         return rejim, trend_yonu
     except Exception as e:
         print(f"⚠️ Rejim: {e}", flush=True)
@@ -380,7 +437,6 @@ def beklenen_hareket_hesapla(symbol, anlik_fiyat, ticker_data):
 def akilli_seviye_hesapla(symbol, anlik_fiyat, yon, ticker_data, kaldirac, mod=""):
     beklenen = beklenen_hareket_hesapla(symbol, anlik_fiyat, ticker_data)
 
-    # 🆕 MOD BAZLI ORANLAR
     if "MOD2" in mod:
         tp_orani = MOD2_TP_ORANI
         sl_orani = MOD2_SL_ORANI
@@ -444,7 +500,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = ", ".join([s.split('/')[0] for s in TAKIP_EDILENLER[:10]])
 
         mesaj = (
-            f"📊 *BOT DURUM* [MOD2 TESTERE TP KÜÇÜK]\n\n"
+            f"📊 *BOT DURUM* [1h+15m]\n\n"
             f"🌐 Rejim: `{rejim}` (BTC: `{btc_yon}`)\n"
             f"💰 Kasa: `{total:.2f} USDT` | PnL: `{toplam_pnl:+.2f}`\n"
             f"📌 Açık: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`\n"
@@ -461,7 +517,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (Mod2 TP %30 / SL %20)")
+    await update.message.reply_text("🟢 Bot aktif! (1h+15m rejim)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -486,7 +542,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Mod2 TP küçük, SL küçük...", flush=True)
+    print("🚀 [BAŞLANGIÇ] 1h+15m rejim aktif...", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -701,7 +757,6 @@ def otomatik_arkaplan_tarayici():
                     kirilim_yonu, kirilim_var, sebep = kirilim_tespit_et(symbol)
 
                     if piyasa_rejimi == "YATAY":
-                        # MOD2: GERÇEK TESTERE
                         if rsi < COIN_TESTERE_RSI_ALT:
                             islem_yonu = "LONG"
                             mod = f"MOD2 TESTERE LONG"
