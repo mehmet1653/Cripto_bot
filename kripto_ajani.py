@@ -20,13 +20,11 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from supabase import create_client, Client
 
-# ==================== .env ====================
 if os.path.exists('/etc/secrets/.env'):
     load_dotenv('/etc/secrets/.env', override=True)
-    print("✅ .env yüklendi: /etc/secrets/.env", flush=True)
+    print("✅ .env yüklendi", flush=True)
 else:
     load_dotenv(override=True)
-    print("⚠️ Normal .env deneniyor", flush=True)
 
 app = Flask(__name__)
 
@@ -47,8 +45,6 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     print("❌ SUPABASE boş!", flush=True); sys.exit(1)
 if not TELEGRAM_TOKEN or not CHAT_ID:
     print("❌ TELEGRAM boş!", flush=True); sys.exit(1)
-
-print("✅ Env değişkenleri yüklendi", flush=True)
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -71,10 +67,17 @@ KALDIRAC = 5
 MAKSIMUM_TOPLAM_POZISYON = 2
 COOLDOWN_SURESI_SANIYE = 30 * 60
 
-# 🎯 LİKİDİTE AVI AYARLARI
 SWING_LOOKBACK = 50
 MIN_RR = 2.0
-TP_GERI_CEKME = 0.003   # 🆕 TP direncin/desteğin %0.3 gerisine
+TP_GERI_CEKME = 0.003
+
+# 🆕 TRAILING STOP — KOMİSYON KORUMALI
+TRAILING_SEVIYELER = [
+    (15.0, 0.10),   # ROE +15% → SL +10%
+    (10.0, 0.05),   # ROE +10% → SL +5%
+    (6.0, 0.02),    # ROE +6% → SL +2%
+    (3.0, 0.01),    # ROE +3% → SL +1% (komisyonu yener)
+]
 
 def hafizayi_yukle():
     try:
@@ -117,7 +120,6 @@ AKTIF_POZISYONLAR = kalici.get("aktif_sistemler", {})
 ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0})
 COIN_COOLDOWN = kalici.get("cooldownlar", {})
 
-# ==================== SWING / LİKİDİTE ====================
 def swing_noktalari_bul(df, lookback=SWING_LOOKBACK):
     highs = []
     lows = []
@@ -167,7 +169,6 @@ def sweep_tespit_et(df, destekler, direncler, anlik_fiyat):
     onceki = df.iloc[-2]
     iki_onceki = df.iloc[-3]
 
-    # BULLISH SWEEP (LONG)
     for destek in destekler:
         kirildi = False
         en_dusuk = 999999999
@@ -185,7 +186,6 @@ def sweep_tespit_et(df, destekler, direncler, anlik_fiyat):
                 sl_fiyat = en_dusuk * (1 - 0.001)
                 return "LONG", destek, sl_fiyat, en_dusuk
 
-    # BEARISH SWEEP (SHORT)
     for direnc in direncler:
         kirildi = False
         en_yuksek = 0
@@ -205,24 +205,20 @@ def sweep_tespit_et(df, destekler, direncler, anlik_fiyat):
 
     return None, None, None, None
 
-# 🆕 TP HESABI — DUVARIN GERİSİNDE
 def tp_hesapla(yon, giris, sl, destekler, direncler, atr):
     if yon == "LONG":
         for d in direncler:
             if d > giris:
-                # 🆕 TP = direncin %0.3 altı (duvara değmeden çıkış)
                 tp = d * (1 - TP_GERI_CEKME)
                 rr = (tp - giris) / (giris - sl) if giris > sl else 0
                 if rr >= MIN_RR:
                     return tp, rr
-        # Alternatif: ATR × 3
         tp = giris + (atr * 3.0)
         rr = (tp - giris) / (giris - sl) if giris > sl else 0
         return tp, rr
     else:
         for d in sorted(destekler, reverse=True):
             if d < giris:
-                # 🆕 TP = desteğin %0.3 üstü
                 tp = d * (1 + TP_GERI_CEKME)
                 rr = (giris - tp) / (sl - giris) if sl > giris else 0
                 if rr >= MIN_RR:
@@ -238,7 +234,7 @@ def tg_gonder(mesaj):
                       json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}, timeout=5)
     except: pass
 
-# ==================== TELEGRAM KOMUTLARI ====================
+# ==================== TELEGRAM ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     try:
@@ -264,7 +260,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detay += f"\n• `{sym}` | {y} ({k}x)\n  Giriş: `{g}` | ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 *DURUM* [LİKİDİTE AVI]\n\n"
+            f"📊 *DURUM* [LİKİDİTE AVI + TRAILING]\n\n"
             f"💰 Kasa: `{total:.2f} USDT` | PnL: `{pnl:+.2f}`\n"
             f"📌 Açık: `{len(pos)} / {MAKSIMUM_TOPLAM_POZISYON}`"
             f"{pos_detay}\n\n"
@@ -279,7 +275,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Likidite Avı Bot aktif! (TP duvar gerisi)")
+    await update.message.reply_text("🟢 Bot aktif! (Trailing + komisyon koruması)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -303,9 +299,100 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
 
+# ==================== 🆕 TRAILING STOP ====================
+def trailing_stop_kontrol():
+    """Kâr kilitleme — komisyon korumalı"""
+    with state_lock:
+        aktif_kopya = list(AKTIF_POZISYONLAR.items())
+
+    for sym, bilgi in aktif_kopya:
+        if sym not in AKTIF_POZISYONLAR:
+            continue
+
+        yon = bilgi.get("yon", "LONG")
+        g = float(bilgi.get("giris_fiyati", 0))
+        sl_kayitli = float(bilgi.get("sl_fiyat", 0))
+        kaldirac_v = int(bilgi.get("kaldirac", KALDIRAC))
+        giris_zaman = float(bilgi.get("giris_zamani", 0))
+
+        # İlk 2 dakika trailing yok
+        if time.time() - giris_zaman < 120:
+            continue
+
+        try:
+            t = exchange.fetch_ticker(sym)
+            anlik = float(t['last'])
+        except:
+            continue
+
+        # ROE hesapla
+        if yon == "LONG":
+            roe = (anlik - g) / g * 100 * kaldirac_v
+        else:
+            roe = (g - anlik) / g * 100 * kaldirac_v
+
+        # Hedef SL seviyesini bul
+        yeni_sl = None
+        for esik_roe, kilit_orani in TRAILING_SEVIYELER:
+            if roe >= esik_roe:
+                if yon == "LONG":
+                    yeni_sl = g * (1 + kilit_orani / kaldirac_v)
+                else:
+                    yeni_sl = g * (1 - kilit_orani / kaldirac_v)
+                break
+
+        if yeni_sl is None:
+            continue
+
+        # İyileştirme var mı?
+        if yon == "LONG":
+            iyilestirme = yeni_sl > sl_kayitli * 1.0005
+        else:
+            iyilestirme = yeni_sl < sl_kayitli * 0.9995
+
+        if not iyilestirme:
+            continue
+
+        # SL'yi güncelle
+        try:
+            exchange.cancel_all_orders(sym)
+
+            miktar = None
+            for p in exchange.fetch_positions():
+                if p['symbol'] == sym:
+                    miktar = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+                    break
+
+            if not miktar or miktar <= 0:
+                continue
+
+            ky = 'sell' if yon == 'LONG' else 'buy'
+
+            # Yeni SL
+            exchange.create_order(sym, 'stop', ky, miktar, yeni_sl, {'stopPrice': yeni_sl, 'reduceOnly': True})
+
+            # TP'yi yeniden koy
+            tp_kayitli = float(bilgi.get("tp_fiyat", 0))
+            if tp_kayitli > 0:
+                exchange.create_order(sym, 'limit', ky, miktar, tp_kayitli, {'reduceOnly': True})
+
+            with state_lock:
+                if sym in AKTIF_POZISYONLAR:
+                    AKTIF_POZISYONLAR[sym]["sl_fiyat"] = yeni_sl
+
+            print(f"🔒 [TRAILING] {sym} | ROE:%{roe:.1f} → SL:{yeni_sl:.6f}", flush=True)
+            tg_gonder(
+                f"🔒 *KÂR KİLİTLENDİ*\n"
+                f"📌 `{sym}` | {yon}\n"
+                f"📊 ROE: `%{roe:+.2f}`\n"
+                f"🛑 Yeni SL: `{yeni_sl:.6f}`"
+            )
+        except Exception as e:
+            print(f"⚠️ Trailing hatası {sym}: {e}", flush=True)
+
 # ==================== ANA TARAYICI ====================
 def tarayici():
-    print("🚀 [BAŞLANGIÇ] LİKİDİTE AVI Botu Aktif (TP duvar gerisi)...", flush=True)
+    print("🚀 [BAŞLANGIÇ] LİKİDİTE AVI + Trailing (Komisyon Korumalı)...", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -381,6 +468,9 @@ def tarayici():
                         tg_gonder(f"{tip}\n📌 `{eski}` | Çıkış: `{cikis}`")
             except Exception as e:
                 print(f"⚠️ Kapanış: {e}", flush=True)
+
+            # TRAILING STOP KONTROLÜ
+            trailing_stop_kontrol()
 
             # SİNYAL TARAMA
             for symbol in TAKIP_EDILENLER:
@@ -468,6 +558,7 @@ def tarayici():
                             "giris_fiyati": anlik, "yon": yon,
                             "tp_fiyat": tp_fiyat, "sl_fiyat": sl_fiyat,
                             "giris_zamani": time.time(),
+                            "kaldirac": KALDIRAC,
                             "likidite_lvl": likidite_lvl,
                             "sweep_uc": sweep_uc
                         }
