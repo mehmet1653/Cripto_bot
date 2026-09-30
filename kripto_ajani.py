@@ -55,26 +55,32 @@ exchange = ccxt.gate({
     'timeout': 30000,
     'options': {'defaultType': 'swap'}
 })
-exchange.set_sandbox_mode(True) # Gerçek hesaba geçerken False yap!
+exchange.set_sandbox_mode(True)  # ⚠️ Gerçek hesaba geçerken False yap!
 
 TAKIP_EDILENLER = ['SOL/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'LTC/USDT:USDT', 'LINK/USDT:USDT']
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
-borsa_kilidi = threading.Lock() # 🆕 API çakışmalarını önler
+borsa_kilidi = threading.Lock()
 tarayici_kilidi = threading.Lock()
 
+# 🆕 KALDIRAÇLAR
 KALDIRAC_TREND = 5
-KALDIRAC_RANGE = 10  # 🆕 Yatay piyasada 10x
+KALDIRAC_RANGE = 10
+
 MAKSIMUM_TOPLAM_POZISYON = 2
 COOLDOWN_SURESI_SANIYE = 30 * 60
-TREND_COOLDOWN_SANIYE = 60 * 60 # 🆕 Mod değişince 1 saat bekle
-
+TREND_COOLDOWN_SANIYE = 60 * 60
 SWING_LOOKBACK = 50
-MIN_RR = 2.0
-TP_GERI_CEKME = 0.003
 
-# 🆕 Trailing (Sadece Trend modu için)
+# 🆕 KOMİSYON VE MALİYET AYARLARI
+KOMISYON_ORANI = 0.001       # Gidiş-dönüş toplam komisyon (~%0.1)
+SPREAD_MALIYETI = 0.0005     # Spread maliyeti (~%0.05)
+MIN_NET_KAR = 0.003          # Minimum net kâr hedefi (~%0.3)
+MIN_RR = 2.0                 # Trend modu için min Risk/Ödül
+TP_GERI_CEKME = 0.005        # Direnç/desteğin %0.5 öncesi TP
+
+# Trailing (Sadece Trend modu)
 TRAILING_SEVIYELER = [
     (15.0, 0.10), (10.0, 0.05), (6.0, 0.02), (3.0, 0.01),
 ]
@@ -121,7 +127,6 @@ COIN_COOLDOWN = kalici.get("cooldownlar", {})
 
 # 🆕 PİYASA REJİMİ TESPİTİ
 def piyasa_rejimi_tespit_et(df):
-    """ADX ve Bollinger Bant Genişliği ile piyasa rejimini belirler."""
     try:
         adx = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx().iloc[-1]
         bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
@@ -165,32 +170,51 @@ def likidite_seviyeleri(df, highs, lows, anlik_fiyat):
     direncler = sorted([h for h in high_levels if h > anlik_fiyat])[:3]
     return destekler, direncler
 
+# 🆕 TREND MODU: ATR TABANLI SL
 def sweep_tespit_et(df, destekler, direncler, anlik_fiyat):
-    if len(df) < 3: return None, None, None, None
-    son_mum, onceki, iki_onceki = df.iloc[-1], df.iloc[-2], df.iloc[-3]
+    if len(df) < 3:
+        return None, None, None, None
+
+    son_mum = df.iloc[-1]
+    onceki = df.iloc[-2]
+    iki_onceki = df.iloc[-3]
+    atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
+
     for destek in destekler:
         kirildi, en_dusuk = False, 999999999
         if iki_onceki['low'] < destek: kirildi, en_dusuk = True, min(iki_onceki['low'], en_dusuk)
         if onceki['low'] < destek: kirildi, en_dusuk = True, min(onceki['low'], en_dusuk)
         if kirildi and son_mum['close'] > destek and anlik_fiyat > destek:
             if (destek - en_dusuk) / destek < 0.02:
-                return "LONG", destek, en_dusuk * (1 - 0.001), en_dusuk
+                # ATR tabanlı SL (1.5 ATR altı)
+                sl_fiyat = en_dusuk - (atr * 1.5)
+                # Maksimum %2 SL sınırı
+                if (anlik_fiyat - sl_fiyat) / anlik_fiyat > 0.02:
+                    sl_fiyat = anlik_fiyat * 0.98
+                return "LONG", destek, sl_fiyat, en_dusuk
+
     for direnc in direncler:
         kirildi, en_yuksek = False, 0
         if iki_onceki['high'] > direnc: kirildi, en_yuksek = True, max(iki_onceki['high'], en_yuksek)
         if onceki['high'] > direnc: kirildi, en_yuksek = True, max(onceki['high'], en_yuksek)
         if kirildi and son_mum['close'] < direnc and anlik_fiyat < direnc:
             if (en_yuksek - direnc) / direnc < 0.02:
-                return "SHORT", direnc, en_yuksek * (1 + 0.001), en_yuksek
+                sl_fiyat = en_yuksek + (atr * 1.5)
+                if (sl_fiyat - anlik_fiyat) / anlik_fiyat > 0.02:
+                    sl_fiyat = anlik_fiyat * 1.02
+                return "SHORT", direnc, sl_fiyat, en_yuksek
+
     return None, None, None, None
 
+# 🆕 TP HESAPLAMA (Komisyon farkındalıklı)
 def tp_hesapla(yon, giris, sl, destekler, direncler, atr):
     if yon == "LONG":
         for d in direncler:
             if d > giris:
-                tp = d * (1 - TP_GERI_CEKME)
+                tp = d * (1 - TP_GERI_CEKME)  # Direncin %0.5 öncesi
                 rr = (tp - giris) / (giris - sl) if giris > sl else 0
-                if rr >= MIN_RR: return tp, rr
+                if rr >= MIN_RR:
+                    return tp, rr
         tp = giris + (atr * 3.0)
         return tp, (tp - giris) / (giris - sl) if giris > sl else 0
     else:
@@ -198,36 +222,44 @@ def tp_hesapla(yon, giris, sl, destekler, direncler, atr):
             if d < giris:
                 tp = d * (1 + TP_GERI_CEKME)
                 rr = (giris - tp) / (sl - giris) if sl > giris else 0
-                if rr >= MIN_RR: return tp, rr
+                if rr >= MIN_RR:
+                    return tp, rr
         tp = giris - (atr * 3.0)
         return tp, (giris - tp) / (sl - giris) if sl > giris else 0
 
-# 🆕 YATAY PİYASA (RANGE) STRATEJİSİ
+# 🆕 YATAY MOD: ATR TABANLI SL (0.5 ATR)
 def range_sinyal_uret(df, destekler, direncler, anlik, atr):
-    """Destek/Direnç arası sıkışmada LONG/SHORT sinyali üretir."""
     if not destekler or not direncler:
         return None, None, None
+
     en_yakin_destek = destekler[0]
     en_yakin_direnc = direncler[0]
     mesafe_destek = (anlik - en_yakin_destek) / anlik
     mesafe_direnc = (en_yakin_direnc - anlik) / anlik
 
-    # Destek yakınında LONG (Desteğin %0.5'ine kadar yaklaştıysa)
+    # LONG: Desteğe yakın, TP direncin hemen öncesi
     if mesafe_destek < 0.005 and mesafe_direnc > 0.01:
-        sl = en_yakin_destek * 0.999  # Desteğin hemen altı
-        tp = anlik + (atr * 1.5)      # Yakın hedef
-        # Komisyonu karşılamak için minimum TP kontrolü
-        if (tp - anlik) / anlik > 0.004: # En az %0.4 fiyat hareketi (10x ile %4 ROE)
-            return "LONG", tp, sl
+        sl = en_yakin_destek - (atr * 0.5)  # Desteğin 0.5 ATR altı
+        tp = en_yakin_direnc * (1 - TP_GERI_CEKME)  # Direncin %0.5 öncesi
+        return "LONG", tp, sl
 
-    # Direnç yakınında SHORT
+    # SHORT: Dirençe yakın, TP desteğin hemen öncesi
     if mesafe_direnc < 0.005 and mesafe_destek > 0.01:
-        sl = en_yakin_direnc * 1.001  # Direncin hemen üstü
-        tp = anlik - (atr * 1.5)
-        if (anlik - tp) / anlik > 0.004:
-            return "SHORT", tp, sl
+        sl = en_yakin_direnc + (atr * 0.5)
+        tp = en_yakin_destek * (1 + TP_GERI_CEKME)
+        return "SHORT", tp, sl
 
     return None, None, None
+
+# 🆕 KOMİSYON KONTROLÜ
+def net_kar_yeterli_mi(yon, giris, tp):
+    """Brüt kâr, komisyon + spread maliyetini karşılıyor mu?"""
+    if yon == "LONG":
+        brut_kar_orani = (tp - giris) / giris
+    else:
+        brut_kar_orani = (giris - tp) / giris
+    net_kar = brut_kar_orani - KOMISYON_ORANI - SPREAD_MALIYETI
+    return net_kar >= MIN_NET_KAR, net_kar
 
 def tg_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID: return
@@ -256,11 +288,12 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             y = str(p.get('side', '')).upper() or "?"
             g = float(p.get('entryPrice', 0))
             k = int(p.get('leverage', 5))
+            mod = AKTIF_POZISYONLAR.get(sym, {}).get("mod", "?")
             t = await asyncio.to_thread(exchange.fetch_ticker, sym)
             gf = float(t['last'])
             f = (gf - g) / g if y == "LONG" else (g - gf) / g
             roe = f * 100 * k
-            pos_detay += f"\n• `{sym}` | {y} ({k}x)\n  Giriş: `{g}` | ROE: `%{roe:+.2f}`"
+            pos_detay += f"\n• `{sym}` | {y} ({k}x) [{mod}]\n  Giriş: `{g}` | ROE: `%{roe:+.2f}`"
 
         mesaj = (
             f"📊 *DURUM* [HİBRİT: RANGE + TREND]\n\n"
@@ -278,7 +311,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (Hibrit Mod: Range + Trend)")
+    await update.message.reply_text("🟢 Bot aktif! (Hibrit Mod)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -303,17 +336,14 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
 
-# ==================== TRAILING STOP (Sadece TREND Modu) ====================
+# ==================== TRAILING STOP (Sadece TREND) ====================
 def trailing_stop_kontrol():
     with state_lock:
         aktif_kopya = list(AKTIF_POZISYONLAR.items())
 
     for sym, bilgi in aktif_kopya:
-        # 🆕 Sadece TREND modundaki pozisyonlar için çalışır
-        if bilgi.get("mod") != "TREND":
-            continue
-        if sym not in AKTIF_POZISYONLAR:
-            continue
+        if bilgi.get("mod") != "TREND": continue
+        if sym not in AKTIF_POZISYONLAR: continue
 
         yon = bilgi.get("yon", "LONG")
         g = float(bilgi.get("giris_fiyati", 0))
@@ -367,7 +397,7 @@ def trailing_stop_kontrol():
 
 # ==================== ANA TARAYICI ====================
 def tarayici():
-    print("🚀 [BAŞLANGIÇ] HİBRİT MOD (Range + Trend)...", flush=True)
+    print("🚀 [BAŞLANGIÇ] HİBRİT MOD (Range + Trend) + Komisyon Korumalı...", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -426,7 +456,7 @@ def tarayici():
             except Exception as e:
                 print(f"⚠️ Kapanış: {e}", flush=True)
 
-            # 🆕 MOD DEĞİŞİMİ KONTROLÜ (Trend başladıysa Range pozisyonlarını kapat)
+            # MOD DEĞİŞİMİ KONTROLÜ
             try:
                 for sym in list(AKTIF_POZISYONLAR.keys()):
                     bilgi = AKTIF_POZISYONLAR[sym]
@@ -436,7 +466,6 @@ def tarayici():
                         df_k = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                         rejim = piyasa_rejimi_tespit_et(df_k)
                         if rejim == "TREND":
-                            # Range pozisyonunu zorla kapat
                             with borsa_kilidi:
                                 pos = [p for p in exchange.fetch_positions() if p['symbol'] == sym and float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                                 for p in pos:
@@ -455,7 +484,6 @@ def tarayici():
             except Exception as e:
                 print(f"⚠️ Mod değişim kontrolü: {e}", flush=True)
 
-            # TRAILING STOP KONTROLÜ
             trailing_stop_kontrol()
 
             # SİNYAL TARAMA
@@ -477,39 +505,42 @@ def tarayici():
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     anlik = float(ticker['last'])
 
-                    # 🆕 PİYASA REJİMİ TESPİTİ
                     rejim = piyasa_rejimi_tespit_et(df)
-                    
+                    atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
+
                     highs, lows = swing_noktalari_bul(df)
                     if len(highs) < 2 or len(lows) < 2: continue
                     destekler, direncler = likidite_seviyeleri(df, highs, lows, anlik)
                     if not destekler and not direncler: continue
 
-                    yon, sl_fiyat, tp_fiyat, rr = None, None, None, 0
-                    mod = rejim
+                    yon, sl_fiyat, tp_fiyat, rr, mod = None, None, None, 0, rejim
 
                     if rejim == "YATAY":
-                        # 🆕 RANGE STRATEJİSİ (10x, Sıkı SL, Yakın TP, Trailing Yok)
-                        yon, tp_fiyat, sl_fiyat = range_sinyal_uret(df, destekler, direncler, anlik, 
-                                                                    ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1])
+                        yon, tp_fiyat, sl_fiyat = range_sinyal_uret(df, destekler, direncler, anlik, atr)
                         if yon:
-                            rr = abs(tp_fiyat - anlik) / abs(anlik - sl_fiyat) if abs(anlik - sl_fiyat) > 0 else 0
-                            print(f"🎯 [{symbol}] RANGE SİNYALİ! {yon} | Giriş: {anlik} | TP: {tp_fiyat} | SL: {sl_fiyat}", flush=True)
+                            # 🆕 KOMİSYON KONTROLÜ
+                            yeterli, net_kar = net_kar_yeterli_mi(yon, anlik, tp_fiyat)
+                            if not yeterli:
+                                print(f"   ⏭️ [{symbol}] {yon} RANGE | Net kâr yetersiz: %{net_kar*100:.3f}", flush=True)
+                                yon = None
+                            else:
+                                rr = abs(tp_fiyat - anlik) / abs(anlik - sl_fiyat) if abs(anlik - sl_fiyat) > 0 else 0
+                                print(f"🎯 [{symbol}] RANGE SİNYALİ! {yon} | Net kâr: %{net_kar*100:.3f} | R/R: {rr:.2f}", flush=True)
 
                     elif rejim == "TREND":
-                        # MEVCUT LİKİDİTE AVI STRATEJİSİ (5x, Trailing Var)
                         yon, likidite_lvl, sl_fiyat, sweep_uc = sweep_tespit_et(df, destekler, direncler, anlik)
                         if yon:
-                            atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
                             tp_fiyat, rr = tp_hesapla(yon, anlik, sl_fiyat, destekler, direncler, atr)
-                            if rr < MIN_RR: 
-                                print(f"   ⏭️ R/R düşük: {rr:.2f}"); yon = None
+                            # 🆕 KOMİSYON KONTROLÜ
+                            yeterli, net_kar = net_kar_yeterli_mi(yon, anlik, tp_fiyat)
+                            if rr < MIN_RR or not yeterli:
+                                print(f"   ⏭️ [{symbol}] {yon} TREND | R/R: {rr:.2f} | Net kâr: %{net_kar*100:.3f}", flush=True)
+                                yon = None
                             else:
-                                print(f"🎯 [{symbol}] TREND (SWEEP) SİNYALİ! {yon} | R/R: {rr:.2f}", flush=True)
+                                print(f"🎯 [{symbol}] TREND (SWEEP) SİNYALİ! {yon} | R/R: {rr:.2f} | Net kâr: %{net_kar*100:.3f}", flush=True)
 
                     if yon is None: continue
 
-                    # Kaldıraç ve pozisyon büyüklüğü
                     kaldirac = KALDIRAC_RANGE if mod == "YATAY" else KALDIRAC_TREND
                     with borsa_kilidi:
                         bakiye = exchange.fetch_balance()
@@ -560,7 +591,7 @@ def tarayici():
                         aktif_map[symbol] = {"dummy": True}
 
                     hafizayi_kaydet()
-                    print(f"✅ [AÇILDI] {symbol} {yon} ({mod}) @ {anlik} | SL: {sl_fiyat} | TP: {tp_fiyat}", flush=True)
+                    print(f"✅ [AÇILDI] {symbol} {yon} ({mod}) @ {anlik} | SL: {sl_fiyat} | TP: {tp_fiyat} | Net: %{net_kar*100:.3f}", flush=True)
 
                     tg_gonder(
                         f"🎯 *SİNYAL ({mod})!*\n"
@@ -568,7 +599,7 @@ def tarayici():
                         f"🎯 Giriş: `{anlik}`\n"
                         f"💰 TP: `{tp_fiyat}`\n"
                         f"🛑 SL: `{sl_fiyat}`\n"
-                        f"📊 R/R: `{rr:.2f}`"
+                        f"📊 R/R: `{rr:.2f}` | Net: `%{net_kar*100:.3f}`"
                     )
                 except Exception as e:
                     print(f"⚠️ {symbol}: {e}", flush=True)
