@@ -74,6 +74,7 @@ COOLDOWN_SURESI_SANIYE = 30 * 60
 # 🎯 LİKİDİTE AVI AYARLARI
 SWING_LOOKBACK = 50
 MIN_RR = 2.0
+TP_GERI_CEKME = 0.003   # 🆕 TP direncin/desteğin %0.3 gerisine
 
 def hafizayi_yukle():
     try:
@@ -204,21 +205,25 @@ def sweep_tespit_et(df, destekler, direncler, anlik_fiyat):
 
     return None, None, None, None
 
+# 🆕 TP HESABI — DUVARIN GERİSİNDE
 def tp_hesapla(yon, giris, sl, destekler, direncler, atr):
     if yon == "LONG":
         for d in direncler:
             if d > giris:
-                tp = d
+                # 🆕 TP = direncin %0.3 altı (duvara değmeden çıkış)
+                tp = d * (1 - TP_GERI_CEKME)
                 rr = (tp - giris) / (giris - sl) if giris > sl else 0
                 if rr >= MIN_RR:
                     return tp, rr
+        # Alternatif: ATR × 3
         tp = giris + (atr * 3.0)
         rr = (tp - giris) / (giris - sl) if giris > sl else 0
         return tp, rr
     else:
         for d in sorted(destekler, reverse=True):
             if d < giris:
-                tp = d
+                # 🆕 TP = desteğin %0.3 üstü
+                tp = d * (1 + TP_GERI_CEKME)
                 rr = (giris - tp) / (sl - giris) if sl > giris else 0
                 if rr >= MIN_RR:
                     return tp, rr
@@ -274,7 +279,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Likidite Avı Bot aktif!")
+    await update.message.reply_text("🟢 Likidite Avı Bot aktif! (TP duvar gerisi)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -300,7 +305,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ANA TARAYICI ====================
 def tarayici():
-    print("🚀 [BAŞLANGIÇ] LİKİDİTE AVI Botu Aktif...", flush=True)
+    print("🚀 [BAŞLANGIÇ] LİKİDİTE AVI Botu Aktif (TP duvar gerisi)...", flush=True)
     try:
         exchange.load_markets()
     except: pass
