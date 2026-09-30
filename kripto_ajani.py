@@ -14,7 +14,6 @@ import requests
 import ccxt
 import pandas as pd
 import ta
-import numpy as np
 from dotenv import load_dotenv
 from flask import Flask
 from telegram import Update
@@ -24,9 +23,10 @@ from supabase import create_client, Client
 # ==================== .env ====================
 if os.path.exists('/etc/secrets/.env'):
     load_dotenv('/etc/secrets/.env', override=True)
-    print("✅ .env yüklendi", flush=True)
+    print("✅ .env yüklendi: /etc/secrets/.env", flush=True)
 else:
     load_dotenv(override=True)
+    print("⚠️ Normal .env deneniyor", flush=True)
 
 app = Flask(__name__)
 
@@ -47,6 +47,8 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     print("❌ SUPABASE boş!", flush=True); sys.exit(1)
 if not TELEGRAM_TOKEN or not CHAT_ID:
     print("❌ TELEGRAM boş!", flush=True); sys.exit(1)
+
+print("✅ Env değişkenleri yüklendi", flush=True)
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -70,17 +72,15 @@ MAKSIMUM_TOPLAM_POZISYON = 2
 COOLDOWN_SURESI_SANIYE = 30 * 60
 
 # 🎯 LİKİDİTE AVI AYARLARI
-SWING_LOOKBACK = 50           # Swing high/low tarama aralığı
-MIN_SWING_MESAFE = 0.005      # Min %0.5 swing mesafesi (gürültü filtresi)
-SWEEP_TOLERANCE = 0.003       # Sweep toleransı (seviyeden %0.3 fazla kırılım)
-SWEEP_MUM_SAYISI = 2          # Kaç mum içinde geri dönmeli
-MIN_RR = 2.0                  # Minimum Risk/Reward
+SWING_LOOKBACK = 50
+MIN_RR = 2.0
 
 def hafizayi_yukle():
     try:
         response = supabase.table("bot_hafiza").select("*").eq("id", 1).execute()
         if response.data and len(response.data) > 0:
             veri = response.data[0]
+            print("💾 Hafıza yüklendi.", flush=True)
             return {
                 "aktif_sistemler": veri.get("aktif_sistemler", {}),
                 "analitik": veri.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0}),
@@ -116,9 +116,8 @@ AKTIF_POZISYONLAR = kalici.get("aktif_sistemler", {})
 ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0})
 COIN_COOLDOWN = kalici.get("cooldownlar", {})
 
-# ==================== LİKİDİTE SEVİYELERİ ====================
+# ==================== SWING / LİKİDİTE ====================
 def swing_noktalari_bul(df, lookback=SWING_LOOKBACK):
-    """Son N mumda swing high/low'ları bul"""
     highs = []
     lows = []
     baslangic = max(2, len(df) - lookback)
@@ -127,12 +126,10 @@ def swing_noktalari_bul(df, lookback=SWING_LOOKBACK):
         h = df['high'].iloc[i]
         l = df['low'].iloc[i]
 
-        # Swing high
         if (h > df['high'].iloc[i-1] and h > df['high'].iloc[i-2] and
             h > df['high'].iloc[i+1] and h > df['high'].iloc[i+2]):
             highs.append((i, h))
 
-        # Swing low
         if (l < df['low'].iloc[i-1] and l < df['low'].iloc[i-2] and
             l < df['low'].iloc[i+1] and l < df['low'].iloc[i+2]):
             lows.append((i, l))
@@ -140,14 +137,12 @@ def swing_noktalari_bul(df, lookback=SWING_LOOKBACK):
     return highs, lows
 
 def likidite_seviyeleri(df, highs, lows, anlik_fiyat):
-    """Sadece anlamlı likidite seviyeleri (min mesafe filtresi)"""
-    # Yakın seviyeleri birleştir (cluster)
     def cluster(levels, tolerance=0.003):
         if not levels:
             return []
-        sorted_l = sorted(levels, key=lambda x: x[1])
-        result = [sorted_l[0][1]]
-        for _, lvl in sorted_l[1:]:
+        sorted_l = sorted(levels)
+        result = [sorted_l[0]]
+        for lvl in sorted_l[1:]:
             if abs(lvl - result[-1]) / result[-1] > tolerance:
                 result.append(lvl)
         return result
@@ -155,24 +150,15 @@ def likidite_seviyeleri(df, highs, lows, anlik_fiyat):
     high_levels = cluster([h[1] for h in highs])
     low_levels = cluster([l[1] for l in lows])
 
-    # Anlık fiyata yakın olanları filtrele (anlamlı olanlar)
-    # Long için: fiyatın altındaki likidite
-    # Short için: fiyatın üstündeki likidite
     destekler = [l for l in low_levels if l < anlik_fiyat]
     direncler = [h for h in high_levels if h > anlik_fiyat]
 
-    # En yakın 3 tanesini al
     destekler = sorted(destekler, reverse=True)[:3]
     direncler = sorted(direncler)[:3]
 
     return destekler, direncler
 
 def sweep_tespit_et(df, destekler, direncler, anlik_fiyat):
-    """
-    Likidite avı tespit et.
-    LONG için: Fiyat desteği aşağı sıyırdı, geri döndü
-    SHORT için: Fiyat direnci yukarı sıyırdı, geri döndü
-    """
     if len(df) < 3:
         return None, None, None, None
 
@@ -180,12 +166,10 @@ def sweep_tespit_et(df, destekler, direncler, anlik_fiyat):
     onceki = df.iloc[-2]
     iki_onceki = df.iloc[-3]
 
-    # === BULLISH SWEEP (SHORT SL avı sonrası LONG) ===
-    # Fiyat desteğin altına sarkıp geri döndü
+    # BULLISH SWEEP (LONG)
     for destek in destekler:
-        # Son 2-3 mumda destek kırıldı mı?
         kirildi = False
-        en_dusuk = 999999
+        en_dusuk = 999999999
 
         if iki_onceki['low'] < destek:
             kirildi = True
@@ -194,17 +178,13 @@ def sweep_tespit_et(df, destekler, direncler, anlik_fiyat):
             kirildi = True
             en_dusuk = min(onceki['low'], en_dusuk)
 
-        # Geri döndü mü? Son mum destek üstünde kapandı mı?
         if kirildi and son_mum['close'] > destek and anlik_fiyat > destek:
-            # Kırılım çok fazla mı? (gerçek trend vs fake sweep)
             kirilma_orani = (destek - en_dusuk) / destek
-            if kirilma_orani < 0.02:  # %2'den fazla kırılmadıysa = sweep
-                # Yönü LONG
-                sl_fiyat = en_dusuk * (1 - 0.001)  # Sweep ucunun %0.1 altı
+            if kirilma_orani < 0.02:
+                sl_fiyat = en_dusuk * (1 - 0.001)
                 return "LONG", destek, sl_fiyat, en_dusuk
 
-    # === BEARISH SWEEP (LONG SL avı sonrası SHORT) ===
-    # Fiyat direncin üstüne çıkıp geri döndü
+    # BEARISH SWEEP (SHORT)
     for direnc in direncler:
         kirildi = False
         en_yuksek = 0
@@ -225,17 +205,13 @@ def sweep_tespit_et(df, destekler, direncler, anlik_fiyat):
     return None, None, None, None
 
 def tp_hesapla(yon, giris, sl, destekler, direncler, atr):
-    """Sonraki likidite seviyesini TP yap"""
     if yon == "LONG":
-        # Sonraki direnç = TP
         for d in direncler:
             if d > giris:
                 tp = d
-                # Min R/R kontrol
                 rr = (tp - giris) / (giris - sl) if giris > sl else 0
                 if rr >= MIN_RR:
                     return tp, rr
-        # Alternatif: ATR × 3
         tp = giris + (atr * 3.0)
         rr = (tp - giris) / (giris - sl) if giris > sl else 0
         return tp, rr
@@ -362,9 +338,9 @@ def tarayici():
 
             # KAPANIŞ KONTROLÜ
             try:
-                anlik = [p['symbol'] for p in raw if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
+                anlik_aktif = [p['symbol'] for p in raw if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                 for eski in list(AKTIF_POZISYONLAR.keys()):
-                    if eski not in anlik:
+                    if eski not in anlik_aktif:
                         bilgi = AKTIF_POZISYONLAR[eski]
                         g = bilgi.get("giris_fiyati", 0)
                         y = bilgi.get("yon", "LONG")
@@ -415,26 +391,22 @@ def tarayici():
                             continue
 
                 try:
-                    # 15m veri
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=SWING_LOOKBACK + 20)
-                    df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+                    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
                     ticker = exchange.fetch_ticker(symbol)
                     anlik = float(ticker['last'])
 
-                    # Swing noktaları
                     highs, lows = swing_noktalari_bul(df)
 
                     if len(highs) < 2 or len(lows) < 2:
                         continue
 
-                    # Likidite seviyeleri
                     destekler, direncler = likidite_seviyeleri(df, highs, lows, anlik)
 
                     if not destekler and not direncler:
                         continue
 
-                    # Sweep tespit
                     yon, likidite_lvl, sl_fiyat, sweep_uc = sweep_tespit_et(df, destekler, direncler, anlik)
 
                     if yon is None:
@@ -442,17 +414,14 @@ def tarayici():
 
                     print(f"🎯 [{symbol}] SWEEP! {yon} | Likidite: {likidite_lvl:.6f} | Sweep ucu: {sweep_uc:.6f}", flush=True)
 
-                    # ATR
-                    atr = ta.volatility.AverageTrueRange(df['h'], df['l'], df['c'], window=14).average_true_range().iloc[-1]
+                    atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
 
-                    # TP hesabı
                     tp_fiyat, rr = tp_hesapla(yon, anlik, sl_fiyat, destekler, direncler, atr)
 
                     if rr < MIN_RR:
                         print(f"   ⏭️ R/R düşük: {rr:.2f}", flush=True)
                         continue
 
-                    # İşlem aç
                     bakiye = exchange.fetch_balance()
                     toplam_b = float(bakiye['total'].get('USDT', 0))
                     serbest_b = float(bakiye.get('free', {}).get('USDT', 0) or 0)
@@ -523,7 +492,7 @@ def tarayici():
             try: tarayici_kilidi.release()
             except: pass
 
-        time.sleep(10)  # 10 saniye
+        time.sleep(10)
 
 async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)
