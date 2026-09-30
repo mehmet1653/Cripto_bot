@@ -57,12 +57,13 @@ exchange = ccxt.gate({
 })
 exchange.set_sandbox_mode(True)
 
-HARIC_TUTULANLAR = ['BTC/USDT:USDT', 'ETH/USDT:USDT']
+# 🆕 YASAKLI COİNLER (AVAX eklendi)
+HARIC_TUTULANLAR = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'AVAX/USDT:USDT']
 
 YEDEK_LISTE = [
     'SOL/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT',
     'LTC/USDT:USDT', 'LINK/USDT:USDT',
-    'AVAX/USDT:USDT', 'ADA/USDT:USDT', 'DOT/USDT:USDT'
+    'ADA/USDT:USDT', 'DOT/USDT:USDT'
 ]
 
 COIN_SAYISI = 10
@@ -85,11 +86,9 @@ ATR_ESIK_DUSUK = 0.004
 
 KOMISYON_ORANI = 0.0008
 
-# MOD1 (Trend/Kırılım)
 BEKLENEN_HAREKET_TP_ORANI = 0.50
 BEKLENEN_HAREKET_SL_ORANI = 0.35
 
-# MOD2 (Testere)
 MOD2_TP_ORANI = 0.30
 MOD2_SL_ORANI = 0.20
 
@@ -228,7 +227,6 @@ def dinamik_kaldirac_hesapla(symbol, anlik_fiyat):
 def piyasa_rejimini_tespit_et():
     global SON_BTC_YONU
     try:
-        # 1H
         ohlcv_1h = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=50)
         df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
@@ -282,7 +280,6 @@ def piyasa_rejimini_tespit_et():
             rejim_1h = "YATAY"
             yon_1h = "YATAY"
 
-        # 15M
         ohlcv_15m = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=50)
         df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
@@ -308,7 +305,6 @@ def piyasa_rejimini_tespit_et():
             rejim_15m = "YATAY"
             yon_15m = "YATAY"
 
-        # BİRLEŞTİR
         if rejim_1h in ["TREND", "TREND_ZAYIF"] and rejim_15m == "TREND" and yon_1h == yon_15m:
             rejim = "TREND"
             trend_yonu = yon_1h
@@ -501,7 +497,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (Mod3 kaldırıldı - sadece MOD1+MOD2)")
+    await update.message.reply_text("🟢 Bot aktif! (AVAX yasaklı, Mod3 yok)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -526,7 +522,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] MOD1+MOD2 (Mod3 yok)...", flush=True)
+    print("🚀 [BAŞLANGIÇ] MOD1+MOD2 (AVAX yasaklı)...", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -594,7 +590,7 @@ def otomatik_arkaplan_tarayici():
                             else:
                                 basz += 1; tip = "❌ *ZARARLA KAPANDI*"
                             ANALitik_HAFIZA["basarili_islem_sayisi"] = bas
-                            ANALITIK_HAFIZA["basarisiz_islem_sayisi"] = basz
+                            ANALitik_HAFIZA["basarisiz_islem_sayisi"] = basz
                             COIN_COOLDOWNLAR[eski_sym] = {"zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), "son_yon": yon}
                             if eski_sym in AKTIF_GRID_SISTEMLERI:
                                 del AKTIF_GRID_SISTEMLERI[eski_sym]
@@ -741,7 +737,6 @@ def otomatik_arkaplan_tarayici():
                     kirilim_yonu, kirilim_var, sebep = kirilim_tespit_et(symbol)
 
                     if piyasa_rejimi == "YATAY":
-                        # MOD2: TESTERE
                         if rsi < COIN_TESTERE_RSI_ALT:
                             islem_yonu = "LONG"
                             mod = f"MOD2 TESTERE LONG"
@@ -752,7 +747,6 @@ def otomatik_arkaplan_tarayici():
                             continue
 
                     elif piyasa_rejimi in ["TREND", "TREND_ZAYIF"]:
-                        # MOD1: KIRILIM
                         if kirilim_var:
                             if btc_yonu == "SHORT" and kirilim_yonu == "SHORT":
                                 islem_yonu = "SHORT"
@@ -763,7 +757,6 @@ def otomatik_arkaplan_tarayici():
                             else:
                                 continue
                         else:
-                            # 🚫 MOD3 YOK — Kırılım yoksa bekle
                             continue
                     else:
                         continue
