@@ -57,8 +57,62 @@ exchange = ccxt.gate({
 })
 exchange.set_sandbox_mode(True)  # ⚠️ Gerçek hesaba geçerken False yap!
 
-TAKIP_EDILENLER = ['SOL/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'LTC/USDT:USDT', 'LINK/USDT:USDT']
+# ==================== HİBRİT HAVUZ SİSTEMİ ====================
+# 🎯 Çekirdek Liste: Senin test ettiğin, verim aldığın coinler
+CEKIRDEK_LISTE = [
+    'SOL/USDT:USDT',
+    'XRP/USDT:USDT',
+    'DOGE/USDT:USDT',
+    'LTC/USDT:USDT',
+    'LINK/USDT:USDT'
+]
 
+# ❌ Kara Liste: Bu coinler havuza asla eklenmez (testte kötü performans)
+KARA_LISTE = [
+    'BTC/USDT:USDT',
+    'ETH/USDT:USDT',
+    'AVAX/USDT:USDT'
+]
+
+# 🔄 Dinamik Liste: Her saat başı güncellenir (en yüksek hacimli 5 coin)
+DINAMIK_LISTE = []
+SON_HAVUZ_GUNCELLEME = 0
+HAVUZ_GUNCELLEME_SURESI = 3600  # 1 saat (saniye)
+
+def havuzu_guncelle():
+    """En yüksek 24s hacme sahip, kara listede olmayan 5 coini seçer."""
+    global DINAMIK_LISTE
+    try:
+        print("🔄 Havuz güncelleniyor...", flush=True)
+        tickers = exchange.fetch_tickers()
+        
+        # USDT paritelerini filtrele
+        usdt_pairs = {}
+        for k, v in tickers.items():
+            if ':USDT' in k and k not in KARA_LISTE:
+                # Çekirdek listede olanları da atla (zaten tarıyoruz)
+                if k not in CEKIRDEK_LISTE:
+                    hacim = float(v.get('quoteVolume', 0) or 0)
+                    usdt_pairs[k] = hacim
+        
+        # Hacme göre sırala, ilk 5'i al
+        sorted_pairs = sorted(usdt_pairs.items(), key=lambda x: x[1], reverse=True)
+        DINAMIK_LISTE = [p[0] for p in sorted_pairs[:5]]
+        
+        print(f"✅ Havuz güncellendi:", flush=True)
+        print(f"   📌 Çekirdek: {CEKIRDEK_LISTE}", flush=True)
+        print(f"   🔄 Dinamik: {DINAMIK_LISTE}", flush=True)
+        
+        return True
+    except Exception as e:
+        print(f"⚠️ Havuz güncelleme hatası: {e}", flush=True)
+        return False
+
+def takip_listesi():
+    """Çekirdek + Dinamik listeyi birleştirir."""
+    return CEKIRDEK_LISTE + DINAMIK_LISTE
+
+# ==================== DURUM DEĞİŞKENLERİ ====================
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
 borsa_kilidi = threading.Lock()
@@ -74,18 +128,19 @@ TREND_COOLDOWN_SANIYE = 60 * 60
 SWING_LOOKBACK = 50
 
 # KOMİSYON VE MALİYET AYARLARI
-KOMISYON_ORANI = 0.001       # Gidiş-dönüş toplam komisyon
-SPREAD_MALIYETI = 0.0005     # Spread maliyeti
-MIN_NET_KAR = 0.006          # Minimum net kâr hedefi (%0.6)
-MIN_RR = 1.5                 # 🆕 2.5'ten 1.5'e düşürüldü (dengeli)
-TP_GERI_CEKME = 0.005        # Direnç/desteğin %0.5 öncesi
-SL_ATR_CARPAN = 1.2          # 🆕 1.5'ten 1.2'ye düşürüldü (daha sıkı SL)
+KOMISYON_ORANI = 0.001
+SPREAD_MALIYETI = 0.0005
+MIN_NET_KAR = 0.006
+MIN_RR = 1.5
+TP_GERI_CEKME = 0.005
+SL_ATR_CARPAN = 1.2
 
 # Trailing (Sadece Trend modu)
 TRAILING_SEVIYELER = [
     (15.0, 0.10), (10.0, 0.05), (6.0, 0.02), (4.0, 0.015), (3.0, 0.01),
 ]
 
+# ==================== HAFIZA ====================
 def hafizayi_yukle():
     try:
         response = supabase.table("bot_hafiza").select("*").eq("id", 1).execute()
@@ -126,7 +181,7 @@ AKTIF_POZISYONLAR = kalici.get("aktif_sistemler", {})
 ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0})
 COIN_COOLDOWN = kalici.get("cooldownlar", {})
 
-# PİYASA REJİMİ TESPİTİ (15m)
+# ==================== PİYASA ANALİZİ ====================
 def piyasa_rejimi_tespit_et(df):
     try:
         adx = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx().iloc[-1]
@@ -145,7 +200,6 @@ def piyasa_rejimi_tespit_et(df):
     except:
         return "BELIRSIZ"
 
-# ÇOKLU ZAMAN DİLİMİ TREND FİLTRESİ (4h + 1d)
 def coklu_zaman_trend_kontrol(symbol):
     try:
         with borsa_kilidi:
@@ -199,7 +253,6 @@ def likidite_seviyeleri(df, highs, lows, anlik_fiyat):
     direncler = sorted([h for h in high_levels if h > anlik_fiyat])[:3]
     return destekler, direncler
 
-# TREND MODU: ATR TABANLI SL (1.2 ATR)
 def sweep_tespit_et(df, destekler, direncler, anlik_fiyat):
     if len(df) < 3:
         return None, None, None, None
@@ -233,17 +286,14 @@ def sweep_tespit_et(df, destekler, direncler, anlik_fiyat):
 
     return None, None, None, None
 
-# TP HESAPLAMA (2. veya 3. direnci hedefle)
 def tp_hesapla(yon, giris, sl, destekler, direncler, atr):
     if yon == "LONG":
-        # İlk direnç çok yakınsa 2. veya 3. dirence bak
         for i, d in enumerate(direncler):
             if d > giris:
                 tp = d * (1 - TP_GERI_CEKME)
                 rr = (tp - giris) / (giris - sl) if giris > sl else 0
                 if rr >= MIN_RR:
                     return tp, rr
-        # Hiçbiri yetmezse ATR tabanlı TP
         tp = giris + (atr * 3.0)
         return tp, (tp - giris) / (giris - sl) if giris > sl else 0
     else:
@@ -256,7 +306,6 @@ def tp_hesapla(yon, giris, sl, destekler, direncler, atr):
         tp = giris - (atr * 3.0)
         return tp, (giris - tp) / (sl - giris) if sl > giris else 0
 
-# YATAY MOD: ATR TABANLI SL (0.5 ATR)
 def range_sinyal_uret(df, destekler, direncler, anlik, atr):
     if not destekler or not direncler:
         return None, None, None
@@ -278,7 +327,6 @@ def range_sinyal_uret(df, destekler, direncler, anlik, atr):
 
     return None, None, None
 
-# KOMİSYON KONTROLÜ
 def net_kar_yeterli_mi(yon, giris, tp):
     if yon == "LONG":
         brut_kar_orani = (tp - giris) / giris
@@ -327,7 +375,9 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📌 Açık: `{len(pos)} / {MAKSIMUM_TOPLAM_POZISYON}`"
             f"{pos_detay}\n\n"
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
-            f"📈 Başarı: `%{oran:.1f}`"
+            f"📈 Başarı: `%{oran:.1f}`\n\n"
+            f"📋 *Havuz:* {len(takip_listesi())} coin\n"
+            f"   Çekirdek: {len(CEKIRDEK_LISTE)} | Dinamik: {len(DINAMIK_LISTE)}"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
     except Exception as e:
@@ -337,7 +387,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (R/R 1.5 + MTF)")
+    await update.message.reply_text("🟢 Bot aktif! (Hibrit Havuz + R/R 1.5)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -361,6 +411,22 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ Kapatıldı.")
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
+
+async def havuz_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Havuzu manuel günceller."""
+    if update.effective_chat.id != int(CHAT_ID): return
+    await update.message.reply_text("🔄 Havuz güncelleniyor...")
+    basarili = havuzu_guncelle()
+    if basarili:
+        await update.message.reply_text(
+            f"✅ *Havuz Güncellendi!*\n\n"
+            f"📌 Çekirdek: `{len(CEKIRDEK_LISTE)}` coin\n"
+            f"🔄 Dinamik: `{len(DINAMIK_LISTE)}` coin\n\n"
+            f"*Dinamik Liste:*\n" + "\n".join([f"• `{c}`" for c in DINAMIK_LISTE]),
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text("❌ Havuz güncellenemedi.")
 
 # ==================== TRAILING STOP ====================
 def trailing_stop_kontrol():
@@ -423,10 +489,15 @@ def trailing_stop_kontrol():
 
 # ==================== ANA TARAYICI ====================
 def tarayici():
-    print("🚀 [BAŞLANGIÇ] HİBRİT MOD + MTF + R/R 1.5...", flush=True)
+    global SON_HAVUZ_GUNCELLEME
+    print("🚀 [BAŞLANGIÇ] HİBRİT HAVUZ + R/R 1.5 + MTF...", flush=True)
     try:
         exchange.load_markets()
     except: pass
+
+    # İlk havuz güncellemesi
+    havuzu_guncelle()
+    SON_HAVUZ_GUNCELLEME = time.time()
 
     dongu = 0
     while True:
@@ -437,8 +508,14 @@ def tarayici():
                 time.sleep(5); continue
             dongu += 1
 
+            # 🆕 Her saat başı havuzu güncelle
+            if time.time() - SON_HAVUZ_GUNCELLEME > HAVUZ_GUNCELLEME_SURESI:
+                havuzu_guncelle()
+                SON_HAVUZ_GUNCELLEME = time.time()
+
             print(f"\n{'='*65}", flush=True)
             print(f"🔄 [DÖNGÜ #{dongu}] {time.strftime('%H:%M:%S')}", flush=True)
+            print(f"📋 Havuz: {len(takip_listesi())} coin (Çekirdek:{len(CEKIRDEK_LISTE)} + Dinamik:{len(DINAMIK_LISTE)})", flush=True)
             print(f"{'='*65}", flush=True)
 
             try:
@@ -519,7 +596,7 @@ def tarayici():
             trailing_stop_kontrol()
 
             # SİNYAL TARAMA
-            for symbol in TAKIP_EDILENLER:
+            for symbol in takip_listesi():
                 if not BOT_CALISIYOR_MU: break
                 if len(aktif_map) >= MAKSIMUM_TOPLAM_POZISYON: break
                 if symbol in aktif_list: continue
@@ -705,6 +782,7 @@ async def main():
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
+    app_tg.add_handler(CommandHandler("havuz", havuz_komutu))  # 🆕 Manuel havuz güncelleme
 
     await app_tg.initialize()
     await app_tg.start()
