@@ -176,12 +176,6 @@ COOLDOWN_SURESI_SANIYE = 30 * 60
 
 # ==================== PİYASA REJİMİ ====================
 def piyasa_rejimini_tespit_et():
-    """
-    BTC 1h grafiğine bakarak piyasa rejimini belirler.
-    - YATAY: ADX < 25 VEYA BB < %2 VEYA EMA farkı < %0.15
-    - TREND: ADX > 25 VE BB > %2 VE EMA farkı > %0.15
-    - Yön: EMA9 > EMA21 ise LONG, değilse SHORT
-    """
     try:
         ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=40)
         df_btc = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -211,7 +205,7 @@ def piyasa_rejimini_tespit_et():
         print(f"⚠️ [PİYASA HATA] {e}. Varsayılan YATAY", flush=True)
         return "YATAY", "YATAY (Testere)"
 
-# ==================== LİKİDİTE SEVİYELERİ (TREND İÇİN) ====================
+# ==================== LİKİDİTE SEVİYELERİ ====================
 def swing_noktalari_bul(df, lookback=50):
     highs, lows = [], []
     baslangic = max(2, len(df) - lookback)
@@ -238,7 +232,7 @@ def likidite_seviyeleri(df, highs, lows, anlik_fiyat):
     direncler = sorted([h for h in high_levels if h > anlik_fiyat])[:3]
     return destekler, direncler
 
-# ==================== TREND MODU: LİKİDİTE AVI ====================
+# ==================== TREND: LİKİDİTE AVI ====================
 def sweep_tespit_et(df, destekler, direncler, anlik_fiyat):
     if len(df) < 3: return None, None, None, None
     son_mum, onceki, iki_onceki = df.iloc[-1], df.iloc[-2], df.iloc[-3]
@@ -288,7 +282,7 @@ def tp_hesapla_sweep(yon, giris, sl, destekler, direncler, atr):
         tp = giris - (atr * 3.0)
         return tp, (giris - tp) / (sl - giris) if sl > giris else 0
 
-# ==================== MTF FİLTRESİ (TREND İÇİN) ====================
+# ==================== MTF FİLTRESİ ====================
 def coklu_zaman_trend_kontrol(symbol):
     try:
         ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=50)
@@ -310,28 +304,22 @@ def coklu_zaman_trend_kontrol(symbol):
             return "ASAGI"
         else:
             return "NOTR"
-    except Exception as e:
+    except Exception:
         return "NOTR"
 
-# ==================== HİBRİT SİNYAL (15m + 5m ONAY) ====================
-def sinyal_uret_hibrit(df_15m, df_5m, anlik_fiyat, piyasa_rejimi):
-    """
-    15 dakikalık ANA sinyal + 5 dakikalık ONAY.
-    YATAY modda: Bollinger + StochRSI + 5m mum onayı
-    """
+# ==================== HİBRİT SİNYAL ====================
+def sinyal_uret_hibrit(df_15m, df_5m, anlik_fiyat):
     try:
-        # ===== ANA SİNYAL (15m) =====
         bb = ta.volatility.BollingerBands(df_15m['close'], window=20, window_dev=2)
         bb_high = bb.bollinger_hband().iloc[-1]
         bb_low = bb.bollinger_lband().iloc[-1]
 
-        stoch_rsi = ta.momentum.StochRSIIndicator(df_15m['close'], window=14).stochrsi().iloc[-1]
+        stoch_rsi_15m = ta.momentum.StochRSIIndicator(df_15m['close'], window=14).stochrsi().iloc[-1]
 
         hacim_ort = df_15m['volume'].rolling(20).mean().iloc[-1]
         guncel_hacim = df_15m['volume'].iloc[-1]
         hacim_patlamasi = guncel_hacim > (hacim_ort * 1.5)
 
-        # ===== ONAY (5m) =====
         son_mum_yesil_5m = df_5m['close'].iloc[-1] > df_5m['open'].iloc[-1]
         son_mum_kirmizi_5m = df_5m['close'].iloc[-1] < df_5m['open'].iloc[-1]
 
@@ -341,17 +329,14 @@ def sinyal_uret_hibrit(df_15m, df_5m, anlik_fiyat, piyasa_rejimi):
         stoch_donus_yukari_5m = stoch_rsi_5m_onceki < 0.2 and stoch_rsi_5m_simdi > 0.2
         stoch_donus_asagi_5m = stoch_rsi_5m_onceki > 0.8 and stoch_rsi_5m_simdi < 0.8
 
-        # ===== LONG SİNYALİ =====
         bb_low_temas = anlik_fiyat <= bb_low * 1.005
         if bb_low_temas and son_mum_yesil_5m and stoch_donus_yukari_5m:
-            return "LONG", f"15m alt bant + 5m yeşil mum + 5m stoch dönüş"
+            return "LONG", "Alt bant + 5m yeşil mum + 5m stoch dönüş"
 
-        # ===== SHORT SİNYALİ =====
         bb_high_temas = anlik_fiyat >= bb_high * 0.995
         if bb_high_temas and son_mum_kirmizi_5m and stoch_donus_asagi_5m:
-            return "SHORT", f"15m üst bant + 5m kırmızı mum + 5m stoch dönüş"
+            return "SHORT", "Üst bant + 5m kırmızı mum + 5m stoch dönüş"
 
-        # ===== HACİM PATLAMASI =====
         if hacim_patlamasi:
             fiyat_yukari = df_15m['close'].iloc[-1] > df_15m['close'].iloc[-2]
             yon = "LONG" if fiyat_yukari else "SHORT"
@@ -362,7 +347,7 @@ def sinyal_uret_hibrit(df_15m, df_5m, anlik_fiyat, piyasa_rejimi):
         print(f"⚠️ Hibrit sinyal hatası: {e}", flush=True)
         return None, None
 
-# ==================== KOMİSYON KONTROLÜ ====================
+# ==================== KOMİSYON ====================
 def net_kar_yeterli_mi(yon, giris, tp):
     if yon == "LONG":
         brut = (tp - giris) / giris
@@ -376,11 +361,9 @@ def akilli_seviye_hesapla(anlik_fiyat, yon, df, mod="YATAY"):
     atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
 
     if mod == "YATAY":
-        # Kısa vadeli: hızlı kâr, sıkı SL
         tp_mesafe = atr * 1.2
         sl_mesafe = atr * 0.8
     else:
-        # TREND: uzun vadeli, geniş SL
         tp_mesafe = atr * 2.5
         sl_mesafe = atr * 1.5
 
@@ -396,7 +379,7 @@ def akilli_seviye_hesapla(anlik_fiyat, yon, df, mod="YATAY"):
     hedef_roe = abs((tp_fiyat - anlik_fiyat) / anlik_fiyat) * 100 * KALDIRAC
     return float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe)
 
-# ==================== TRAILING STOP ====================
+# ==================== TRAILING ====================
 def trailing_stop_kontrol():
     with state_lock:
         aktif_kopya = list(AKTIF_GRID_SISTEMLERI.items())
@@ -457,7 +440,7 @@ def trailing_stop_kontrol():
         except Exception as e:
             print(f"⚠️ Trailing hatası {sym}: {e}", flush=True)
 
-# ==================== KISMİ KÂR AL ====================
+# ==================== KISMİ KÂR ====================
 def kismi_kar_al_kontrol():
     with state_lock:
         aktif_kopya = list(AKTIF_GRID_SISTEMLERI.items())
@@ -504,11 +487,11 @@ def kismi_kar_al_kontrol():
                         AKTIF_GRID_SISTEMLERI[sym]["kismi_kar_alindi"] = True
 
                 print(f"💰 [KISMİ KÂR] {sym} | ROE:%{roe:.1f} → %50 kapatıldı", flush=True)
-                telegram_mesaj_gonder(f"💰 *KISMİ KÂR ALINDI*\n📌 `{sym}` | {yon}\n📊 ROE: `%{roe:+.2f}`\n✂️ %50 kapatıldı, kalan koşuyor.")
+                telegram_mesaj_gonder(f"💰 *KISMİ KÂR ALINDI*\n📌 `{sym}` | {yon}\n📊 ROE: `%{roe:+.2f}`\n✂️ %50 kapatıldı.")
             except Exception as e:
                 print(f"⚠️ Kısmi kâr hatası {sym}: {e}", flush=True)
 
-# ==================== ZOMBİ İŞLEM KAPATICI ====================
+# ==================== ZOMBİ ====================
 def zombi_islem_kapat():
     with state_lock:
         aktif_kopya = list(AKTIF_GRID_SISTEMLERI.items())
@@ -559,16 +542,9 @@ def zombi_islem_kapat():
                 saat = int(gecen_sure // 3600)
                 dakika = int((gecen_sure % 3600) // 60)
                 print(f"⏰ [ZOMBİ KAPATILDI] {sym} | {saat}s {dakika}dk | Net: %{net_kar*100:.3f}", flush=True)
-                telegram_mesaj_gonder(
-                    f"⏰ *ZOMBİ İŞLEM KAPATILDI*\n"
-                    f"📌 `{sym}` | {yon}\n"
-                    f"⏱️ Süre: `{saat}s {dakika}dk`\n"
-                    f"💰 Net Kâr: `%{net_kar*100:.3f}`"
-                )
+                telegram_mesaj_gonder(f"⏰ *ZOMBİ KAPATILDI*\n📌 `{sym}` | {yon}\n⏱️ {saat}s {dakika}dk\n💰 Net: `%{net_kar*100:.3f}`")
             except Exception as e:
-                print(f"⚠️ Zombi kapatma hatası {sym}: {e}", flush=True)
-        else:
-            print(f"⏳ [ZOMBİ BEKLE] {sym} | {int(gecen_sure//60)}dk | Net: %{net_kar*100:.3f}", flush=True)
+                print(f"⚠️ Zombi hatası {sym}: {e}", flush=True)
 
 # ==================== TELEGRAM ====================
 def telegram_mesaj_gonder(mesaj):
@@ -624,7 +600,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (Hibrit + Trend + Trailing + Kısmi + Zombi)")
+    await update.message.reply_text("🟢 Bot aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -666,7 +642,7 @@ async def havuz_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ANA TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global SON_HAVUZ_GUNCELLEME
-    print("🚀 [BAŞLANGIÇ] Hibrit + Trend + Trailing + Kısmi + Zombi...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Hibrit + Trend + Detaylı Log...", flush=True)
     try:
         exchange.load_markets()
     except Exception: pass
@@ -696,6 +672,8 @@ def otomatik_arkaplan_tarayici():
                         sym = p['symbol']
                         aktif_borsa_map[sym] = p
                         aktif_semboller_listesi.append(sym)
+                if aktif_semboller_listesi:
+                    print(f"📌 Açık: {aktif_semboller_listesi}", flush=True)
             except Exception:
                 raw_positions = []
                 aktif_borsa_map = {}
@@ -739,7 +717,6 @@ def otomatik_arkaplan_tarayici():
                         telegram_mesaj_gonder(f"{sonuc_mesaj_tipi}\n📌 `{eski_sym}`")
             except Exception: pass
 
-            # TRAILING + KISMİ + ZOMBİ
             trailing_stop_kontrol()
             kismi_kar_al_kontrol()
             zombi_islem_kapat()
@@ -753,72 +730,95 @@ def otomatik_arkaplan_tarayici():
                     cooldown_veri = COIN_COOLDOWNLAR.get(symbol)
                     if cooldown_veri:
                         zaman_kontrol = cooldown_veri.get("zaman", 0) if isinstance(cooldown_veri, dict) else float(cooldown_veri)
-                        if zaman_kontrol - time.time() > 0: continue
+                        if zaman_kontrol - time.time() > 0:
+                            print(f"   ⏳ [{symbol}] Cooldown: {int(zaman_kontrol - time.time())} sn", flush=True)
+                            continue
 
                 try:
                     ticker = exchange.fetch_ticker(symbol)
                     anlik_fiyat = float(ticker['last'])
 
-                    # 🆕 15m ve 5m verileri çek
                     ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
                     df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
                     ohlcv_5m = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=50)
                     df_5m = pd.DataFrame(ohlcv_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-                    # 🆕 PİYASA REJİMİNE GÖRE STRATEJİ
+                    # 🆕 DETAYLI LOG
+                    bb_15m = ta.volatility.BollingerBands(df_15m['close'], window=20, window_dev=2)
+                    bb_low_15m = bb_15m.bollinger_lband().iloc[-1]
+                    bb_high_15m = bb_15m.bollinger_hband().iloc[-1]
+                    stoch_15m = ta.momentum.StochRSIIndicator(df_15m['close'], window=14).stochrsi().iloc[-1]
+                    stoch_5m_seri = ta.momentum.StochRSIIndicator(df_5m['close'], window=14).stochrsi()
+                    stoch_5m = stoch_5m_seri.iloc[-1]
+                    stoch_5m_onceki = stoch_5m_seri.iloc[-2]
+                    son_mum_5m = "YEŞİL" if df_5m['close'].iloc[-1] > df_5m['open'].iloc[-1] else "KIRMIZI"
+                    son_mum_15m = "YEŞİL" if df_15m['close'].iloc[-1] > df_15m['open'].iloc[-1] else "KIRMIZI"
+
+                    print(f"\n🔍 [{symbol}] @ {anlik_fiyat}", flush=True)
+                    print(f"   📊 BB(15m): Alt={bb_low_15m:.5f} | Üst={bb_high_15m:.5f}", flush=True)
+                    print(f"   📊 Stoch(15m)={stoch_15m:.2f} | Stoch(5m)={stoch_5m:.2f} (önceki={stoch_5m_onceki:.2f})", flush=True)
+                    print(f"   📊 Mum: 15m={son_mum_15m} | 5m={son_mum_5m}", flush=True)
+                    print(f"   🌐 Rejim: {piyasa_rejimi}", flush=True)
+
                     if piyasa_rejimi == "YATAY":
-                        # YATAY: Hibrit sinyal (15m + 5m onay)
-                        yon, sebep = sinyal_uret_hibrit(df_15m, df_5m, anlik_fiyat, piyasa_rejimi)
+                        bb_low_temas = anlik_fiyat <= bb_low_15m * 1.005
+                        bb_high_temas = anlik_fiyat >= bb_high_15m * 0.995
+                        print(f"   📊 BB temas: Alt={bb_low_temas} | Üst={bb_high_temas}", flush=True)
+
+                        yon, sebep = sinyal_uret_hibrit(df_15m, df_5m, anlik_fiyat)
                         if yon is None:
+                            print(f"   ⏭️ [YATAY] Sinyal yok (5m onayı bekleniyor)", flush=True)
                             continue
                         mod = "YATAY"
                         atr = ta.volatility.AverageTrueRange(df_15m['high'], df_15m['low'], df_15m['close'], window=14).average_true_range().iloc[-1]
                         tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = akilli_seviye_hesapla(anlik_fiyat, yon, df_15m, "YATAY")
                         rr = abs(tp_fiyat - anlik_fiyat) / abs(anlik_fiyat - sl_fiyat) if abs(anlik_fiyat - sl_fiyat) > 0 else 0
-                        print(f"🔄 [YATAY-Hibrit] {symbol} → {yon} | {sebep} | R/R: {rr:.2f}", flush=True)
-
+                        print(f"   🎯 [YATAY] SİNYAL! {yon} | {sebep} | R/R: {rr:.2f}", flush=True)
                     else:
-                        # TREND: Likidite Avı (Sweep)
                         highs, lows = swing_noktalari_bul(df_15m)
                         if len(highs) < 2 or len(lows) < 2:
+                            print(f"   ⏭️ [TREND] Yetersiz swing", flush=True)
                             continue
                         destekler, direncler = likidite_seviyeleri(df_15m, highs, lows, anlik_fiyat)
                         if not destekler and not direncler:
+                            print(f"   ⏭️ [TREND] Destek/direnç yok", flush=True)
                             continue
+                        print(f"   📊 Destek: {[f'{d:.5f}' for d in destekler]} | Direnç: {[f'{d:.5f}' for d in direncler]}", flush=True)
 
                         yon, likidite_lvl, sl_fiyat, sweep_uc = sweep_tespit_et(df_15m, destekler, direncler, anlik_fiyat)
                         if yon is None:
+                            print(f"   ⏭️ [TREND] Sweep yok", flush=True)
                             continue
 
                         atr = ta.volatility.AverageTrueRange(df_15m['high'], df_15m['low'], df_15m['close'], window=14).average_true_range().iloc[-1]
                         tp_fiyat, rr = tp_hesapla_sweep(yon, anlik_fiyat, sl_fiyat, destekler, direncler, atr)
 
                         if rr < MIN_RR:
-                            print(f"   ⏭️ [{symbol}] TREND {yon} iptal | R/R: {rr:.2f} < {MIN_RR}", flush=True)
+                            print(f"   ⏭️ [TREND] {yon} iptal | R/R: {rr:.2f} < {MIN_RR}", flush=True)
                             continue
 
                         mod = "TREND"
                         kapat_yon = 'sell' if yon == 'LONG' else 'buy'
                         hedef_roe = abs((tp_fiyat - anlik_fiyat) / anlik_fiyat) * 100 * KALDIRAC
-                        print(f"🔄 [TREND-Sweep] {symbol} → {yon} | R/R: {rr:.2f}", flush=True)
+                        print(f"   🎯 [TREND] SİNYAL! {yon} | R/R: {rr:.2f}", flush=True)
 
-                        # MTF FİLTRESİ (TREND İÇİN)
                         ana_trend = coklu_zaman_trend_kontrol(symbol)
+                        print(f"   🌍 MTF: {ana_trend}", flush=True)
                         if yon == "LONG" and ana_trend == "ASAGI":
-                            print(f"   ⏭️ [{symbol}] LONG iptal | MTF AŞAĞI", flush=True)
+                            print(f"   ⏭️ [TREND] LONG iptal | MTF AŞAĞI", flush=True)
                             continue
                         if yon == "SHORT" and ana_trend == "YUKARI":
-                            print(f"   ⏭️ [{symbol}] SHORT iptal | MTF YUKARI", flush=True)
+                            print(f"   ⏭️ [TREND] SHORT iptal | MTF YUKARI", flush=True)
                             continue
                         if ana_trend == "NOTR" and rr < 1.8:
-                            print(f"   ⏭️ [{symbol}] İptal | MTF NOTR ve R/R {rr:.2f} < 1.8", flush=True)
+                            print(f"   ⏭️ [TREND] İptal | MTF NOTR ve R/R {rr:.2f} < 1.8", flush=True)
                             continue
 
-                    # KOMİSYON KONTROLÜ
                     yeterli, net_kar = net_kar_yeterli_mi(yon, anlik_fiyat, tp_fiyat)
+                    print(f"   💰 Net kâr: %{net_kar*100:.3f} | Yeterli: {yeterli}", flush=True)
                     if not yeterli:
-                        print(f"   ⏭️ [{symbol}] {yon} iptal | Net: %{net_kar*100:.3f}", flush=True)
+                        print(f"   ⏭️ [{symbol}] {yon} iptal | Net kâr yetersiz", flush=True)
                         continue
 
                     taranan_sinyaller.append({
@@ -833,7 +833,9 @@ def otomatik_arkaplan_tarayici():
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
                 if sinyal["symbol"] in aktif_semboller_listesi: continue
-                if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON: break
+                if len(aktif_borsa_map) >= MAKSIMUM_TOPLAM_POZISYON:
+                    print(f"   ⏭️ Maksimum pozisyon ({MAKSIMUM_TOPLAM_POZISYON}) dolu", flush=True)
+                    break
 
                 try:
                     bakiye_bilgisi = exchange.fetch_balance()
@@ -844,7 +846,9 @@ def otomatik_arkaplan_tarayici():
                     market = exchange.market(sinyal["symbol"])
 
                     kullanilacak_tutar = min(toplam_bakiye * 0.3, serbest_bakiye)
-                    if kullanilacak_tutar < 1.0: continue
+                    if kullanilacak_tutar < 1.0:
+                        print(f"   ⏭️ Yetersiz bakiye", flush=True)
+                        continue
 
                     miktar = float(exchange.amount_to_precision(
                         sinyal["symbol"],
@@ -880,8 +884,7 @@ def otomatik_arkaplan_tarayici():
                         f"🎯 Giriş: `{sinyal['fiyat']}`\n"
                         f"💰 TP: `{sinyal['tp']}` (ROE: `%{sinyal['hedef_roe']:.1f}`)\n"
                         f"🛑 SL: `{sinyal['sl']}`\n"
-                        f"📊 R/R: `{sinyal['rr']:.2f}`\n"
-                        f"✂️ ROE %5'te %50 kısmi kâr"
+                        f"📊 R/R: `{sinyal['rr']:.2f}`"
                     )
                     break
                 except Exception as e:
@@ -897,11 +900,16 @@ async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
 
-    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    # 🆕 TELEGRAM CONFLICT ÇÖZÜMÜ: Webhook sil + bekle
+    print("🧹 Telegram webhook temizleniyor...", flush=True)
     try:
-        requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
-    except Exception: pass
+        requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=10)
+        print("✅ Webhook temizlendi. 5 saniye bekleniyor...", flush=True)
+        await asyncio.sleep(5)
+    except Exception as e:
+        print(f"⚠️ Webhook temizleme hatası: {e}", flush=True)
 
+    app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
@@ -911,6 +919,7 @@ async def main():
     await app_tg.initialize()
     await app_tg.start()
     await app_tg.updater.start_polling(drop_pending_updates=True)
+    print("✅ Telegram polling başladı", flush=True)
 
     tarayici_thread = threading.Thread(target=otomatik_arkaplan_tarayici, daemon=True)
     tarayici_thread.start()
