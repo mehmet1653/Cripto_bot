@@ -66,7 +66,7 @@ tarayici_kilidi = threading.Lock()
 
 # KALDIRAÇLAR
 KALDIRAC_TREND = 5
-KALDIRAC_RANGE = 7    # 🆕 10x'ten 7x'e düşürüldü (risk azaltma)
+KALDIRAC_RANGE = 7    # 10x'ten düşürüldü (risk azaltma)
 
 MAKSIMUM_TOPLAM_POZISYON = 2
 COOLDOWN_SURESI_SANIYE = 30 * 60
@@ -76,9 +76,9 @@ SWING_LOOKBACK = 50
 # KOMİSYON VE MALİYET AYARLARI
 KOMISYON_ORANI = 0.001       # Gidiş-dönüş toplam komisyon
 SPREAD_MALIYETI = 0.0005     # Spread maliyeti
-MIN_NET_KAR = 0.006          # 🆕 %0.3'ten %0.6'ya çıkarıldı
-MIN_RR = 2.5                 # 🆕 2.0'dan 2.5'e çıkarıldı
-TP_GERI_CEKME = 0.005        # Direnç/desteğin %0.5 öncesi
+MIN_NET_KAR = 0.006          # Minimum net kâr hedefi (%0.6)
+MIN_RR = 2.5                 # Trend modu için min Risk/Ödül
+TP_GERI_CEKME = 0.005        # Direnç/desteğin %0.5 öncesi TP
 
 # Trailing (Sadece Trend modu)
 TRAILING_SEVIYELER = [
@@ -125,7 +125,7 @@ AKTIF_POZISYONLAR = kalici.get("aktif_sistemler", {})
 ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0})
 COIN_COOLDOWN = kalici.get("cooldownlar", {})
 
-# 🆕 PİYASA REJİMİ TESPİTİ (15m)
+# PİYASA REJİMİ TESPİTİ (15m)
 def piyasa_rejimi_tespit_et(df):
     try:
         adx = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx().iloc[-1]
@@ -144,12 +144,8 @@ def piyasa_rejimi_tespit_et(df):
     except:
         return "BELIRSIZ"
 
-# 🆕 ÇOKLU ZAMAN DİLİMİ TREND FİLTRESİ (4h + 1d)
+# ÇOKLU ZAMAN DİLİMİ TREND FİLTRESİ (4h + 1d)
 def coklu_zaman_trend_kontrol(symbol):
-    """
-    4h ve 1d grafiklere bakarak ana trendi belirler.
-    Dönüş: 'YUKARI', 'ASAGI', veya 'NOTR'
-    """
     try:
         with borsa_kilidi:
             ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=50)
@@ -158,11 +154,8 @@ def coklu_zaman_trend_kontrol(symbol):
         df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_1d = pd.DataFrame(ohlcv_1d, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-        # 4h EMA20 ve EMA50
         ema20_4h = ta.trend.EMAIndicator(df_4h['close'], window=20).ema_indicator().iloc[-1]
         ema50_4h = ta.trend.EMAIndicator(df_4h['close'], window=50).ema_indicator().iloc[-1]
-
-        # 1d EMA20 ve EMA50
         ema20_1d = ta.trend.EMAIndicator(df_1d['close'], window=20).ema_indicator().iloc[-1]
         ema50_1d = ta.trend.EMAIndicator(df_1d['close'], window=50).ema_indicator().iloc[-1]
 
@@ -427,7 +420,7 @@ def trailing_stop_kontrol():
 
 # ==================== ANA TARAYICI ====================
 def tarayici():
-    print("🚀 [BAŞLANGIÇ] HİBRİT MOD + MTF (4h/1d) + Komisyon Korumalı...", flush=True)
+    print("🚀 [BAŞLANGIÇ] HİBRİT MOD + MTF + Komisyon Korumalı...", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -440,14 +433,20 @@ def tarayici():
             if not BOT_CALISIYOR_MU:
                 time.sleep(5); continue
             dongu += 1
-            print(f"\n{'='*55}\n🔄 [DÖNGÜ #{dongu}] {time.strftime('%H:%M:%S')}", flush=True)
+
+            print(f"\n{'='*65}", flush=True)
+            print(f"🔄 [DÖNGÜ #{dongu}] {time.strftime('%H:%M:%S')}", flush=True)
+            print(f"{'='*65}", flush=True)
 
             try:
                 with borsa_kilidi:
                     raw = exchange.fetch_positions()
                 aktif_map = {p['symbol']: p for p in raw if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0}
                 aktif_list = list(aktif_map.keys())
-            except:
+                if aktif_list:
+                    print(f"📌 Açık pozisyonlar: {aktif_list}", flush=True)
+            except Exception as e:
+                print(f"⚠️ Pozisyon çekme hatası: {e}", flush=True)
                 raw, aktif_map, aktif_list = [], {}, []
 
             # KAPANIŞ KONTROLÜ
@@ -481,7 +480,7 @@ def tarayici():
                             COIN_COOLDOWN[eski] = {"zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), "son_yon": y}
                             if eski in AKTIF_POZISYONLAR: del AKTIF_POZISYONLAR[eski]
                         hafizayi_kaydet()
-                        print(f"💰 [KAPANIŞ] {eski} | Çıkış: {cikis}", flush=True)
+                        print(f"💰 [KAPANIŞ] {eski} | Çıkış: {cikis} | {'KÂR' if karli else 'ZARAR'}", flush=True)
                         tg_gonder(f"{tip}\n📌 `{eski}` | Çıkış: `{cikis}`")
             except Exception as e:
                 print(f"⚠️ Kapanış: {e}", flush=True)
@@ -496,6 +495,7 @@ def tarayici():
                         df_k = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                         rejim = piyasa_rejimi_tespit_et(df_k)
                         if rejim == "TREND":
+                            print(f"🚨 [MOD DEĞİŞİMİ] {sym} Range → TREND. Pozisyon kapatılıyor.", flush=True)
                             with borsa_kilidi:
                                 pos = [p for p in exchange.fetch_positions() if p['symbol'] == sym and float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                                 for p in pos:
@@ -510,7 +510,6 @@ def tarayici():
                                 COIN_COOLDOWN[sym] = {"zaman": float(time.time() + TREND_COOLDOWN_SANIYE), "son_yon": "TREND_KAPAT"}
                             hafizayi_kaydet()
                             tg_gonder(f"🚨 *MOD DEĞİŞTİ!* `{sym}` Range pozisyonu kapatıldı. 1 saat bekleme.")
-                            print(f"🚨 [MOD DEĞİŞİMİ] {sym} Range pozisyonu kapatıldı.", flush=True)
             except Exception as e:
                 print(f"⚠️ Mod değişim kontrolü: {e}", flush=True)
 
@@ -526,7 +525,9 @@ def tarayici():
                     cd = COIN_COOLDOWN.get(symbol)
                     if cd:
                         z = cd.get("zaman", 0) if isinstance(cd, dict) else float(cd)
-                        if z - time.time() > 0: continue
+                        if z - time.time() > 0:
+                            print(f"   ⏳ [{symbol}] Cooldown: {int(z - time.time())} sn", flush=True)
+                            continue
 
                 try:
                     with borsa_kilidi:
@@ -535,50 +536,78 @@ def tarayici():
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     anlik = float(ticker['last'])
 
+                    print(f"\n🔍 [{symbol}] @ {anlik}", flush=True)
+
                     rejim = piyasa_rejimi_tespit_et(df)
                     atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
+                    adx = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx().iloc[-1]
+                    bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
+                    bb_genislik = ((bb.bollinger_hband().iloc[-1] - bb.bollinger_lband().iloc[-1]) / df['close'].iloc[-1]) * 100
+
+                    print(f"   📊 Rejim: {rejim} | ADX: {adx:.1f} | BB: %{bb_genislik:.2f} | ATR: {atr:.6f}", flush=True)
 
                     highs, lows = swing_noktalari_bul(df)
-                    if len(highs) < 2 or len(lows) < 2: continue
+                    if len(highs) < 2 or len(lows) < 2:
+                        print(f"   ⏭️ Yetersiz swing (H:{len(highs)}, L:{len(lows)})", flush=True)
+                        continue
                     destekler, direncler = likidite_seviyeleri(df, highs, lows, anlik)
-                    if not destekler and not direncler: continue
+                    if not destekler and not direncler:
+                        print(f"   ⏭️ Destek/direnç yok", flush=True)
+                        continue
+
+                    print(f"   🎯 Destekler: {[f'{d:.4f}' for d in destekler]}", flush=True)
+                    print(f"   🎯 Dirençler: {[f'{d:.4f}' for d in direncler]}", flush=True)
 
                     yon, sl_fiyat, tp_fiyat, rr, mod = None, None, None, 0, rejim
+                    net_kar = 0
 
                     if rejim == "YATAY":
                         yon, tp_fiyat, sl_fiyat = range_sinyal_uret(df, destekler, direncler, anlik, atr)
                         if yon:
                             yeterli, net_kar = net_kar_yeterli_mi(yon, anlik, tp_fiyat)
                             if not yeterli:
-                                print(f"   ⏭️ [{symbol}] {yon} RANGE | Net kâr yetersiz: %{net_kar*100:.3f}", flush=True)
+                                print(f"   ⏭️ RANGE {yon} iptal | Net: %{net_kar*100:.3f} < %{MIN_NET_KAR*100:.1f}", flush=True)
                                 yon = None
                             else:
                                 rr = abs(tp_fiyat - anlik) / abs(anlik - sl_fiyat) if abs(anlik - sl_fiyat) > 0 else 0
-                                print(f"🎯 [{symbol}] RANGE SİNYALİ! {yon} | Net: %{net_kar*100:.3f} | R/R: {rr:.2f}", flush=True)
+                                print(f"   🎯 RANGE SİNYALİ! {yon} | Net: %{net_kar*100:.3f} | R/R: {rr:.2f}", flush=True)
+                        else:
+                            print(f"   ⏭️ RANGE sinyali yok", flush=True)
 
                     elif rejim == "TREND":
                         yon, likidite_lvl, sl_fiyat, sweep_uc = sweep_tespit_et(df, destekler, direncler, anlik)
                         if yon:
                             tp_fiyat, rr = tp_hesapla(yon, anlik, sl_fiyat, destekler, direncler, atr)
                             yeterli, net_kar = net_kar_yeterli_mi(yon, anlik, tp_fiyat)
-                            if rr < MIN_RR or not yeterli:
-                                print(f"   ⏭️ [{symbol}] {yon} TREND | R/R: {rr:.2f} | Net: %{net_kar*100:.3f}", flush=True)
+                            if rr < MIN_RR:
+                                print(f"   ⏭️ TREND {yon} iptal | R/R: {rr:.2f} < {MIN_RR}", flush=True)
+                                yon = None
+                            elif not yeterli:
+                                print(f"   ⏭️ TREND {yon} iptal | Net: %{net_kar*100:.3f}", flush=True)
                                 yon = None
                             else:
-                                print(f"🎯 [{symbol}] TREND SİNYALİ! {yon} | R/R: {rr:.2f} | Net: %{net_kar*100:.3f}", flush=True)
+                                print(f"   🎯 TREND SİNYALİ! {yon} | R/R: {rr:.2f} | Net: %{net_kar*100:.3f}", flush=True)
+                        else:
+                            print(f"   ⏭️ TREND sinyali yok", flush=True)
+
+                    elif rejim == "BELIRSIZ":
+                        print(f"   ⏭️ Rejim BELİRSİZ", flush=True)
+                        continue
 
                     if yon is None: continue
 
-                    # 🆕 MTF (ÇOKLU ZAMAN DİLİMİ) FİLTRESİ
+                    # MTF FİLTRESİ
                     ana_trend = coklu_zaman_trend_kontrol(symbol)
+                    print(f"   🌍 MTF Trend: {ana_trend}", flush=True)
+
                     if yon == "LONG" and ana_trend == "ASAGI":
-                        print(f"   ⏭️ [{symbol}] LONG ama 4h/1d trend AŞAĞI → İptal", flush=True)
+                        print(f"   ⏭️ LONG iptal | MTF AŞAĞI", flush=True)
                         yon = None
                     elif yon == "SHORT" and ana_trend == "YUKARI":
-                        print(f"   ⏭️ [{symbol}] SHORT ama 4h/1d trend YUKARI → İptal", flush=True)
+                        print(f"   ⏭️ SHORT iptal | MTF YUKARI", flush=True)
                         yon = None
                     elif ana_trend == "NOTR":
-                        print(f"   ⏭️ [{symbol}] 4h ve 1d trend çelişkili → İptal", flush=True)
+                        print(f"   ⏭️ İptal | MTF çelişkili", flush=True)
                         yon = None
 
                     if yon is None: continue
@@ -592,7 +621,9 @@ def tarayici():
                         market = exchange.market(symbol)
 
                     kullan = min(toplam_b * 0.3, serbest_b)
-                    if kullan < 1: continue
+                    if kullan < 1:
+                        print(f"   ⏭️ Yetersiz bakiye", flush=True)
+                        continue
 
                     miktar = float(exchange.amount_to_precision(
                         symbol,
@@ -614,7 +645,7 @@ def tarayici():
                             exchange.create_order(symbol, 'stop', kapat_y, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
                         sl_ok = True
                     except Exception as e:
-                        print(f"   ⚠️ TP/SL: {e}", flush=True)
+                        print(f"   ⚠️ TP/SL hatası: {e}", flush=True)
 
                     if not sl_ok:
                         try:
@@ -633,7 +664,11 @@ def tarayici():
                         aktif_map[symbol] = {"dummy": True}
 
                     hafizayi_kaydet()
-                    print(f"✅ [AÇILDI] {symbol} {yon} ({mod}) @ {anlik} | SL: {sl_fiyat} | TP: {tp_fiyat} | Net: %{net_kar*100:.3f}", flush=True)
+
+                    print(f"   ✅ POZİSYON AÇILDI!", flush=True)
+                    print(f"      {symbol} | {yon} | {mod} | {kaldirac}x", flush=True)
+                    print(f"      Giriş: {anlik} | TP: {tp_fiyat} | SL: {sl_fiyat}", flush=True)
+                    print(f"      R/R: {rr:.2f} | Net: %{net_kar*100:.3f} | MTF: {ana_trend}", flush=True)
 
                     tg_gonder(
                         f"🎯 *SİNYAL ({mod})!*\n"
@@ -645,14 +680,14 @@ def tarayici():
                         f"📊 R/R: `{rr:.2f}` | Net: `%{net_kar*100:.3f}`"
                     )
                 except Exception as e:
-                    print(f"⚠️ {symbol}: {e}", flush=True)
+                    print(f"   ⚠️ [{symbol}] Hata: {e}", flush=True)
                     continue
         except Exception as e:
             print(f"⚠️ Ana döngü: {e}", flush=True)
         finally:
             try: tarayici_kilidi.release()
             except: pass
-        time.sleep(15)  # MTF yüzünden API yükü arttı, 10'dan 15'e çıkarıldı
+        time.sleep(15)
 
 async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)
