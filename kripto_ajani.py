@@ -66,7 +66,7 @@ tarayici_kilidi = threading.Lock()
 
 # KALDIRAÇLAR
 KALDIRAC_TREND = 5
-KALDIRAC_RANGE = 7    # 10x'ten düşürüldü (risk azaltma)
+KALDIRAC_RANGE = 7
 
 MAKSIMUM_TOPLAM_POZISYON = 2
 COOLDOWN_SURESI_SANIYE = 30 * 60
@@ -77,12 +77,13 @@ SWING_LOOKBACK = 50
 KOMISYON_ORANI = 0.001       # Gidiş-dönüş toplam komisyon
 SPREAD_MALIYETI = 0.0005     # Spread maliyeti
 MIN_NET_KAR = 0.006          # Minimum net kâr hedefi (%0.6)
-MIN_RR = 2.5                 # Trend modu için min Risk/Ödül
-TP_GERI_CEKME = 0.005        # Direnç/desteğin %0.5 öncesi TP
+MIN_RR = 1.5                 # 🆕 2.5'ten 1.5'e düşürüldü (dengeli)
+TP_GERI_CEKME = 0.005        # Direnç/desteğin %0.5 öncesi
+SL_ATR_CARPAN = 1.2          # 🆕 1.5'ten 1.2'ye düşürüldü (daha sıkı SL)
 
 # Trailing (Sadece Trend modu)
 TRAILING_SEVIYELER = [
-    (15.0, 0.10), (10.0, 0.05), (6.0, 0.02), (3.0, 0.01),
+    (15.0, 0.10), (10.0, 0.05), (6.0, 0.02), (4.0, 0.015), (3.0, 0.01),
 ]
 
 def hafizayi_yukle():
@@ -198,7 +199,7 @@ def likidite_seviyeleri(df, highs, lows, anlik_fiyat):
     direncler = sorted([h for h in high_levels if h > anlik_fiyat])[:3]
     return destekler, direncler
 
-# TREND MODU: ATR TABANLI SL (1.5 ATR)
+# TREND MODU: ATR TABANLI SL (1.2 ATR)
 def sweep_tespit_et(df, destekler, direncler, anlik_fiyat):
     if len(df) < 3:
         return None, None, None, None
@@ -214,7 +215,7 @@ def sweep_tespit_et(df, destekler, direncler, anlik_fiyat):
         if onceki['low'] < destek: kirildi, en_dusuk = True, min(onceki['low'], en_dusuk)
         if kirildi and son_mum['close'] > destek and anlik_fiyat > destek:
             if (destek - en_dusuk) / destek < 0.02:
-                sl_fiyat = en_dusuk - (atr * 1.5)
+                sl_fiyat = en_dusuk - (atr * SL_ATR_CARPAN)
                 if (anlik_fiyat - sl_fiyat) / anlik_fiyat > 0.02:
                     sl_fiyat = anlik_fiyat * 0.98
                 return "LONG", destek, sl_fiyat, en_dusuk
@@ -225,26 +226,28 @@ def sweep_tespit_et(df, destekler, direncler, anlik_fiyat):
         if onceki['high'] > direnc: kirildi, en_yuksek = True, max(onceki['high'], en_yuksek)
         if kirildi and son_mum['close'] < direnc and anlik_fiyat < direnc:
             if (en_yuksek - direnc) / direnc < 0.02:
-                sl_fiyat = en_yuksek + (atr * 1.5)
+                sl_fiyat = en_yuksek + (atr * SL_ATR_CARPAN)
                 if (sl_fiyat - anlik_fiyat) / anlik_fiyat > 0.02:
                     sl_fiyat = anlik_fiyat * 1.02
                 return "SHORT", direnc, sl_fiyat, en_yuksek
 
     return None, None, None, None
 
-# TP HESAPLAMA
+# TP HESAPLAMA (2. veya 3. direnci hedefle)
 def tp_hesapla(yon, giris, sl, destekler, direncler, atr):
     if yon == "LONG":
-        for d in direncler:
+        # İlk direnç çok yakınsa 2. veya 3. dirence bak
+        for i, d in enumerate(direncler):
             if d > giris:
                 tp = d * (1 - TP_GERI_CEKME)
                 rr = (tp - giris) / (giris - sl) if giris > sl else 0
                 if rr >= MIN_RR:
                     return tp, rr
+        # Hiçbiri yetmezse ATR tabanlı TP
         tp = giris + (atr * 3.0)
         return tp, (tp - giris) / (giris - sl) if giris > sl else 0
     else:
-        for d in sorted(destekler, reverse=True):
+        for i, d in enumerate(sorted(destekler, reverse=True)):
             if d < giris:
                 tp = d * (1 + TP_GERI_CEKME)
                 rr = (giris - tp) / (sl - giris) if sl > giris else 0
@@ -334,7 +337,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (Hibrit Mod + MTF)")
+    await update.message.reply_text("🟢 Bot aktif! (R/R 1.5 + MTF)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -420,7 +423,7 @@ def trailing_stop_kontrol():
 
 # ==================== ANA TARAYICI ====================
 def tarayici():
-    print("🚀 [BAŞLANGIÇ] HİBRİT MOD + MTF + Komisyon Korumalı...", flush=True)
+    print("🚀 [BAŞLANGIÇ] HİBRİT MOD + MTF + R/R 1.5...", flush=True)
     try:
         exchange.load_markets()
     except: pass
