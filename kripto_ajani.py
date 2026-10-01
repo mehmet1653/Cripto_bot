@@ -19,7 +19,6 @@ from dotenv import load_dotenv
 from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
-from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
 
 # ==================== .ENV YÜKLEME ====================
@@ -30,7 +29,7 @@ else:
     load_dotenv(override=True)
     print("✅ .env yüklendi", flush=True)
 
-# ==================== FLASK (Render için) ====================
+# ==================== FLASK ====================
 app = Flask(__name__)
 
 @app.route('/')
@@ -41,7 +40,7 @@ def run_web():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
-# ==================== AYARLAR VE ANAHTARLAR ====================
+# ==================== API ANAHTARLARI ====================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.environ.get("CHAT_ID", "").strip()
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
@@ -49,16 +48,12 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
 GATE_API_KEY = os.environ.get("GATE_API_KEY", "").strip()
 GATE_SECRET = os.environ.get("GATE_SECRET", "").strip()
 
-# Kontrol
 if not TELEGRAM_TOKEN or not CHAT_ID:
-    print("❌ TELEGRAM_TOKEN veya CHAT_ID boş!", flush=True)
-    sys.exit(1)
+    print("❌ TELEGRAM boş!", flush=True); sys.exit(1)
 if not SUPABASE_URL or not SUPABASE_KEY:
-    print("❌ SUPABASE_URL veya SUPABASE_KEY boş!", flush=True)
-    sys.exit(1)
+    print("❌ SUPABASE boş!", flush=True); sys.exit(1)
 if not GATE_API_KEY or not GATE_SECRET:
-    print("❌ GATE_API_KEY veya GATE_SECRET boş!", flush=True)
-    sys.exit(1)
+    print("❌ GATE boş!", flush=True); sys.exit(1)
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -67,19 +62,18 @@ exchange = ccxt.gate({
     'secret': GATE_SECRET,
     'enableRateLimit': True,
     'timeout': 30000,
-    'options': {
-        'defaultType': 'swap'
-    }
+    'options': {'defaultType': 'swap'}
 })
-
 exchange.set_sandbox_mode(True)  # ⚠️ Gerçek hesaba geçerken False yap!
 
+# ==================== TAKİP LİSTESİ ====================
+# 🆕 BTC, ETH, AVAX çıkarıldı (testnet'te kasıyordu)
 TAKIP_EDILENLER = [
     'SOL/USDT:USDT',
     'XRP/USDT:USDT',
     'DOGE/USDT:USDT',
     'LTC/USDT:USDT',
-    'LINK/USDT:USDT'
+    'LINK/USDT:USDT',
 ]
 
 BOT_CALISIYOR_MU = True
@@ -140,13 +134,12 @@ AKTIF_GRID_SISTEMLERI = kalici_veri.get("aktif_sistemler", {})
 ANALITIK_HAFIZA = kalici_veri.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []})
 COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 
-MAKSIMUM_TOPLAM_POZISYON = 2
+MAKSIMUM_TOPLAM_POZISYON = 3
 COOLDOWN_SURESI_SANIYE = 10 * 60
 
-# ==================== PİYASA REJİMİ ====================
+# ==================== PİYASA REJİMİ (GEVŞETİLDİ) ====================
 def piyasa_rejimini_tespit_et():
     global SON_BTC_YONU
-    print("🌐 [PİYASA] Sertleştirilmiş rejim analizi yapılıyor...", flush=True)
     try:
         ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=40)
         df_btc = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -163,7 +156,7 @@ def piyasa_rejimini_tespit_et():
         ema21 = ta.trend.ema_indicator(df_btc['close'], window=21).iloc[-1]
         fark_yuzdesi = (abs(ema9 - ema21) / ema21) * 100
 
-        if adx_1h < 35.0 or bb_bandwidth < 0.04 or fark_yuzdesi < 0.3:
+        if adx_1h < 25.0 or bb_bandwidth < 0.02 or fark_yuzdesi < 0.15:
             rejim = "YATAY"
             trend_yonu = "YATAY (Testere)"
         else:
@@ -171,7 +164,7 @@ def piyasa_rejimini_tespit_et():
             trend_yonu = "LONG" if ema9 > ema21 else "SHORT"
             SON_BTC_YONU = trend_yonu
 
-        print(f"🌐 [PİYASA SONUÇ] Rejim: {rejim} | Yön: {trend_yonu} | ADX: {adx_1h:.2f} | BB Genişlik: {bb_bandwidth:.4f} | Fark: %{fark_yuzdesi:.3f}", flush=True)
+        print(f"🌐 [PİYASA] Rejim: {rejim} | Yön: {trend_yonu} | ADX: {adx_1h:.2f} | BB: {bb_bandwidth:.4f} | Fark: %{fark_yuzdesi:.3f}", flush=True)
         return rejim, trend_yonu
     except Exception as e:
         print(f"⚠️ [PİYASA HATA] {e}. Varsayılan YATAY", flush=True)
@@ -206,54 +199,25 @@ def emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker_data):
     except Exception:
         return {"tepeye_yakin": False, "dipe_yakin": False, "alis_orani": 50.0, "satis_orani": 50.0}
 
-# ==================== AKILLI SEVİYE ====================
+# ==================== AKILLI SEVİYE (KISALTILDI) ====================
 def akilli_seviye_hesapla(anlik_fiyat, yon, df):
     atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
 
     if yon == 'LONG':
-        tp_fiyat = anlik_fiyat + (atr * 2.0)
-        sl_fiyat = anlik_fiyat - (atr * 1.5)
+        tp_fiyat = anlik_fiyat + (atr * 1.0)
+        sl_fiyat = anlik_fiyat - (atr * 0.8)
         kapat_yon = 'sell'
     else:
-        tp_fiyat = anlik_fiyat - (atr * 2.0)
-        sl_fiyat = anlik_fiyat + (atr * 1.5)
+        tp_fiyat = anlik_fiyat - (atr * 1.0)
+        sl_fiyat = anlik_fiyat + (atr * 0.8)
         kapat_yon = 'buy'
 
     hedef_roe = abs((tp_fiyat - anlik_fiyat) / anlik_fiyat) * 100 * KALDIRAC
     return float(tp_fiyat), float(sl_fiyat), kapat_yon, float(hedef_roe)
 
-# ==================== ML FİLTRE ====================
+# ==================== ML FİLTRE (GEÇİCİ KAPALI) ====================
 def makine_ogrenmesi_filtresi(df, rsi):
-    try:
-        if len(df) < 20: return True
-        X = []
-        y = []
-        closes = df['close'].values
-        highs = df['high'].values
-        lows = df['low'].values
-
-        for i in range(14, len(df) - 1):
-            sub_close = closes[:i+1]
-            sub_high = highs[:i+1]
-            sub_low = lows[:i+1]
-            sub_rsi = ta.momentum.rsi(pd.Series(sub_close), window=14).iloc[-1]
-            sub_atr = ta.volatility.AverageTrueRange(pd.Series(sub_high), pd.Series(sub_low), pd.Series(sub_close), window=14).average_true_range().iloc[-1]
-
-            future_return = (closes[i+1] - closes[i]) / closes[i]
-            label = 1 if future_return > 0 else 0
-
-            X.append([sub_rsi, sub_atr])
-            y.append(label)
-
-        if len(X) < 10: return True
-        clf = RandomForestClassifier(n_estimators=20, random_state=42, max_depth=3)
-        clf.fit(X, y)
-
-        current_atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
-        pred = clf.predict([[rsi, current_atr]])[0]
-        return bool(pred == 1)
-    except Exception:
-        return True
+    return True  # Agresif mod için devre dışı
 
 # ==================== TELEGRAM ====================
 def telegram_mesaj_gonder(mesaj):
@@ -288,13 +252,13 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon} | Giriş: `{giris}`\n  Anlık ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 **BOT DURUM RAPORU (Hibrit Mod - 5x)**\n\n"
-            f"🌐 Piyasa Rejimi: `{rejim}` (BTC Yön: `{btc_yon}`)\n"
-            f"💰 Kasa: `{total:.2f} USDT` | Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
-            f"📌 Açık Pozisyon: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
+            f"📊 **AGRESSİF MOD - DURUM**\n\n"
+            f"🌐 Rejim: `{rejim}` (BTC: `{btc_yon}`)\n"
+            f"💰 Kasa: `{total:.2f} USDT` | PnL: `{toplam_pnl:+.2f}`\n"
+            f"📌 Açık: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
             f"{pos_detaylari}\n\n"
-            f"✅ Başarılı TP: `{basarili}` | ❌ Başarısız SL: `{basarisiz}`\n"
-            f"📈 Başarı Oranı: `%{basari_orani:.1f}`"
+            f"✅ TP: `{basarili}` | ❌ SL: `{basarisiz}`\n"
+            f"📈 Başarı: `%{basari_orani:.1f}`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
     except Exception as e:
@@ -304,13 +268,13 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Hibrit Bot (5x) aktif edildi!")
+    await update.message.reply_text("🟢 AGRESİF MOD aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = False
-    await update.message.reply_text("⏸️ Bot durduruldu.")
+    await update.message.reply_text("⏸️ Durduruldu.")
 
 async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -324,13 +288,13 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try: exchange.cancel_all_orders(pos['symbol'])
                 except Exception: pass
                 exchange.create_order(pos['symbol'], 'market', kapatma_yonu, kontrat, None, {'reduceOnly': True})
-        await update.message.reply_text("✅ Tüm pozisyonlar ve emirler kapatıldı.")
+        await update.message.reply_text("✅ Kapatıldı.")
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
 
 # ==================== ANA TARAYICI ====================
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Hibrit Bot Aktif (Sertleştirilmiş Yatay/Testere Algılama)...", flush=True)
+    print("🚀 [BAŞLANGIÇ] AGRESİF MOD Aktif (5 coin)...", flush=True)
     try:
         exchange.load_markets()
     except Exception: pass
@@ -382,10 +346,10 @@ def otomatik_arkaplan_tarayici():
 
                             if islem_karli_mi:
                                 bas_sayi += 1
-                                sonuc_mesaj_tipi = "✅ *İŞLEM KÂRLA KAPANDI (TP)*"
+                                sonuc_mesaj_tipi = "✅ *KÂRLA KAPANDI (TP)*"
                             else:
                                 basarisiz_sayi += 1
-                                sonuc_mesaj_tipi = "❌ *İŞLEM ZARARLA KAPANDI (SL)*"
+                                sonuc_mesaj_tipi = "❌ *ZARARLA KAPANDI (SL)*"
 
                             ANALITIK_HAFIZA["basarili_islem_sayisi"] = bas_sayi
                             ANALITIK_HAFIZA["basarisiz_islem_sayisi"] = basarisiz_sayi
@@ -417,8 +381,8 @@ def otomatik_arkaplan_tarayici():
                     emir_analizi = emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker)
 
                     if piyasa_rejimi == "YATAY":
-                        if rsi < 35: ham_yon = "LONG"
-                        elif rsi > 65: ham_yon = "SHORT"
+                        if rsi < 40: ham_yon = "LONG"
+                        elif rsi > 60: ham_yon = "SHORT"
                         else: continue
 
                         islem_yonu = "SHORT" if ham_yon == "LONG" else "LONG"
@@ -430,9 +394,9 @@ def otomatik_arkaplan_tarayici():
                             islem_yonu = "SHORT"
                         else:
                             continue
-                        mod_adi = "NORMAL TREND MODU"
+                        mod_adi = "NORMAL TREND"
 
-                    print(f"🔄 [{mod_adi}] {symbol} için karar verildi 👉 {islem_yonu} | Rejim: {piyasa_rejimi} (RSI: {rsi:.2f})", flush=True)
+                    print(f"🔄 [{mod_adi}] {symbol} → {islem_yonu} | Rejim: {piyasa_rejimi} (RSI: {rsi:.2f})", flush=True)
 
                     ml_onay = makine_ogrenmesi_filtresi(df, rsi)
                     if not ml_onay: continue
@@ -440,7 +404,9 @@ def otomatik_arkaplan_tarayici():
                     taranan_sinyaller.append({
                         "symbol": symbol, "yon": islem_yonu, "rsi": rsi, "fiyat": anlik_fiyat, "df": df, "mod": mod_adi
                     })
-                except Exception: continue
+                except Exception as e:
+                    print(f"⚠️ {symbol} hata: {e}", flush=True)
+                    continue
 
             for sinyal in taranan_sinyaller:
                 if not BOT_CALISIYOR_MU: break
@@ -455,7 +421,7 @@ def otomatik_arkaplan_tarayici():
                     exchange.set_leverage(KALDIRAC, sinyal["symbol"])
                     market = exchange.market(sinyal["symbol"])
 
-                    kullanilacak_tutar = min(toplam_bakiye * 0.4, serbest_bakiye)
+                    kullanilacak_tutar = min(toplam_bakiye * 0.3, serbest_bakiye)
                     if kullanilacak_tutar < 1.0: continue
 
                     giris_fiyati = sinyal["fiyat"]
@@ -476,7 +442,8 @@ def otomatik_arkaplan_tarayici():
                     try:
                         exchange.create_order(sinyal["symbol"], 'limit', kapat_yon, miktar, tp_fiyat, {'reduceOnly': True})
                         exchange.create_order(sinyal["symbol"], 'stop', kapat_yon, miktar, sl_fiyat, {'stopPrice': sl_fiyat, 'reduceOnly': True})
-                    except Exception: pass
+                    except Exception as e:
+                        print(f"   ⚠️ TP/SL: {e}", flush=True)
 
                     with state_lock:
                         AKTIF_GRID_SISTEMLERI[sinyal["symbol"]] = {
@@ -486,25 +453,27 @@ def otomatik_arkaplan_tarayici():
                         aktif_semboller_listesi.append(sinyal["symbol"])
                     hafizayi_kaydet()
 
+                    print(f"   ✅ AÇILDI! {sinyal['symbol']} | {sinyal['yon']} | RSI: {sinyal['rsi']:.1f} | TP: {tp_fiyat} | SL: {sl_fiyat}", flush=True)
+
                     telegram_mesaj_gonder(
-                        f"🎯 *İŞLEM GİRİŞİ ({sinyal['mod']} - 5x)*\n"
-                        f"📌 `{sinyal['symbol']}` | Yön: `{sinyal['yon']}`\n"
+                        f"🎯 *İŞLEM ({sinyal['mod']} - 5x)*\n"
+                        f"📌 `{sinyal['symbol']}` | {sinyal['yon']}\n"
                         f"🎯 Giriş: `{giris_fiyati}`\n"
-                        f"💰 Hedef TP: `{tp_fiyat}` (Hedef ROE: `%{hedef_roe:.1f}`)\n"
-                        f"🛑 Stop-Loss: `{sl_fiyat}`"
+                        f"💰 TP: `{tp_fiyat}` (ROE: `%{hedef_roe:.1f}`)\n"
+                        f"🛑 SL: `{sl_fiyat}`\n"
+                        f"📊 RSI: `{sinyal['rsi']:.1f}`"
                     )
                     break
                 except Exception as e:
-                    print(f"⚠️ İşlem açma hatası {sinyal['symbol']}: {e}", flush=True)
+                    print(f"⚠️ İşlem hatası {sinyal['symbol']}: {e}", flush=True)
 
         except Exception as e:
-            print(f"⚠️ Ana döngü hatası: {e}", flush=True)
+            print(f"⚠️ Ana döngü: {e}", flush=True)
 
         time.sleep(5)
 
 # ==================== MAIN ====================
 async def main():
-    # Flask web server'ı ayrı thread'de başlat
     web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
 
