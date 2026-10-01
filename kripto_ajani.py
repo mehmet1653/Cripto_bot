@@ -57,85 +57,58 @@ exchange = ccxt.gate({
 })
 exchange.set_sandbox_mode(True)  # ⚠️ Gerçek hesaba geçerken False yap!
 
-# ==================== HİBRİT HAVUZ SİSTEMİ ====================
-# 🎯 Çekirdek Liste: Senin test ettiğin, verim aldığın coinler
+# ==================== HİBRİT HAVUZ ====================
 CEKIRDEK_LISTE = [
-    'SOL/USDT:USDT',
-    'XRP/USDT:USDT',
-    'DOGE/USDT:USDT',
-    'LTC/USDT:USDT',
-    'LINK/USDT:USDT'
+    'SOL/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'LTC/USDT:USDT', 'LINK/USDT:USDT'
 ]
-
-# ❌ Kara Liste: Bu coinler havuza asla eklenmez (testte kötü performans)
-KARA_LISTE = [
-    'BTC/USDT:USDT',
-    'ETH/USDT:USDT',
-    'AVAX/USDT:USDT'
-]
-
-# 🔄 Dinamik Liste: Her saat başı güncellenir (en yüksek hacimli 5 coin)
+KARA_LISTE = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'AVAX/USDT:USDT']
 DINAMIK_LISTE = []
 SON_HAVUZ_GUNCELLEME = 0
-HAVUZ_GUNCELLEME_SURESI = 3600  # 1 saat (saniye)
+HAVUZ_GUNCELLEME_SURESI = 3600
 
 def havuzu_guncelle():
-    """En yüksek 24s hacme sahip, kara listede olmayan 5 coini seçer."""
     global DINAMIK_LISTE
     try:
         print("🔄 Havuz güncelleniyor...", flush=True)
         tickers = exchange.fetch_tickers()
-        
-        # USDT paritelerini filtrele
         usdt_pairs = {}
         for k, v in tickers.items():
-            if ':USDT' in k and k not in KARA_LISTE:
-                # Çekirdek listede olanları da atla (zaten tarıyoruz)
-                if k not in CEKIRDEK_LISTE:
-                    hacim = float(v.get('quoteVolume', 0) or 0)
-                    usdt_pairs[k] = hacim
-        
-        # Hacme göre sırala, ilk 5'i al
+            if ':USDT' in k and k not in KARA_LISTE and k not in CEKIRDEK_LISTE:
+                hacim = float(v.get('quoteVolume', 0) or 0)
+                usdt_pairs[k] = hacim
         sorted_pairs = sorted(usdt_pairs.items(), key=lambda x: x[1], reverse=True)
         DINAMIK_LISTE = [p[0] for p in sorted_pairs[:5]]
-        
-        print(f"✅ Havuz güncellendi:", flush=True)
-        print(f"   📌 Çekirdek: {CEKIRDEK_LISTE}", flush=True)
+        print(f"✅ Havuz: Çekirdek {len(CEKIRDEK_LISTE)} + Dinamik {len(DINAMIK_LISTE)}", flush=True)
         print(f"   🔄 Dinamik: {DINAMIK_LISTE}", flush=True)
-        
         return True
     except Exception as e:
-        print(f"⚠️ Havuz güncelleme hatası: {e}", flush=True)
+        print(f"⚠️ Havuz hatası: {e}", flush=True)
         return False
 
 def takip_listesi():
-    """Çekirdek + Dinamik listeyi birleştirir."""
     return CEKIRDEK_LISTE + DINAMIK_LISTE
 
-# ==================== DURUM DEĞİŞKENLERİ ====================
+# ==================== DEĞİŞKENLER ====================
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
 borsa_kilidi = threading.Lock()
 tarayici_kilidi = threading.Lock()
 
-# KALDIRAÇLAR
 KALDIRAC_TREND = 5
 KALDIRAC_RANGE = 7
-
 MAKSIMUM_TOPLAM_POZISYON = 2
 COOLDOWN_SURESI_SANIYE = 30 * 60
 TREND_COOLDOWN_SANIYE = 60 * 60
 SWING_LOOKBACK = 50
 
-# KOMİSYON VE MALİYET AYARLARI
 KOMISYON_ORANI = 0.001
 SPREAD_MALIYETI = 0.0005
 MIN_NET_KAR = 0.006
-MIN_RR = 1.5
+MIN_RR = 1.3                 # 🆕 1.5'ten 1.3'e düşürüldü
+MTF_NOTR_MIN_RR = 1.8        # 🆕 MTF NOTR iken minimum R/R
 TP_GERI_CEKME = 0.005
 SL_ATR_CARPAN = 1.2
 
-# Trailing (Sadece Trend modu)
 TRAILING_SEVIYELER = [
     (15.0, 0.10), (10.0, 0.05), (6.0, 0.02), (4.0, 0.015), (3.0, 0.01),
 ]
@@ -190,7 +163,6 @@ def piyasa_rejimi_tespit_et(df):
         bb_alt = bb.bollinger_lband().iloc[-1]
         anlik = df['close'].iloc[-1]
         bb_genislik = ((bb_ust - bb_alt) / anlik) * 100
-
         if adx < 20 and bb_genislik < 3.0:
             return "YATAY"
         elif adx > 25:
@@ -205,18 +177,14 @@ def coklu_zaman_trend_kontrol(symbol):
         with borsa_kilidi:
             ohlcv_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=50)
             ohlcv_1d = exchange.fetch_ohlcv(symbol, timeframe='1d', limit=50)
-
         df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_1d = pd.DataFrame(ohlcv_1d, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-
         ema20_4h = ta.trend.EMAIndicator(df_4h['close'], window=20).ema_indicator().iloc[-1]
         ema50_4h = ta.trend.EMAIndicator(df_4h['close'], window=50).ema_indicator().iloc[-1]
         ema20_1d = ta.trend.EMAIndicator(df_1d['close'], window=20).ema_indicator().iloc[-1]
         ema50_1d = ta.trend.EMAIndicator(df_1d['close'], window=50).ema_indicator().iloc[-1]
-
         trend_4h = "YUKARI" if ema20_4h > ema50_4h else "ASAGI"
         trend_1d = "YUKARI" if ema20_1d > ema50_1d else "ASAGI"
-
         if trend_4h == "YUKARI" and trend_1d == "YUKARI":
             return "YUKARI"
         elif trend_4h == "ASAGI" and trend_1d == "ASAGI":
@@ -224,7 +192,7 @@ def coklu_zaman_trend_kontrol(symbol):
         else:
             return "NOTR"
     except Exception as e:
-        print(f"⚠️ MTF trend hatası {symbol}: {e}", flush=True)
+        print(f"⚠️ MTF hatası {symbol}: {e}", flush=True)
         return "NOTR"
 
 def swing_noktalari_bul(df, lookback=SWING_LOOKBACK):
@@ -254,14 +222,9 @@ def likidite_seviyeleri(df, highs, lows, anlik_fiyat):
     return destekler, direncler
 
 def sweep_tespit_et(df, destekler, direncler, anlik_fiyat):
-    if len(df) < 3:
-        return None, None, None, None
-
-    son_mum = df.iloc[-1]
-    onceki = df.iloc[-2]
-    iki_onceki = df.iloc[-3]
+    if len(df) < 3: return None, None, None, None
+    son_mum, onceki, iki_onceki = df.iloc[-1], df.iloc[-2], df.iloc[-3]
     atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
-
     for destek in destekler:
         kirildi, en_dusuk = False, 999999999
         if iki_onceki['low'] < destek: kirildi, en_dusuk = True, min(iki_onceki['low'], en_dusuk)
@@ -272,7 +235,6 @@ def sweep_tespit_et(df, destekler, direncler, anlik_fiyat):
                 if (anlik_fiyat - sl_fiyat) / anlik_fiyat > 0.02:
                     sl_fiyat = anlik_fiyat * 0.98
                 return "LONG", destek, sl_fiyat, en_dusuk
-
     for direnc in direncler:
         kirildi, en_yuksek = False, 0
         if iki_onceki['high'] > direnc: kirildi, en_yuksek = True, max(iki_onceki['high'], en_yuksek)
@@ -283,12 +245,11 @@ def sweep_tespit_et(df, destekler, direncler, anlik_fiyat):
                 if (sl_fiyat - anlik_fiyat) / anlik_fiyat > 0.02:
                     sl_fiyat = anlik_fiyat * 1.02
                 return "SHORT", direnc, sl_fiyat, en_yuksek
-
     return None, None, None, None
 
 def tp_hesapla(yon, giris, sl, destekler, direncler, atr):
     if yon == "LONG":
-        for i, d in enumerate(direncler):
+        for d in direncler:
             if d > giris:
                 tp = d * (1 - TP_GERI_CEKME)
                 rr = (tp - giris) / (giris - sl) if giris > sl else 0
@@ -297,7 +258,7 @@ def tp_hesapla(yon, giris, sl, destekler, direncler, atr):
         tp = giris + (atr * 3.0)
         return tp, (tp - giris) / (giris - sl) if giris > sl else 0
     else:
-        for i, d in enumerate(sorted(destekler, reverse=True)):
+        for d in sorted(destekler, reverse=True):
             if d < giris:
                 tp = d * (1 + TP_GERI_CEKME)
                 rr = (giris - tp) / (sl - giris) if sl > giris else 0
@@ -307,33 +268,28 @@ def tp_hesapla(yon, giris, sl, destekler, direncler, atr):
         return tp, (giris - tp) / (sl - giris) if sl > giris else 0
 
 def range_sinyal_uret(df, destekler, direncler, anlik, atr):
-    if not destekler or not direncler:
-        return None, None, None
-
+    if not destekler or not direncler: return None, None, None
     en_yakin_destek = destekler[0]
     en_yakin_direnc = direncler[0]
     mesafe_destek = (anlik - en_yakin_destek) / anlik
     mesafe_direnc = (en_yakin_direnc - anlik) / anlik
-
     if mesafe_destek < 0.005 and mesafe_direnc > 0.01:
         sl = en_yakin_destek - (atr * 0.5)
         tp = en_yakin_direnc * (1 - TP_GERI_CEKME)
         return "LONG", tp, sl
-
     if mesafe_direnc < 0.005 and mesafe_destek > 0.01:
         sl = en_yakin_direnc + (atr * 0.5)
         tp = en_yakin_destek * (1 + TP_GERI_CEKME)
         return "SHORT", tp, sl
-
     return None, None, None
 
 def net_kar_yeterli_mi(yon, giris, tp):
     if yon == "LONG":
-        brut_kar_orani = (tp - giris) / giris
+        brut = (tp - giris) / giris
     else:
-        brut_kar_orani = (giris - tp) / giris
-    net_kar = brut_kar_orani - KOMISYON_ORANI - SPREAD_MALIYETI
-    return net_kar >= MIN_NET_KAR, net_kar
+        brut = (giris - tp) / giris
+    net = brut - KOMISYON_ORANI - SPREAD_MALIYETI
+    return net >= MIN_NET_KAR, net
 
 def tg_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID: return
@@ -355,7 +311,6 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         basz = int(ANALITIK.get("basarisiz_islem_sayisi", 0))
         top = bas + basz
         oran = (bas / top * 100) if top > 0 else 0
-
         pos_detay = ""
         for p in pos:
             sym = p['symbol']
@@ -368,7 +323,6 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f = (gf - g) / g if y == "LONG" else (g - gf) / g
             roe = f * 100 * k
             pos_detay += f"\n• `{sym}` | {y} ({k}x) [{mod}]\n  Giriş: `{g}` | ROE: `%{roe:+.2f}`"
-
         mesaj = (
             f"📊 *DURUM* [HİBRİT: RANGE + TREND + MTF]\n\n"
             f"💰 Kasa: `{total:.2f} USDT` | PnL: `{pnl:+.2f}`\n"
@@ -387,7 +341,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (Hibrit Havuz + R/R 1.5)")
+    await update.message.reply_text("🟢 Bot aktif! (Akıllı MTF + R/R 1.3)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -413,7 +367,6 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 async def havuz_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Havuzu manuel günceller."""
     if update.effective_chat.id != int(CHAT_ID): return
     await update.message.reply_text("🔄 Havuz güncelleniyor...")
     basarili = havuzu_guncelle()
@@ -428,42 +381,33 @@ async def havuz_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ Havuz güncellenemedi.")
 
-# ==================== TRAILING STOP ====================
+# ==================== TRAILING ====================
 def trailing_stop_kontrol():
     with state_lock:
         aktif_kopya = list(AKTIF_POZISYONLAR.items())
-
     for sym, bilgi in aktif_kopya:
         if bilgi.get("mod") != "TREND": continue
         if sym not in AKTIF_POZISYONLAR: continue
-
         yon = bilgi.get("yon", "LONG")
         g = float(bilgi.get("giris_fiyati", 0))
         sl_kayitli = float(bilgi.get("sl_fiyat", 0))
         kaldirac_v = int(bilgi.get("kaldirac", KALDIRAC_TREND))
         giris_zaman = float(bilgi.get("giris_zamani", 0))
-
         if time.time() - giris_zaman < 120: continue
-
         try:
             with borsa_kilidi:
                 t = exchange.fetch_ticker(sym)
                 anlik = float(t['last'])
         except: continue
-
         roe = ((anlik - g) / g * 100 * kaldirac_v) if yon == "LONG" else ((g - anlik) / g * 100 * kaldirac_v)
-
         yeni_sl = None
         for esik_roe, kilit_orani in TRAILING_SEVIYELER:
             if roe >= esik_roe:
                 yeni_sl = g * (1 + kilit_orani / kaldirac_v) if yon == "LONG" else g * (1 - kilit_orani / kaldirac_v)
                 break
-
         if yeni_sl is None: continue
-
         iyilestirme = (yeni_sl > sl_kayitli * 1.0005) if yon == "LONG" else (yeni_sl < sl_kayitli * 0.9995)
         if not iyilestirme: continue
-
         try:
             with borsa_kilidi:
                 exchange.cancel_all_orders(sym)
@@ -478,7 +422,6 @@ def trailing_stop_kontrol():
                 tp_kayitli = float(bilgi.get("tp_fiyat", 0))
                 if tp_kayitli > 0:
                     exchange.create_order(sym, 'limit', ky, miktar, tp_kayitli, {'reduceOnly': True})
-
             with state_lock:
                 if sym in AKTIF_POZISYONLAR:
                     AKTIF_POZISYONLAR[sym]["sl_fiyat"] = yeni_sl
@@ -490,15 +433,11 @@ def trailing_stop_kontrol():
 # ==================== ANA TARAYICI ====================
 def tarayici():
     global SON_HAVUZ_GUNCELLEME
-    print("🚀 [BAŞLANGIÇ] HİBRİT HAVUZ + R/R 1.5 + MTF...", flush=True)
-    try:
-        exchange.load_markets()
+    print("🚀 [BAŞLANGIÇ] HİBRİT + Akıllı MTF + R/R 1.3...", flush=True)
+    try: exchange.load_markets()
     except: pass
-
-    # İlk havuz güncellemesi
     havuzu_guncelle()
     SON_HAVUZ_GUNCELLEME = time.time()
-
     dongu = 0
     while True:
         if not tarayici_kilidi.acquire(blocking=False):
@@ -507,29 +446,25 @@ def tarayici():
             if not BOT_CALISIYOR_MU:
                 time.sleep(5); continue
             dongu += 1
-
-            # 🆕 Her saat başı havuzu güncelle
             if time.time() - SON_HAVUZ_GUNCELLEME > HAVUZ_GUNCELLEME_SURESI:
                 havuzu_guncelle()
                 SON_HAVUZ_GUNCELLEME = time.time()
-
             print(f"\n{'='*65}", flush=True)
             print(f"🔄 [DÖNGÜ #{dongu}] {time.strftime('%H:%M:%S')}", flush=True)
-            print(f"📋 Havuz: {len(takip_listesi())} coin (Çekirdek:{len(CEKIRDEK_LISTE)} + Dinamik:{len(DINAMIK_LISTE)})", flush=True)
+            print(f"📋 Havuz: {len(takip_listesi())} coin", flush=True)
             print(f"{'='*65}", flush=True)
-
             try:
                 with borsa_kilidi:
                     raw = exchange.fetch_positions()
                 aktif_map = {p['symbol']: p for p in raw if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0}
                 aktif_list = list(aktif_map.keys())
                 if aktif_list:
-                    print(f"📌 Açık pozisyonlar: {aktif_list}", flush=True)
+                    print(f"📌 Açık: {aktif_list}", flush=True)
             except Exception as e:
-                print(f"⚠️ Pozisyon çekme hatası: {e}", flush=True)
+                print(f"⚠️ Pozisyon hatası: {e}", flush=True)
                 raw, aktif_map, aktif_list = [], {}, []
 
-            # KAPANIŞ KONTROLÜ
+            # KAPANIŞ
             try:
                 anlik_aktif = list(aktif_map.keys())
                 for eski in list(AKTIF_POZISYONLAR.keys()):
@@ -547,25 +482,22 @@ def tarayici():
                             karli = abs(cikis - tp_k) < abs(cikis - sl_k)
                         except:
                             karli = cikis > g if y == "LONG" else cikis < g
-
                         with state_lock:
                             b = int(ANALITIK.get("basarili_islem_sayisi", 0))
                             bz = int(ANALITIK.get("basarisiz_islem_sayisi", 0))
-                            if karli:
-                                b += 1; tip = "✅ *KÂRLA KAPANDI*"
-                            else:
-                                bz += 1; tip = "❌ *ZARARLA KAPANDI*"
+                            if karli: b += 1; tip = "✅ *KÂRLA KAPANDI*"
+                            else: bz += 1; tip = "❌ *ZARARLA KAPANDI*"
                             ANALITIK["basarili_islem_sayisi"] = b
                             ANALITIK["basarisiz_islem_sayisi"] = bz
                             COIN_COOLDOWN[eski] = {"zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), "son_yon": y}
                             if eski in AKTIF_POZISYONLAR: del AKTIF_POZISYONLAR[eski]
                         hafizayi_kaydet()
-                        print(f"💰 [KAPANIŞ] {eski} | Çıkış: {cikis} | {'KÂR' if karli else 'ZARAR'}", flush=True)
+                        print(f"💰 [KAPANIŞ] {eski} | {cikis} | {'KÂR' if karli else 'ZARAR'}", flush=True)
                         tg_gonder(f"{tip}\n📌 `{eski}` | Çıkış: `{cikis}`")
             except Exception as e:
                 print(f"⚠️ Kapanış: {e}", flush=True)
 
-            # MOD DEĞİŞİMİ KONTROLÜ
+            # MOD DEĞİŞİMİ
             try:
                 for sym in list(AKTIF_POZISYONLAR.keys()):
                     bilgi = AKTIF_POZISYONLAR[sym]
@@ -575,7 +507,7 @@ def tarayici():
                         df_k = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                         rejim = piyasa_rejimi_tespit_et(df_k)
                         if rejim == "TREND":
-                            print(f"🚨 [MOD DEĞİŞİMİ] {sym} Range → TREND. Pozisyon kapatılıyor.", flush=True)
+                            print(f"🚨 [MOD DEĞİŞİMİ] {sym} Range → TREND", flush=True)
                             with borsa_kilidi:
                                 pos = [p for p in exchange.fetch_positions() if p['symbol'] == sym and float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                                 for p in pos:
@@ -589,9 +521,9 @@ def tarayici():
                                 if sym in AKTIF_POZISYONLAR: del AKTIF_POZISYONLAR[sym]
                                 COIN_COOLDOWN[sym] = {"zaman": float(time.time() + TREND_COOLDOWN_SANIYE), "son_yon": "TREND_KAPAT"}
                             hafizayi_kaydet()
-                            tg_gonder(f"🚨 *MOD DEĞİŞTİ!* `{sym}` Range pozisyonu kapatıldı. 1 saat bekleme.")
+                            tg_gonder(f"🚨 *MOD DEĞİŞTİ!* `{sym}` kapatıldı.")
             except Exception as e:
-                print(f"⚠️ Mod değişim kontrolü: {e}", flush=True)
+                print(f"⚠️ Mod değişim: {e}", flush=True)
 
             trailing_stop_kontrol()
 
@@ -600,7 +532,6 @@ def tarayici():
                 if not BOT_CALISIYOR_MU: break
                 if len(aktif_map) >= MAKSIMUM_TOPLAM_POZISYON: break
                 if symbol in aktif_list: continue
-
                 with state_lock:
                     cd = COIN_COOLDOWN.get(symbol)
                     if cd:
@@ -608,52 +539,44 @@ def tarayici():
                         if z - time.time() > 0:
                             print(f"   ⏳ [{symbol}] Cooldown: {int(z - time.time())} sn", flush=True)
                             continue
-
                 try:
                     with borsa_kilidi:
                         ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=SWING_LOOKBACK + 20)
                         ticker = exchange.fetch_ticker(symbol)
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     anlik = float(ticker['last'])
-
                     print(f"\n🔍 [{symbol}] @ {anlik}", flush=True)
-
                     rejim = piyasa_rejimi_tespit_et(df)
                     atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
                     adx = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx().iloc[-1]
                     bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
                     bb_genislik = ((bb.bollinger_hband().iloc[-1] - bb.bollinger_lband().iloc[-1]) / df['close'].iloc[-1]) * 100
-
                     print(f"   📊 Rejim: {rejim} | ADX: {adx:.1f} | BB: %{bb_genislik:.2f} | ATR: {atr:.6f}", flush=True)
-
                     highs, lows = swing_noktalari_bul(df)
                     if len(highs) < 2 or len(lows) < 2:
-                        print(f"   ⏭️ Yetersiz swing (H:{len(highs)}, L:{len(lows)})", flush=True)
+                        print(f"   ⏭️ Yetersiz swing", flush=True)
                         continue
                     destekler, direncler = likidite_seviyeleri(df, highs, lows, anlik)
                     if not destekler and not direncler:
                         print(f"   ⏭️ Destek/direnç yok", flush=True)
                         continue
-
-                    print(f"   🎯 Destekler: {[f'{d:.4f}' for d in destekler]}", flush=True)
-                    print(f"   🎯 Dirençler: {[f'{d:.4f}' for d in direncler]}", flush=True)
+                    print(f"   🎯 Destek: {[f'{d:.4f}' for d in destekler]}", flush=True)
+                    print(f"   🎯 Direnç: {[f'{d:.4f}' for d in direncler]}", flush=True)
 
                     yon, sl_fiyat, tp_fiyat, rr, mod = None, None, None, 0, rejim
                     net_kar = 0
-
                     if rejim == "YATAY":
                         yon, tp_fiyat, sl_fiyat = range_sinyal_uret(df, destekler, direncler, anlik, atr)
                         if yon:
                             yeterli, net_kar = net_kar_yeterli_mi(yon, anlik, tp_fiyat)
                             if not yeterli:
-                                print(f"   ⏭️ RANGE {yon} iptal | Net: %{net_kar*100:.3f} < %{MIN_NET_KAR*100:.1f}", flush=True)
+                                print(f"   ⏭️ RANGE {yon} iptal | Net: %{net_kar*100:.3f}", flush=True)
                                 yon = None
                             else:
                                 rr = abs(tp_fiyat - anlik) / abs(anlik - sl_fiyat) if abs(anlik - sl_fiyat) > 0 else 0
-                                print(f"   🎯 RANGE SİNYALİ! {yon} | Net: %{net_kar*100:.3f} | R/R: {rr:.2f}", flush=True)
+                                print(f"   🎯 RANGE! {yon} | Net: %{net_kar*100:.3f} | R/R: {rr:.2f}", flush=True)
                         else:
                             print(f"   ⏭️ RANGE sinyali yok", flush=True)
-
                     elif rejim == "TREND":
                         yon, likidite_lvl, sl_fiyat, sweep_uc = sweep_tespit_et(df, destekler, direncler, anlik)
                         if yon:
@@ -666,30 +589,30 @@ def tarayici():
                                 print(f"   ⏭️ TREND {yon} iptal | Net: %{net_kar*100:.3f}", flush=True)
                                 yon = None
                             else:
-                                print(f"   🎯 TREND SİNYALİ! {yon} | R/R: {rr:.2f} | Net: %{net_kar*100:.3f}", flush=True)
+                                print(f"   🎯 TREND! {yon} | R/R: {rr:.2f} | Net: %{net_kar*100:.3f}", flush=True)
                         else:
                             print(f"   ⏭️ TREND sinyali yok", flush=True)
-
                     elif rejim == "BELIRSIZ":
-                        print(f"   ⏭️ Rejim BELİRSİZ", flush=True)
+                        print(f"   ⏭️ BELİRSİZ", flush=True)
                         continue
-
                     if yon is None: continue
 
-                    # MTF FİLTRESİ
+                    # 🆕 AKILLI MTF FİLTRESİ
                     ana_trend = coklu_zaman_trend_kontrol(symbol)
-                    print(f"   🌍 MTF Trend: {ana_trend}", flush=True)
-
-                    if yon == "LONG" and ana_trend == "ASAGI":
-                        print(f"   ⏭️ LONG iptal | MTF AŞAĞI", flush=True)
+                    print(f"   🌍 MTF: {ana_trend} | R/R: {rr:.2f}", flush=True)
+                    mtf_onay = False
+                    if yon == "LONG" and ana_trend == "YUKARI":
+                        mtf_onay = True
+                        print(f"   ✅ LONG onaylandı (MTF YUKARI)", flush=True)
+                    elif yon == "SHORT" and ana_trend == "ASAGI":
+                        mtf_onay = True
+                        print(f"   ✅ SHORT onaylandı (MTF AŞAĞI)", flush=True)
+                    elif ana_trend == "NOTR" and rr >= MTF_NOTR_MIN_RR:
+                        mtf_onay = True
+                        print(f"   ✅ Onaylandı (MTF NOTR ama R/R {rr:.2f} >= {MTF_NOTR_MIN_RR})", flush=True)
+                    else:
+                        print(f"   ⏭️ İptal | MTF: {ana_trend} | R/R: {rr:.2f}", flush=True)
                         yon = None
-                    elif yon == "SHORT" and ana_trend == "YUKARI":
-                        print(f"   ⏭️ SHORT iptal | MTF YUKARI", flush=True)
-                        yon = None
-                    elif ana_trend == "NOTR":
-                        print(f"   ⏭️ İptal | MTF çelişkili", flush=True)
-                        yon = None
-
                     if yon is None: continue
 
                     kaldirac = KALDIRAC_RANGE if mod == "YATAY" else KALDIRAC_TREND
@@ -699,25 +622,20 @@ def tarayici():
                         serbest_b = float(bakiye.get('free', {}).get('USDT', 0) or 0)
                         exchange.set_leverage(kaldirac, symbol)
                         market = exchange.market(symbol)
-
                     kullan = min(toplam_b * 0.3, serbest_b)
                     if kullan < 1:
                         print(f"   ⏭️ Yetersiz bakiye", flush=True)
                         continue
-
                     miktar = float(exchange.amount_to_precision(
                         symbol,
                         max((kullan * kaldirac) / anlik / float(market.get('contractSize', 1.0)),
                             float(market['limits']['amount']['min'] or 1.0))
                     ))
-
                     iy = 'buy' if yon == 'LONG' else 'sell'
                     kapat_y = 'sell' if yon == 'LONG' else 'buy'
-
                     with borsa_kilidi:
                         exchange.create_order(symbol, 'market', iy, miktar)
                     time.sleep(0.5)
-
                     sl_ok = False
                     try:
                         with borsa_kilidi:
@@ -726,14 +644,12 @@ def tarayici():
                         sl_ok = True
                     except Exception as e:
                         print(f"   ⚠️ TP/SL hatası: {e}", flush=True)
-
                     if not sl_ok:
                         try:
                             with borsa_kilidi:
                                 exchange.create_order(symbol, 'market', kapat_y, miktar, None, {'reduceOnly': True})
                         except: pass
                         continue
-
                     with state_lock:
                         AKTIF_POZISYONLAR[symbol] = {
                             "giris_fiyati": anlik, "yon": yon, "tp_fiyat": tp_fiyat, "sl_fiyat": sl_fiyat,
@@ -742,14 +658,11 @@ def tarayici():
                         }
                         aktif_list.append(symbol)
                         aktif_map[symbol] = {"dummy": True}
-
                     hafizayi_kaydet()
-
                     print(f"   ✅ POZİSYON AÇILDI!", flush=True)
                     print(f"      {symbol} | {yon} | {mod} | {kaldirac}x", flush=True)
                     print(f"      Giriş: {anlik} | TP: {tp_fiyat} | SL: {sl_fiyat}", flush=True)
                     print(f"      R/R: {rr:.2f} | Net: %{net_kar*100:.3f} | MTF: {ana_trend}", flush=True)
-
                     tg_gonder(
                         f"🎯 *SİNYAL ({mod})!*\n"
                         f"📌 `{symbol}` | {yon} | {kaldirac}x\n"
@@ -772,25 +685,20 @@ def tarayici():
 async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
-
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     try:
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
     except: pass
-
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
-    app_tg.add_handler(CommandHandler("havuz", havuz_komutu))  # 🆕 Manuel havuz güncelleme
-
+    app_tg.add_handler(CommandHandler("havuz", havuz_komutu))
     await app_tg.initialize()
     await app_tg.start()
     await app_tg.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-
     t = threading.Thread(target=tarayici, daemon=True)
     t.start()
-
     stop = asyncio.Event()
     await stop.wait()
 
