@@ -174,7 +174,7 @@ COIN_COOLDOWNLAR = kalici_veri.get("cooldownlar", {})
 MAKSIMUM_TOPLAM_POZISYON = 3
 COOLDOWN_SURESI_SANIYE = 30 * 60
 
-# ==================== PİYASA REJİMİ + YÖN (GÜNCELLENDİ) ====================
+# ==================== PİYASA REJİMİ + YÖN ====================
 def piyasa_rejimini_tespit_et():
     try:
         ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=40)
@@ -198,7 +198,7 @@ def piyasa_rejimini_tespit_et():
         else:
             rejim = "TREND"
 
-        # 🆕 YÖN TESPİTİ (Fiyat + EMA9 + EMA21)
+        # YÖN TESPİTİ (Fiyat + EMA9 + EMA21)
         if anlik_btc > ema9 and ema9 > ema21:
             yon = "YUKARI"
         elif anlik_btc < ema9 and ema9 < ema21:
@@ -509,6 +509,63 @@ def trend_breakout_sinyal(df_15m, df_5m, anlik_fiyat, piyasa_yonu):
         print(f"⚠️ Trend breakout hatası: {e}", flush=True)
         return None, None
 
+# ==================== 🆕 TREND TAKİP (MOMENTUM) ====================
+def trend_takip_sinyal(df_15m, df_5m, anlik_fiyat, piyasa_yonu):
+    """
+    TREND modda trend takip (momentum).
+    Öncelik 3 (Sweep ve Breakout yoksa çalışır).
+    
+    Şartlar:
+    1. Fiyat EMA9'un altında (SHORT) / üstünde (LONG)
+    2. EMA9 < EMA21 (SHORT) / > EMA21 (LONG)
+    3. Son 3 mumun en az 2'si aynı yönde
+    4. Stoch < 0.5 (SHORT) / > 0.5 (LONG)
+    5. Hacim 1.5x
+    """
+    try:
+        # EMA'lar
+        ema9 = ta.trend.ema_indicator(df_15m['close'], window=9).iloc[-1]
+        ema21 = ta.trend.ema_indicator(df_15m['close'], window=21).iloc[-1]
+
+        # Son 3 mum
+        son_3 = []
+        for i in range(-3, 0):
+            if df_15m['close'].iloc[i] > df_15m['open'].iloc[i]:
+                son_3.append("YESIL")
+            else:
+                son_3.append("KIRMIZI")
+
+        yesil_sayisi = son_3.count("YESIL")
+        kirmizi_sayisi = son_3.count("KIRMIZI")
+
+        # Hacim
+        hacim_ort = df_15m['volume'].rolling(20).mean().iloc[-1]
+        guncel_hacim = df_15m['volume'].iloc[-1]
+        hacim_patlamasi = guncel_hacim > (hacim_ort * 1.5)
+
+        # Stoch
+        stoch_15m = ta.momentum.StochRSIIndicator(df_15m['close'], window=14).stochrsi().iloc[-1]
+
+        long_izinli = (piyasa_yonu in ["YUKARI", "BELIRSIZ"])
+        short_izinli = (piyasa_yonu in ["ASAGI", "BELIRSIZ"])
+
+        # ===== LONG TREND TAKİP =====
+        if long_izinli:
+            if (anlik_fiyat > ema9 and ema9 > ema21 and 
+                yesil_sayisi >= 2 and stoch_15m > 0.5 and hacim_patlamasi):
+                return "LONG", f"Trend Takip (Momentum) | Stoch:{stoch_15m:.2f}"
+
+        # ===== SHORT TREND TAKİP =====
+        if short_izinli:
+            if (anlik_fiyat < ema9 and ema9 < ema21 and 
+                kirmizi_sayisi >= 2 and stoch_15m < 0.5 and hacim_patlamasi):
+                return "SHORT", f"Trend Takip (Momentum) | Stoch:{stoch_15m:.2f}"
+
+        return None, None
+    except Exception as e:
+        print(f"⚠️ Trend takip hatası: {e}", flush=True)
+        return None, None
+
 # ==================== KOMİSYON ====================
 def net_kar_yeterli_mi(yon, giris, tp):
     if yon == "LONG":
@@ -744,7 +801,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detaylari += f"\n• `{sym}` | {yon_p}{etiket} [{mod}] | Giriş: `{giris}`\n  ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 **DURUM (Sweep YATAY + TREND Pullback)**\n\n"
+            f"📊 **DURUM (Sweep + Breakout + Trend Takip)**\n\n"
             f"🌐 Rejim: `{rejim}` | Yön: `{yon}`\n"
             f"💰 Kasa: `{total:.2f} USDT` | PnL: `{toplam_pnl:+.2f}`\n"
             f"📌 Açık: `{len(borsa_poslari)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -761,7 +818,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (Teyitli + Trend Pullback)")
+    await update.message.reply_text("🟢 Bot aktif! (Sweep + Breakout + Trend Takip)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -803,7 +860,7 @@ async def havuz_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ANA TARAYICI ====================
 def otomatik_arkaplan_tarayici():
     global SON_HAVUZ_GUNCELLEME
-    print("🚀 [BAŞLANGIÇ] Sweep YATAY + TREND Pullback + Yön Filtreli (Fiyat+EMA9+EMA21)...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Sweep + Breakout + Trend Takip + Yön Filtreli...", flush=True)
     try:
         exchange.load_markets()
     except Exception: pass
@@ -961,6 +1018,7 @@ def otomatik_arkaplan_tarayici():
                     # ==================== TREND MOD ====================
                     else:
                         yon = None
+                        # 1. TEYİTLİ TREND SWEEP (Pullback) - ÖNCELİK 1
                         highs, lows = swing_noktalari_bul(df_15m)
                         if len(highs) >= 2 and len(lows) >= 2:
                             destekler, direncler = likidite_seviyeleri(df_15m, highs, lows, anlik_fiyat)
@@ -995,24 +1053,46 @@ def otomatik_arkaplan_tarayici():
                                 else:
                                     print(f"   ⏭️ [TREND Sweep] Sinyal yok", flush=True)
 
+                        # 2. TREND BREAKOUT - ÖNCELİK 2
                         if yon is None:
                             yon, sebep = trend_breakout_sinyal(df_15m, df_5m, anlik_fiyat, piyasa_yonu)
-                            if yon is None:
+                            if yon is not None:
+                                ana_trend = coklu_zaman_trend_kontrol(symbol)
+                                if yon == "LONG" and ana_trend != "YUKARI":
+                                    print(f"   ⏭️ [TREND] LONG iptal | MTF {ana_trend}", flush=True)
+                                    yon = None
+                                elif yon == "SHORT" and ana_trend != "ASAGI":
+                                    print(f"   ⏭️ [TREND] SHORT iptal | MTF {ana_trend}", flush=True)
+                                    yon = None
+                                else:
+                                    mod = "TREND-Breakout"
+                                    tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = akilli_seviye_hesapla(anlik_fiyat, yon, df_15m, "TREND")
+                                    rr = abs(tp_fiyat - anlik_fiyat) / abs(anlik_fiyat - sl_fiyat) if abs(anlik_fiyat - sl_fiyat) > 0 else 0
+                                    print(f"   🎯 [TREND Breakout] SİNYAL! {yon} | {sebep} | R/R: {rr:.2f} | MTF: {ana_trend}", flush=True)
+                            else:
                                 print(f"   ⏭️ [TREND] Breakout yok", flush=True)
-                                continue
 
-                            ana_trend = coklu_zaman_trend_kontrol(symbol)
-                            if yon == "LONG" and ana_trend != "YUKARI":
-                                print(f"   ⏭️ [TREND] LONG iptal | MTF {ana_trend}", flush=True)
-                                continue
-                            if yon == "SHORT" and ana_trend != "ASAGI":
-                                print(f"   ⏭️ [TREND] SHORT iptal | MTF {ana_trend}", flush=True)
-                                continue
+                        # 3. TREND TAKİP (MOMENTUM) - ÖNCELİK 3
+                        if yon is None:
+                            yon, sebep = trend_takip_sinyal(df_15m, df_5m, anlik_fiyat, piyasa_yonu)
+                            if yon is not None:
+                                ana_trend = coklu_zaman_trend_kontrol(symbol)
+                                if yon == "LONG" and ana_trend != "YUKARI":
+                                    print(f"   ⏭️ [TREND Takip] LONG iptal | MTF {ana_trend}", flush=True)
+                                    yon = None
+                                elif yon == "SHORT" and ana_trend != "ASAGI":
+                                    print(f"   ⏭️ [TREND Takip] SHORT iptal | MTF {ana_trend}", flush=True)
+                                    yon = None
+                                else:
+                                    mod = "TREND-Takip"
+                                    tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = akilli_seviye_hesapla(anlik_fiyat, yon, df_15m, "TREND")
+                                    rr = abs(tp_fiyat - anlik_fiyat) / abs(anlik_fiyat - sl_fiyat) if abs(anlik_fiyat - sl_fiyat) > 0 else 0
+                                    print(f"   🎯 [TREND Takip] SİNYAL! {yon} | {sebep} | R/R: {rr:.2f} | MTF: {ana_trend}", flush=True)
+                            else:
+                                print(f"   ⏭️ [TREND Takip] Sinyal yok", flush=True)
 
-                            mod = "TREND-Breakout"
-                            tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = akilli_seviye_hesapla(anlik_fiyat, yon, df_15m, "TREND")
-                            rr = abs(tp_fiyat - anlik_fiyat) / abs(anlik_fiyat - sl_fiyat) if abs(anlik_fiyat - sl_fiyat) > 0 else 0
-                            print(f"   🎯 [TREND Breakout] SİNYAL! {yon} | {sebep} | R/R: {rr:.2f} | MTF: {ana_trend}", flush=True)
+                    if yon is None:
+                        continue
 
                     yeterli, net_kar = net_kar_yeterli_mi(yon, anlik_fiyat, tp_fiyat)
                     print(f"   💰 Net kâr: %{net_kar*100:.3f} | Yeterli: {yeterli}", flush=True)
