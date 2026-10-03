@@ -119,19 +119,32 @@ def hafizayi_yukle():
             print("💾 Hafıza yüklendi.", flush=True)
             return {
                 "aktif_sistemler": veri.get("aktif_sistemler", {}),
-                "analitik": veri.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0}),
+                "analitik": veri.get("analitik", {
+                    "basarili_islem_sayisi": 0,
+                    "basarisiz_islem_sayisi": 0,
+                    "gercek_tp": 0,
+                    "kar_kilidi": 0,
+                    "zarar": 0
+                }),
                 "cooldownlar": veri.get("cooldownlar", {})
             }
     except Exception as e:
         print(f"⚠️ Hafıza: {e}", flush=True)
-    return {"aktif_sistemler": {}, "analitik": {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0}, "cooldownlar": {}}
+    return {
+        "aktif_sistemler": {},
+        "analitik": {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "gercek_tp": 0, "kar_kilidi": 0, "zarar": 0},
+        "cooldownlar": {}
+    }
 
 def hafizayi_kaydet():
     with state_lock:
         try:
             payload = {
                 "basarili_islem_sayisi": int(ANALITIK.get("basarili_islem_sayisi", 0)),
-                "basarisiz_islem_sayisi": int(ANALITIK.get("basarisiz_islem_sayisi", 0))
+                "basarisiz_islem_sayisi": int(ANALITIK.get("basarisiz_islem_sayisi", 0)),
+                "gercek_tp": int(ANALITIK.get("gercek_tp", 0)),
+                "kar_kilidi": int(ANALITIK.get("kar_kilidi", 0)),
+                "zarar": int(ANALITIK.get("zarar", 0))
             }
             clean_cd = {}
             for k, v in COIN_COOLDOWN.items():
@@ -148,7 +161,7 @@ def hafizayi_kaydet():
 
 kalici = hafizayi_yukle()
 AKTIF_POZISYONLAR = kalici.get("aktif_sistemler", {})
-ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0})
+ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "gercek_tp": 0, "kar_kilidi": 0, "zarar": 0})
 COIN_COOLDOWN = kalici.get("cooldownlar", {})
 
 # ==================== PİYASA ANALİZİ ====================
@@ -460,7 +473,6 @@ def trailing_stop_kontrol():
             min_kar_sl = g * (1 - (TOPLAM_MALIYET_ORANI + KAR_KILIT_MESAJ_ESIGI) / kaldirac_v)
         
         yeni_sl = None
-        trend_bitti = False
         
         if mod in ['GUCLU_TREND_UP', 'GUCLU_TREND_DOWN']:
             try:
@@ -468,20 +480,12 @@ def trailing_stop_kontrol():
                 df_t = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 ema20_guncel = ta.trend.EMAIndicator(close=df_t['close'], window=20).ema_indicator().iloc[-1]
                 
-                son_2 = df_t.tail(2)
-                
                 if yon == "LONG":
-                    if all(son_2['close'] < ema20_guncel):
-                        trend_bitti = True
-                    else:
-                        hedef_sl = ema20_guncel - (atr_b * TREND_TAKIP_SL_CARPAN)
-                        yeni_sl = max(hedef_sl, min_kar_sl) if roe > 3.0 else hedef_sl
+                    hedef_sl = ema20_guncel - (atr_b * TREND_TAKIP_SL_CARPAN)
+                    yeni_sl = max(hedef_sl, min_kar_sl) if roe > 3.0 else hedef_sl
                 else:
-                    if all(son_2['close'] > ema20_guncel):
-                        trend_bitti = True
-                    else:
-                        hedef_sl = ema20_guncel + (atr_b * TREND_TAKIP_SL_CARPAN)
-                        yeni_sl = min(hedef_sl, min_kar_sl) if roe > 3.0 else hedef_sl
+                    hedef_sl = ema20_guncel + (atr_b * TREND_TAKIP_SL_CARPAN)
+                    yeni_sl = min(hedef_sl, min_kar_sl) if roe > 3.0 else hedef_sl
             except Exception as e:
                 print(f"⚠️ Trend EMA hatası: {e}", flush=True)
         
@@ -497,23 +501,6 @@ def trailing_stop_kontrol():
                     else:
                         yeni_sl = min(yeni_sl, min_kar_sl) if roe > 5.0 else yeni_sl
                     break
-        
-        if trend_bitti:
-            try:
-                exchange.cancel_all_orders(sym)
-                miktar = None
-                for p in exchange.fetch_positions():
-                    if p['symbol'] == sym:
-                        miktar = float(p.get('contracts', 0) or p.get('size', 0) or 0)
-                        break
-                if miktar and miktar > 0:
-                    ky = 'sell' if yon == 'LONG' else 'buy'
-                    exchange.create_order(sym, 'market', ky, miktar, None, {'reduceOnly': True})
-                    print(f"🔄 [TREND BİTTİ] {sym} | ROE:%{roe:.1f}", flush=True)
-                    tg_gonder(f"🔄 *TREND BİTTİ*\n📌 `{sym}`\n📊 ROE: `%{roe:+.2f}`")
-            except Exception as e:
-                print(f"⚠️ Trend kapatma: {e}", flush=True)
-            continue
         
         if yeni_sl is None:
             continue
@@ -597,10 +584,12 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total = float(balance['total'].get('USDT', 0))
         pos = [p for p in await asyncio.to_thread(exchange.fetch_positions) if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
         pnl = sum(float(p.get('unrealizedPnl', 0)) for p in pos)
-        bas = int(ANALITIK.get("basarili_islem_sayisi", 0))
-        basz = int(ANALITIK.get("basarisiz_islem_sayisi", 0))
-        top = bas + basz
-        oran = (bas / top * 100) if top > 0 else 0
+        
+        gercek_tp = int(ANALITIK.get("gercek_tp", 0))
+        kar_kilidi = int(ANALITIK.get("kar_kilidi", 0))
+        zarar = int(ANALITIK.get("zarar", 0))
+        toplam_islem = gercek_tp + kar_kilidi + zarar
+        oran = ((gercek_tp + kar_kilidi) / toplam_islem * 100) if toplam_islem > 0 else 0
         
         pos_detay = ""
         for p in pos:
@@ -623,13 +612,13 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pnl_nokta = "🟢" if pnl >= 0 else "🔴"
         
         mesaj = (
-            f"📊 *DURUM* [ADAPTİF v4.1]\n\n"
+            f"📊 *DURUM* [ADAPTİF v4.2]\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"{pnl_nokta} Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)} / {MAKSIMUM_TOPLAM_POZISYON}`"
             f"{pos_detay}\n\n"
-            f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
-            f"📈 Başarı: `%{oran:.1f}`\n"
+            f"🎯 Gerçek TP: `{gercek_tp}` | 🔒 Kâr Kilidi: `{kar_kilidi}` | ❌ Zarar: `{zarar}`\n"
+            f"📈 Başarı: `%{oran:.1f}` ({toplam_islem} işlem)\n"
             f"⚡ Kill-Switch: `{'AKTİF' if KILL_SWITCH_AKTIF else 'Pasif'}`\n"
             f"🔻 Ardışık Zarar: `{ARDISIK_ZARAR_SAYACI}`"
         )
@@ -644,7 +633,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     BOT_CALISIYOR_MU = True
     KILL_SWITCH_AKTIF = False
     ARDISIK_ZARAR_SAYACI = 0
-    await update.message.reply_text("🟢 Bot aktif! (v4.1)")
+    await update.message.reply_text("🟢 Bot aktif! (v4.2: 3 Kategori)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID):
@@ -676,7 +665,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def tarayici():
     global ARDISIK_ZARAR_SAYACI, SON_ARDISIK_ZARAR_ZAMANI, KILL_SWITCH_AKTIF
     
-    print("🚀 [BAŞLANGIÇ] ADAPTİF v4.1", flush=True)
+    print("🚀 [BAŞLANGIÇ] ADAPTİF v4.2 (3 Kategori)", flush=True)
     try:
         exchange.load_markets()
     except:
@@ -723,46 +712,67 @@ def tarayici():
                 aktif_map = {}
                 aktif_list = []
             
+            # ==================== KAPANIŞ + 3 KATEGORİ ====================
             try:
                 anlik_aktif = [p['symbol'] for p in raw if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                 for eski in list(AKTIF_POZISYONLAR.keys()):
                     if eski not in anlik_aktif:
                         bilgi = AKTIF_POZISYONLAR[eski]
-                        g = bilgi.get("giris_fiyati", 0)
+                        g = float(bilgi.get("giris_fiyati", 0))
                         y = bilgi.get("yon", "LONG")
-                        tp_k = bilgi.get("tp_fiyat", g)
-                        sl_k = bilgi.get("sl_fiyat", g)
+                        tp_k = float(bilgi.get("tp_fiyat", 0))
                         
-                        karli = False
                         cikis = g
                         try:
                             t = exchange.fetch_ticker(eski)
                             cikis = float(t['last'])
-                            karli = abs(cikis - tp_k) < abs(cikis - sl_k)
                         except:
-                            karli = cikis > g if y == "LONG" else cikis < g
+                            pass
+                        
+                        # ✅ 3 KATEGORİLİ SINIFLANDIRMA
+                        if y == "LONG":
+                            brut = (cikis - g) / g
+                        else:
+                            brut = (g - cikis) / g
+                        net = brut - TOPLAM_MALIYET_ORANI
+                        
+                        # Kategori belirle
+                        if tp_k > 0 and abs(cikis - tp_k) / tp_k < 0.002:
+                            # TP'ye çok yakın → GERÇEK TP
+                            kategori = "gercek_tp"
+                            tip = "✅ *GERÇEK TP*"
+                            karli = True
+                        elif net > 0:
+                            # Net kâr pozitif → KÂR KİLİDİ
+                            kategori = "kar_kilidi"
+                            tip = "🔒 *KÂR KİLİDİYLE KAPANDI*"
+                            karli = True
+                        else:
+                            # Net zarar → ZARAR
+                            kategori = "zarar"
+                            tip = "❌ *ZARARLA KAPANDI*"
+                            karli = False
                         
                         with state_lock:
-                            b = int(ANALITIK.get("basarili_islem_sayisi", 0))
-                            bz = int(ANALITIK.get("basarisiz_islem_sayisi", 0))
-                            if karli:
-                                b += 1
-                                tip = "✅ *KÂRLA KAPANDI*"
-                                ARDISIK_ZARAR_SAYACI = 0
-                            else:
-                                bz += 1
-                                tip = "❌ *ZARARLA KAPANDI*"
+                            ANALITIK[kategori] = int(ANALITIK.get(kategori, 0)) + 1
+                            
+                            if not karli:
                                 ARDISIK_ZARAR_SAYACI += 1
                                 SON_ARDISIK_ZARAR_ZAMANI = time.time()
-                            ANALITIK["basarili_islem_sayisi"] = b
-                            ANALITIK["basarisiz_islem_sayisi"] = bz
+                            else:
+                                ARDISIK_ZARAR_SAYACI = 0
+                            
                             COIN_COOLDOWN[eski] = {"zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), "son_yon": y}
                             if eski in AKTIF_POZISYONLAR:
                                 del AKTIF_POZISYONLAR[eski]
                         
                         hafizayi_kaydet()
-                        print(f"💰 [KAPANIŞ] {eski} | Çıkış: {cikis}", flush=True)
-                        tg_gonder(f"{tip}\n📌 `{eski}` | Çıkış: `{cikis}`\n🔻 Ardışık Zarar: `{ARDISIK_ZARAR_SAYACI}`")
+                        print(f"💰 [KAPANIŞ] {eski} | Çıkış: {cikis} | Net: %{net*100:.2f} | {kategori}", flush=True)
+                        tg_gonder(
+                            f"{tip}\n📌 `{eski}` | Çıkış: `{cikis}`\n"
+                            f"📊 Net: `%{net*100:+.2f}`\n"
+                            f"🔻 Ardışık Zarar: `{ARDISIK_ZARAR_SAYACI}`"
+                        )
                         
                         if ARDISIK_ZARAR_SAYACI >= ARDISIK_ZARAR_LIMIT:
                             KILL_SWITCH_AKTIF = True
