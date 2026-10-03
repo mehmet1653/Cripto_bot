@@ -115,24 +115,24 @@ SPREAD_MALIYETI = 0.0005
 TOPLAM_MALIYET_ORANI = (KOMISYON_ORANI * 2) + SPREAD_MALIYETI
 MIN_NET_KAR = 0.002
 
-# Zaman dilimi (1m veya 5m önerilir)
-ZAMAN_DILIMI = '1m'
-MUM_LIMIT = 100  # Son 100 mumu çek
+# ==================== ZAMAN DİLİMİ (15 DAKİKA) ====================
+ZAMAN_DILIMI = '15m'
+MUM_LIMIT = 100
 
 # ==================== MERDİVEN & İĞNE AYARLARI ====================
-MERDIVEN_MUM_SAYISI = 60      # Geçmişe dönük tarama (60 mum)
-MIN_MERDIVEN_MESAFE = 0.015   # En az %1.5 düşüş/yükseliş olmalı
-IGNE_ORANI_ESIGI = 0.55       # İğne oranı %55'ten büyükse sinyal
+MERDIVEN_MUM_SAYISI = 30      # 15m x 30 = 7.5 saatlik geçmiş
+MIN_MERDIVEN_MESAFE = 0.02    # En az %2 hareket
+IGNE_ORANI_ESIGI = 0.55       # İğne oranı %55+ ise sinyal
 MERDIVEN_IGNE_SL_CARPAN = 1.2
 MERDIVEN_IGNE_TP_CARPAN = 2.0
 HACIM_ESIGI = 1.2
 
-# ==================== KILL-SWITCH AYARLARI ====================
-VOLATILITE_ESIGI = 0.03       # %3 ani hareket = durdur
-ARDISIK_ZARAR_LIMIT = 3       # 3 stop üst üste = 1 saat bekle
-ARDISIK_ZARAR_BEKLEME = 3600  # 1 saat (saniye)
+# ==================== KILL-SWITCH ====================
+VOLATILITE_ESIGI = 0.03
+ARDISIK_ZARAR_LIMIT = 3
+ARDISIK_ZARAR_BEKLEME = 3600
 
-# Trailing (Kâr Kilit)
+# Trailing
 TRAILING_MIKRO = [
     (1.0, 0.3),
     (1.5, 0.5),
@@ -153,10 +153,10 @@ KRITIK_KELIMELER = [
     "delist", "bankrupt", "fraud", "scam", "rug", "collapse"
 ]
 SON_HABER_KONTROL = 0
-HABER_KONTROL_SURESI = 300  # 5 dakikada bir
+HABER_KONTROL_SURESI = 300
 
 def haber_kontrol():
-    global SON_HABER_KONTROL, KILL_SWITCH_AKTIF
+    global SON_HABER_KONTROL
     if time.time() - SON_HABER_KONTROL < HABER_KONTROL_SURESI:
         return
     SON_HABER_KONTROL = time.time()
@@ -169,7 +169,7 @@ def haber_kontrol():
                 for kelime in KRITIK_KELIMELER:
                     if kelime in title:
                         print(f"🚨 [HABER ALARM] {title[:100]}", flush=True)
-                        tg_gonder(f"🚨 *HABER ALARM*\n\n_{title[:200]}_\n\n⚠️ Kill-Switch aktif edilebilir.")
+                        tg_gonder(f"🚨 *HABER ALARM*\n\n_{title[:200]}_")
                         break
     except Exception as e:
         pass
@@ -215,13 +215,12 @@ AKTIF_POZISYONLAR = kalici.get("aktif_sistemler", {})
 ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0})
 COIN_COOLDOWN = kalici.get("cooldownlar", {})
 
-# ==================== GELİŞMİŞ MERDİVEN & İĞNE SİNYALİ ====================
+# ==================== MERDİVEN & İĞNE SİNYALİ ====================
 def mum_sinyal(df, anlik_fiyat):
     try:
         if len(df) < 30:
             return None, None, None, None, None
 
-        # ===== GEÇMİŞE DÖNÜK TARAMA (Son 60 mum) =====
         son_n = df.tail(MERDIVEN_MUM_SAYISI).reset_index(drop=True)
         
         en_yuksek = son_n['high'].max()
@@ -236,7 +235,7 @@ def mum_sinyal(df, anlik_fiyat):
         if en_yuksek_idx < en_dusuk_idx and mesafe_orani > MIN_MERDIVEN_MESAFE:
             son_10 = son_n.tail(10)
             egim_asagi = son_10['close'].iloc[-1] < son_10['close'].iloc[0]
-            dibe_yakin = anlik_fiyat <= en_dusuk * 1.005
+            dibe_yakin = anlik_fiyat <= en_dusuk * 1.01
             if egim_asagi and dibe_yakin:
                 dusen_merdiven = True
 
@@ -245,7 +244,7 @@ def mum_sinyal(df, anlik_fiyat):
         if en_dusuk_idx < en_yuksek_idx and mesafe_orani > MIN_MERDIVEN_MESAFE:
             son_10 = son_n.tail(10)
             egim_yukari = son_10['close'].iloc[-1] > son_10['close'].iloc[0]
-            tepeye_yakin = anlik_fiyat >= en_yuksek * 0.995
+            tepeye_yakin = anlik_fiyat >= en_yuksek * 0.99
             if egim_yukari and tepeye_yakin:
                 yukselen_merdiven = True
 
@@ -304,16 +303,16 @@ def mum_sinyal(df, anlik_fiyat):
         print(f"⚠️ Sinyal hatası: {e}", flush=True)
         return None, None, None, None, None
 
-# ==================== VOLATİLİTE KONTROLÜ ====================
+# ==================== VOLATİLİTE ====================
 def volatilite_kontrol(df):
     try:
-        if len(df) < 20:
+        if len(df) < 5:
             return False
-        son_1m = df.iloc[-1]
-        son_5m_once = df.iloc[-5] if len(df) >= 5 else df.iloc[0]
-        hareket = abs(son_1m['close'] - son_5m_once['close']) / son_5m_once['close']
+        son = df.iloc[-1]
+        once = df.iloc[-2]
+        hareket = abs(son['close'] - once['close']) / once['close']
         if hareket > VOLATILITE_ESIGI:
-            print(f"   ⚡ Volatilite: %{hareket*100:.2f} > %{VOLATILITE_ESIGI*100:.0f} → İşlem açılmıyor", flush=True)
+            print(f"   ⚡ Volatilite: %{hareket*100:.2f} → İşlem yok", flush=True)
             return True
         return False
     except:
@@ -353,7 +352,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detay += f"\n• `{sym}` | {y} ({k}x)\n  Giriş: `{g}` | ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 *DURUM* [MERDİVEN & İĞNE]\n\n"
+            f"📊 *DURUM* [15m MERDİVEN & İĞNE]\n\n"
             f"💰 Kasa: `{total:.2f} USDT` | PnL: `{pnl:+.2f}`\n"
             f"📌 Açık: `{len(pos)} / {MAKSIMUM_TOPLAM_POZISYON}`"
             f"{pos_detay}\n\n"
@@ -362,6 +361,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⚡ Kill-Switch: `{'AKTİF' if KILL_SWITCH_AKTIF else 'Pasif'}`\n"
             f"🔻 Ardışık Zarar: `{ARDISIK_ZARAR_SAYACI}`\n\n"
             f"📋 Havuz: `{len(takip_listesi())}` coin\n"
+            f"⏱️ Zaman Dilimi: `{ZAMAN_DILIMI}`\n"
             f"💸 Toplam Maliyet: `%{TOPLAM_MALIYET_ORANI*100:.2f}`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
@@ -483,7 +483,7 @@ def trailing_stop_kontrol():
         except Exception as e:
             print(f"⚠️ Trailing hatası {sym}: {e}", flush=True)
 
-# ==================== KAPANIŞ + KILL-SWITCH ====================
+# ==================== KAPANIŞ ====================
 def kapanis_kontrol():
     global ARDISIK_ZARAR_SAYACI, SON_ARDISIK_ZARAR_ZAMANI, KILL_SWITCH_AKTIF
     with state_lock:
@@ -541,17 +541,16 @@ def kapanis_kontrol():
                     del AKTIF_POZISYONLAR[sym]
 
             hafizayi_kaydet()
-            print(f"💰 [KAPANIŞ] {sym} | Çıkış: {cikis} | Net: %{net_kar_orani*100:.2f} | Ardışık Zarar: {ARDISIK_ZARAR_SAYACI}", flush=True)
+            print(f"💰 [KAPANIŞ] {sym} | Çıkış: {cikis} | Net: %{net_kar_orani*100:.2f} | Ardışık: {ARDISIK_ZARAR_SAYACI}", flush=True)
             tg_gonder(
                 f"{tip}\n📌 `{sym}` | Çıkış: `{cikis}`\n"
                 f"📊 Net Kâr: `%{net_kar_orani*100:.2f}`\n"
                 f"🔻 Ardışık Zarar: `{ARDISIK_ZARAR_SAYACI}`"
             )
 
-            # KILL-SWITCH KONTROL
             if ARDISIK_ZARAR_SAYACI >= ARDISIK_ZARAR_LIMIT:
                 KILL_SWITCH_AKTIF = True
-                print(f"🚨 [KILL-SWITCH] {ARDISIK_ZARAR_LIMIT} ardışık zarar! 1 saat bekleniyor.", flush=True)
+                print(f"🚨 [KILL-SWITCH] {ARDISIK_ZARAR_LIMIT} ardışık zarar!", flush=True)
                 tg_gonder(f"🚨 *KILL-SWITCH AKTİF!*\n\n{ARDISIK_ZARAR_LIMIT} ardışık zarar.\n⏸️ 1 saat yeni işlem yok.")
             continue
 
@@ -585,7 +584,7 @@ def kapanis_kontrol():
 # ==================== ANA TARAYICI ====================
 def tarayici():
     global SON_HAVUZ_GUNCELLEME, KILL_SWITCH_AKTIF, ARDISIK_ZARAR_SAYACI
-    print(f"🚀 [BAŞLANGIÇ] MERDİVEN & İĞNE + KILL-SWITCH + {ZAMAN_DILIMI}...", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] MERDİVEN & İĞNE | {ZAMAN_DILIMI} | Kill-Switch Aktif", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -606,23 +605,22 @@ def tarayici():
                 havuzu_guncelle()
                 SON_HAVUZ_GUNCELLEME = time.time()
 
-            # HABER KONTROL
             haber_kontrol()
 
-            # KILL-SWITCH KONTROL
             if KILL_SWITCH_AKTIF:
                 if time.time() - SON_ARDISIK_ZARAR_ZAMANI > ARDISIK_ZARAR_BEKLEME:
                     KILL_SWITCH_AKTIF = False
                     ARDISIK_ZARAR_SAYACI = 0
-                    print("✅ [KILL-SWITCH] Süre doldu, tekrar aktif.", flush=True)
-                    tg_gonder("✅ *KILL-SWITCH KAPANDI*\nBot tekrar işlem yapabilir.")
+                    print("✅ [KILL-SWITCH] Süre doldu.", flush=True)
+                    tg_gonder("✅ *KILL-SWITCH KAPANDI*")
                 else:
-                    print(f"⏸️ [KILL-SWITCH] Aktif. Bekleniyor... ({int((ARDISIK_ZARAR_BEKLEME - (time.time() - SON_ARDISIK_ZARAR_ZAMANI))/60)} dk)", flush=True)
+                    kalan = int((ARDISIK_ZARAR_BEKLEME - (time.time() - SON_ARDISIK_ZARAR_ZAMANI))/60)
+                    print(f"⏸️ [KILL-SWITCH] Aktif. {kalan} dk kaldı.", flush=True)
                     time.sleep(30)
                     continue
 
             print(f"\n{'='*60}", flush=True)
-            print(f"🔄 [DÖNGÜ #{dongu}] {time.strftime('%H:%M:%S')}", flush=True)
+            print(f"🔄 [DÖNGÜ #{dongu}] {time.strftime('%H:%M:%S')} | {ZAMAN_DILIMI}", flush=True)
             print(f"{'='*60}", flush=True)
 
             kapanis_kontrol()
@@ -656,11 +654,9 @@ def tarayici():
                         ticker = exchange.fetch_ticker(symbol)
 
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    # Kapanmamış son mumu at
-                    df = df.iloc[:-1].reset_index(drop=True)
+                    df = df.iloc[:-1].reset_index(drop=True)  # Kapanmamış mumu at
                     anlik = float(ticker['last'])
 
-                    # VOLATİLİTE KONTROLÜ
                     if volatilite_kontrol(df):
                         continue
 
@@ -684,7 +680,7 @@ def tarayici():
                     guncel_hacim = df['volume'].iloc[-1]
                     hacim_orani = guncel_hacim / hacim_ort if hacim_ort > 0 else 0
 
-                    print(f"   🔎 [{symbol}] Fiyat: {anlik:.6f} | 60m Y: {en_yuksek:.6f} | 60m D: {en_dusuk:.6f} | Mesafe: %{mesafe:.2f} | Üst İğne: %{ust_oran:.0f} | Alt İğne: %{alt_oran:.0f} | Hacim: {hacim_orani:.1f}x", flush=True)
+                    print(f"   🔎 [{symbol}] Fiyat: {anlik:.6f} | Y: {en_yuksek:.6f} | D: {en_dusuk:.6f} | Mesafe: %{mesafe:.2f} | Üst İğne: %{ust_oran:.0f} | Alt İğne: %{alt_oran:.0f} | Hacim: {hacim_orani:.1f}x", flush=True)
 
                     yon_s, tp_fiyat, sl_fiyat, sebep, mum_b = mum_sinyal(df, anlik)
 
@@ -743,7 +739,7 @@ def tarayici():
                             "giris_zamani": time.time(),
                             "kaldirac": KALDIRAC,
                             "mum_boyut": mum_b,
-                            "mod": "MERDIVEN_IGNE",
+                            "mod": "MERDIVEN_IGNE_15m",
                             "sebep": sebep
                         }
                         aktif_list.append(symbol)
@@ -753,7 +749,7 @@ def tarayici():
                     print(f"✅ [AÇILDI] {symbol} {yon_s} @ {anlik} | SL: {sl_fiyat} | TP: {tp_fiyat}", flush=True)
 
                     tg_gonder(
-                        f"🎯 *MERDİVEN & İĞNE SİNYALİ!*\n"
+                        f"🎯 *MERDİVEN & İĞNE SİNYALİ! ({ZAMAN_DILIMI})*\n"
                         f"📌 `{symbol}` | {yon_s}\n"
                         f"📊 {sebep}\n"
                         f"🎯 Giriş: `{anlik}`\n"
@@ -773,7 +769,7 @@ def tarayici():
             try: tarayici_kilidi.release()
             except: pass
 
-        time.sleep(5)
+        time.sleep(10)  # 15m grafik için 10 saniye yeterli
 
 # ==================== MAIN ====================
 async def main():
