@@ -188,11 +188,9 @@ def mum_sinyal(df_1m, anlik_fiyat):
         yukselen_merdiven = True
         
         for i in range(1, MERDIVEN_MUM_SAYISI + 1):
-            # Düşen Merdiven: High ve Low sürekli düşüyor mu?
             if not (son_n['high'].iloc[i] < son_n['high'].iloc[i-1] and 
                     son_n['low'].iloc[i] < son_n['low'].iloc[i-1]):
                 dusen_merdiven = False
-            # Yükselen Merdiven: High ve Low sürekli yükseliyor mu?
             if not (son_n['high'].iloc[i] > son_n['high'].iloc[i-1] and 
                     son_n['low'].iloc[i] > son_n['low'].iloc[i-1]):
                 yukselen_merdiven = False
@@ -232,7 +230,6 @@ def mum_sinyal(df_1m, anlik_fiyat):
             tp = anlik_fiyat + tp_mesafe_long
             sl = anlik_fiyat - sl_mesafe_long
             
-            # NET KÂR KONTROLÜ (Komisyon ve Spread düşülmüş hali)
             brut_kar_orani = tp_mesafe_long / anlik_fiyat
             net_kar = brut_kar_orani - TOPLAM_MALIYET_ORANI
             if net_kar < MIN_NET_KAR:
@@ -377,7 +374,6 @@ def trailing_stop_kontrol():
 
         if mum_boyut <= 0: continue
 
-        # Kâr, iğne/mum boyutunun kaç katı?
         if yon == "LONG":
             kar_mesafe = anlik - g
         else:
@@ -389,7 +385,6 @@ def trailing_stop_kontrol():
         for esik, sl_kilit in TRAILING_MIKRO:
             if kar_orani >= esik:
                 if yon == "LONG":
-                    # SL'yi kâra çekerken, komisyonu da ekleyerek NET kârı kilitle
                     yeni_sl = g + (mum_boyut * sl_kilit) + (g * TOPLAM_MALIYET_ORANI)
                 else:
                     yeni_sl = g - (mum_boyut * sl_kilit) - (g * TOPLAM_MALIYET_ORANI)
@@ -457,7 +452,6 @@ def kapanis_kontrol():
                 b = int(ANALITIK.get("basarili_islem_sayisi", 0))
                 bz = int(ANALITIK.get("basarisiz_islem_sayisi", 0))
                 
-                # NET KÂR HESABI (Komisyon + Spread düşülmüş)
                 if y == "LONG":
                     brut_kar_orani = (cikis - g) / g
                 else:
@@ -513,7 +507,7 @@ def kapanis_kontrol():
             except Exception as e:
                 print(f"⚠️ Süre hatası {sym}: {e}", flush=True)
 
-# ==================== ANA TARAYICI ====================
+# ==================== ANA TARAYICI (DETAYLI LOGLU) ====================
 def tarayici():
     global SON_HAVUZ_GUNCELLEME
     print("🚀 [BAŞLANGIÇ] MERDİVEN & İĞNE STRATEJİSİ + KOMİSYON HESABI + 7x...", flush=True)
@@ -574,12 +568,31 @@ def tarayici():
                     df_1m = pd.DataFrame(ohlcv_1m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     anlik = float(ticker['last'])
 
+                    # ===== DETAYLI TARAMA LOGU =====
+                    son_mum = df_1m.iloc[-1]
+                    toplam_boy = son_mum['high'] - son_mum['low']
+                    if toplam_boy > 0:
+                        ust_igne = son_mum['high'] - max(son_mum['open'], son_mum['close'])
+                        alt_igne = min(son_mum['open'], son_mum['close']) - son_mum['low']
+                        ust_oran = (ust_igne / toplam_boy * 100)
+                        alt_oran = (alt_igne / toplam_boy * 100)
+                    else:
+                        ust_oran = 0; alt_oran = 0
+                    
+                    hacim_ort = df_1m['volume'].rolling(20).mean().iloc[-1]
+                    guncel_hacim = df_1m['volume'].iloc[-1]
+                    hacim_orani = guncel_hacim / hacim_ort if hacim_ort > 0 else 0
+
+                    print(f"   🔎 [{symbol}] Fiyat: {anlik:.6f} | Üst İğne: %{ust_oran:.0f} | Alt İğne: %{alt_oran:.0f} | Hacim: {hacim_orani:.1f}x", flush=True)
+
+                    # ===== SİNYAL KONTROLÜ =====
                     yon_s, tp_fiyat, sl_fiyat, sebep, mum_b = mum_sinyal(df_1m, anlik)
 
                     if yon_s is None:
+                        print(f"      ⏭️ Sinyal yok (Merdiven/İğne/Hacim şartı sağlanmadı)", flush=True)
                         continue
                     
-                    print(f"\n🔍 [{symbol}] @ {anlik} | SİNYAL: {yon_s} | {sebep}", flush=True)
+                    print(f"      🎯 SİNYAL! {yon_s} | {sebep}", flush=True)
 
                     rr = MERDIVEN_IGNE_TP_CARPAN / MERDIVEN_IGNE_SL_CARPAN
                     hedef_roe = (MERDIVEN_IGNE_TP_CARPAN * mum_b / anlik) * 100 * KALDIRAC
