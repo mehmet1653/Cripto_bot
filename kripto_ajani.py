@@ -113,9 +113,9 @@ MIN_NET_KAR = 0.003
 ZAMAN_DILIMI = '15m'
 MUM_LIMIT = 200
 
-# ==================== İNDİKATÖRLER ====================
-ADX_TREND_ESIGI = 25       # ADX > 25 → trend modu
-ADX_DURGUN_ESIGI = 20      # ADX < 20 → durgun modu
+# ==================== İNDİKATÖRLER (GEVŞETİLDİ) ====================
+ADX_TREND_ESIGI = 22       # 25'ten 22'ye düşürüldü
+ADX_DURGUN_ESIGI = 18      # 20'den 18'e düşürüldü
 EMA_KISA = 20
 EMA_UZUN = 50
 BB_PERIYOT = 20
@@ -123,21 +123,26 @@ BB_STD = 2.0
 RSI_PERIYOT = 14
 ATR_PERIYOT = 14
 
+# RSI eşikleri (gevşetildi)
+RSI_TREND_UST = 75         # Trend LONG için üst limit
+RSI_TREND_ALT = 25         # Trend SHORT için alt limit
+RSI_DURGUN_ALT = 45        # Durgun LONG için RSI limiti (35'ten 45'e)
+RSI_DURGUN_UST = 55        # Durgun SHORT için RSI limiti (65'ten 55'e)
+
 # SL/TP çarpanları
 ATR_SL_TREND = 1.5
 ATR_SL_DURGUN = 1.2
-MIN_NET_KAR = 0.003
 
 # Trailing (ATR bazlı)
 TRAILING_ATR = [
-    (1.0, 0.5),   # Kâr = 1x ATR → SL başabaş+komisyon
-    (1.5, 0.8),   # Kâr = 1.5x ATR → SL %0.8 kâra
-    (2.5, 1.5),   # Kâr = 2.5x ATR → SL %1.5 kâra
-    (4.0, 2.5),   # Kâr = 4x ATR → SL %2.5 kâra
+    (1.0, 0.5),
+    (1.5, 0.8),
+    (2.5, 1.5),
+    (4.0, 2.5),
 ]
 
-MAKS_ACIK_KALMA_SURESI_TREND = 4 * 60 * 60    # 4 saat
-MAKS_ACIK_KALMA_SURESI_DURGUN = 45 * 60       # 45 dakika
+MAKS_ACIK_KALMA_SURESI_TREND = 4 * 60 * 60
+MAKS_ACIK_KALMA_SURESI_DURGUN = 45 * 60
 
 # ==================== KILL-SWITCH ====================
 ARDISIK_ZARAR_LIMIT = 3
@@ -187,40 +192,27 @@ AKTIF_POZISYONLAR = kalici.get("aktif_sistemler", {})
 ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0})
 COIN_COOLDOWN = kalici.get("cooldownlar", {})
 
-# ==================== PİYASA MODU TESPİTİ ====================
+# ==================== PİYASA MODU ====================
 def piyasa_modu_tespit(df):
-    """
-    Döner: (mod, adx, ema20, ema50, bb_ust, bb_alt, bb_orta, rsi, atr)
-    mod: 'TREND_YUKARI', 'TREND_ASAGI', 'DURGUN', 'BELIRSIZ'
-    """
     try:
         close = df['close']
         high = df['high']
         low = df['low']
         
-        # ADX
-        adx_ind = ta.trend.ADXIndicator(high=high, low=low, close=close, window=14)
-        adx = adx_ind.adx().iloc[-1]
-        
-        # EMA
+        adx = ta.trend.ADXIndicator(high=high, low=low, close=close, window=14).adx().iloc[-1]
         ema20 = ta.trend.EMAIndicator(close=close, window=EMA_KISA).ema_indicator().iloc[-1]
         ema50 = ta.trend.EMAIndicator(close=close, window=EMA_UZUN).ema_indicator().iloc[-1]
         
-        # Bollinger
         bb = ta.volatility.BollingerBands(close=close, window=BB_PERIYOT, window_dev=BB_STD)
         bb_ust = bb.bollinger_hband().iloc[-1]
         bb_alt = bb.bollinger_lband().iloc[-1]
         bb_orta = bb.bollinger_mavg().iloc[-1]
         
-        # RSI
         rsi = ta.momentum.RSIIndicator(close=close, window=RSI_PERIYOT).rsi().iloc[-1]
-        
-        # ATR
         atr = ta.volatility.AverageTrueRange(high=high, low=low, close=close, window=ATR_PERIYOT).average_true_range().iloc[-1]
         
         anlik = close.iloc[-1]
         
-        # Mod tespiti
         if adx > ADX_TREND_ESIGI:
             if ema20 > ema50 and anlik > ema20:
                 mod = 'TREND_YUKARI'
@@ -237,52 +229,75 @@ def piyasa_modu_tespit(df):
     except Exception as e:
         return 'BELIRSIZ', 0, 0, 0, 0, 0, 0, 50, 0
 
-# ==================== SİNYAL ÜRETİCİ ====================
+# ==================== SİNYAL ÜRETİCİ (GELİŞMİŞ) ====================
 def sinyal_uret(df, anlik_fiyat):
-    """
-    Döner: (yon, tp, sl, sebep, atr_degeri)
-    """
     try:
         if len(df) < 60:
-            return None, None, None, None, None
+            return None, None, None, None, None, "Veri yetersiz"
         
         mod, adx, ema20, ema50, bb_ust, bb_alt, bb_orta, rsi, atr = piyasa_modu_tespit(df)
         
         if atr <= 0:
-            return None, None, None, None, None
+            return None, None, None, None, None, "ATR=0"
         
-        # ==================== TREND MODU ====================
+        son_mum = df.iloc[-1]
+        onceki = df.iloc[-2]
+        son_3 = df.tail(3)
+        
+        # ==================== TREND YUKARI ====================
         if mod == 'TREND_YUKARI':
-            # EMA20'ye geri çekilme + sekme
-            son_mum = df.iloc[-1]
-            onceki = df.iloc[-2]
-            
-            # Fiyat EMA20'ye yaklaştı ve üstünde kapandı
-            ema20_yakin = abs(son_mum['low'] - ema20) / ema20 < 0.005
+            ema20_yakin = abs(son_mum['low'] - ema20) / ema20 < 0.01
             yesil_kapanis = son_mum['close'] > son_mum['open']
             ustunde = son_mum['close'] > ema20
             
-            if ema20_yakin and yesil_kapanis and ustunde and rsi < 70:
+            # Momentum girişi: trend güçlü, fiyat EMA20 üstünde
+            momentum = (anlik_fiyat > ema20 and 
+                       ema20 > ema50 and 
+                       45 < rsi < RSI_TREND_UST and
+                       son_mum['close'] > onceki['close'])
+            
+            # 3 mumun 2'si yeşil
+            son_3_yesil = sum(1 for i in range(len(son_3)) if son_3['close'].iloc[i] > son_3['open'].iloc[i]) >= 2
+            
+            giris_var = (ema20_yakin and yesil_kapanis and ustunde) or momentum or (ustunde and son_3_yesil and 40 < rsi < RSI_TREND_UST)
+            
+            if giris_var and rsi < RSI_TREND_UST:
                 sl_mesafe = atr * ATR_SL_TREND
-                tp_mesafe = atr * ATR_SL_TREND * 3  # 1:3 R/R
+                tp_mesafe = atr * ATR_SL_TREND * 3
                 tp = anlik_fiyat + tp_mesafe
                 sl = anlik_fiyat - sl_mesafe
                 
                 brut = tp_mesafe / anlik_fiyat
                 net = brut - TOPLAM_MALIYET_ORANI
                 if net < MIN_NET_KAR:
-                    return None, None, None, None, None
+                    return None, None, None, None, None, f"Net kâr düşük (%{net*100:.2f})"
                 
-                sebep = f"TREND↑ | ADX:{adx:.1f} | EMA20 sekme | RSI:{rsi:.0f}"
-                return "LONG", tp, sl, sebep, atr
+                if ema20_yakin and yesil_kapanis:
+                    sebep = f"TREND↑ PULLBACK | ADX:{adx:.1f} | RSI:{rsi:.0f}"
+                elif momentum:
+                    sebep = f"TREND↑ MOMENTUM | ADX:{adx:.1f} | RSI:{rsi:.0f}"
+                else:
+                    sebep = f"TREND↑ 3MUM | ADX:{adx:.1f} | RSI:{rsi:.0f}"
+                return "LONG", tp, sl, sebep, atr, "OK"
+            else:
+                return None, None, None, None, None, f"TREND↑ şart yok (ema_yakin:{ema20_yakin} yesil:{yesil_kapanis} momentum:{momentum})"
         
+        # ==================== TREND ASAGI ====================
         if mod == 'TREND_ASAGI':
-            son_mum = df.iloc[-1]
-            ema20_yakin = abs(son_mum['high'] - ema20) / ema20 < 0.005
+            ema20_yakin = abs(son_mum['high'] - ema20) / ema20 < 0.01
             kirmizi_kapanis = son_mum['close'] < son_mum['open']
             altinda = son_mum['close'] < ema20
             
-            if ema20_yakin and kirmizi_kapanis and altinda and rsi > 30:
+            momentum = (anlik_fiyat < ema20 and 
+                       ema20 < ema50 and 
+                       RSI_TREND_ALT < rsi < 55 and
+                       son_mum['close'] < onceki['close'])
+            
+            son_3_kirmizi = sum(1 for i in range(len(son_3)) if son_3['close'].iloc[i] < son_3['open'].iloc[i]) >= 2
+            
+            giris_var = (ema20_yakin and kirmizi_kapanis and altinda) or momentum or (altinda and son_3_kirmizi and RSI_TREND_ALT < rsi < 60)
+            
+            if giris_var and rsi > RSI_TREND_ALT:
                 sl_mesafe = atr * ATR_SL_TREND
                 tp_mesafe = atr * ATR_SL_TREND * 3
                 tp = anlik_fiyat - tp_mesafe
@@ -291,25 +306,28 @@ def sinyal_uret(df, anlik_fiyat):
                 brut = tp_mesafe / anlik_fiyat
                 net = brut - TOPLAM_MALIYET_ORANI
                 if net < MIN_NET_KAR:
-                    return None, None, None, None, None
+                    return None, None, None, None, None, f"Net kâr düşük"
                 
-                sebep = f"TREND↓ | ADX:{adx:.1f} | EMA20 sekme | RSI:{rsi:.0f}"
-                return "SHORT", tp, sl, sebep, atr
+                if ema20_yakin and kirmizi_kapanis:
+                    sebep = f"TREND↓ PULLBACK | ADX:{adx:.1f} | RSI:{rsi:.0f}"
+                elif momentum:
+                    sebep = f"TREND↓ MOMENTUM | ADX:{adx:.1f} | RSI:{rsi:.0f}"
+                else:
+                    sebep = f"TREND↓ 3MUM | ADX:{adx:.1f} | RSI:{rsi:.0f}"
+                return "SHORT", tp, sl, sebep, atr, "OK"
+            else:
+                return None, None, None, None, None, f"TREND↓ şart yok"
         
-        # ==================== DURGUN MODU ====================
+        # ==================== DURGUN ====================
         if mod == 'DURGUN':
-            son_mum = df.iloc[-1]
+            alt_banda_yakin = son_mum['low'] <= bb_alt * 1.005
+            asiri_satim = rsi < RSI_DURGUN_ALT
             
-            # Bollinger alt bandına değdi + RSI aşırı satım → LONG
-            alt_banda_degdi = son_mum['low'] <= bb_alt * 1.002
-            asiri_satim = rsi < 35
-            
-            if alt_banda_degdi and asiri_satim:
+            if alt_banda_yakin and asiri_satim:
                 sl_mesafe = atr * ATR_SL_DURGUN
-                # TP: orta bant (SMA20)
                 tp_mesafe = bb_orta - anlik_fiyat
                 if tp_mesafe <= 0:
-                    return None, None, None, None, None
+                    return None, None, None, None, None, "TP<0"
                 
                 tp = bb_orta
                 sl = anlik_fiyat - sl_mesafe
@@ -317,20 +335,19 @@ def sinyal_uret(df, anlik_fiyat):
                 brut = tp_mesafe / anlik_fiyat
                 net = brut - TOPLAM_MALIYET_ORANI
                 if net < MIN_NET_KAR:
-                    return None, None, None, None, None
+                    return None, None, None, None, None, f"Net kâr düşük"
                 
-                sebep = f"DURGUN | BB Alt + RSI:{rsi:.0f} | ADX:{adx:.1f}"
-                return "LONG", tp, sl, sebep, atr
+                sebep = f"DURGUN LONG | BB Alt + RSI:{rsi:.0f} | ADX:{adx:.1f}"
+                return "LONG", tp, sl, sebep, atr, "OK"
             
-            # Bollinger üst bandına değdi + RSI aşırı alım → SHORT
-            ust_banda_degdi = son_mum['high'] >= bb_ust * 0.998
-            asiri_alim = rsi > 65
+            ust_banda_yakin = son_mum['high'] >= bb_ust * 0.995
+            asiri_alim = rsi > RSI_DURGUN_UST
             
-            if ust_banda_degdi and asiri_alim:
+            if ust_banda_yakin and asiri_alim:
                 sl_mesafe = atr * ATR_SL_DURGUN
                 tp_mesafe = anlik_fiyat - bb_orta
                 if tp_mesafe <= 0:
-                    return None, None, None, None, None
+                    return None, None, None, None, None, "TP<0"
                 
                 tp = bb_orta
                 sl = anlik_fiyat + sl_mesafe
@@ -338,16 +355,17 @@ def sinyal_uret(df, anlik_fiyat):
                 brut = tp_mesafe / anlik_fiyat
                 net = brut - TOPLAM_MALIYET_ORANI
                 if net < MIN_NET_KAR:
-                    return None, None, None, None, None
+                    return None, None, None, None, None, f"Net kâr düşük"
                 
-                sebep = f"DURGUN | BB Üst + RSI:{rsi:.0f} | ADX:{adx:.1f}"
-                return "SHORT", tp, sl, sebep, atr
+                sebep = f"DURGUN SHORT | BB Üst + RSI:{rsi:.0f} | ADX:{adx:.1f}"
+                return "SHORT", tp, sl, sebep, atr, "OK"
+            
+            return None, None, None, None, None, f"DURGUN şart yok (bb_alt:{alt_banda_yakin} rsi:{rsi:.0f})"
         
-        # BELIRSIZ mod → işlem yok
-        return None, None, None, None, None
+        return None, None, None, None, None, f"BELIRSIZ mod"
     except Exception as e:
         print(f"⚠️ Sinyal hatası: {e}", flush=True)
-        return None, None, None, None, None
+        return None, None, None, None, None, f"Hata: {e}"
 
 # ==================== TELEGRAM ====================
 def tg_gonder(mesaj):
@@ -405,7 +423,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     BOT_CALISIYOR_MU = True
     KILL_SWITCH_AKTIF = False
     ARDISIK_ZARAR_SAYACI = 0
-    await update.message.reply_text("🟢 Bot aktif! (Adaptif Mod)")
+    await update.message.reply_text("🟢 Bot aktif! (Adaptif Mod - Eşikler Gevşetildi)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -445,7 +463,7 @@ async def havuz_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ Havuz güncellenemedi.")
 
-# ==================== TRAILING (ATR bazlı) ====================
+# ==================== TRAILING ====================
 def trailing_stop_kontrol():
     with state_lock:
         aktif_kopya = list(AKTIF_POZISYONLAR.items())
@@ -478,7 +496,6 @@ def trailing_stop_kontrol():
 
         kar_orani = kar_mesafe / atr_degeri
 
-        # Durgun modda daha hızlı kâr kilitle
         carpanlar = TRAILING_ATR if mod == "TREND" else [(0.8, 0.3), (1.2, 0.6), (2.0, 1.2)]
 
         yeni_sl = None
@@ -586,7 +603,6 @@ def kapanis_kontrol():
                 tg_gonder(f"🚨 *KILL-SWITCH AKTİF!*\n{ARDISIK_ZARAR_LIMIT} ardışık zarar.\n⏸️ 1 saat bekle.")
             continue
 
-        # Süre kontrolü (moda göre)
         giris_zaman = float(bilgi.get("giris_zamani", 0))
         mod = bilgi.get("mod", "TREND")
         max_sure = MAKS_ACIK_KALMA_SURESI_TREND if mod == "TREND" else MAKS_ACIK_KALMA_SURESI_DURGUN
@@ -620,7 +636,7 @@ def kapanis_kontrol():
 # ==================== ANA TARAYICI ====================
 def tarayici():
     global SON_HAVUZ_GUNCELLEME, KILL_SWITCH_AKTIF, ARDISIK_ZARAR_SAYACI
-    print(f"🚀 [BAŞLANGIÇ] ADAPTİF BOT | {ZAMAN_DILIMI} | Trend+Durgun", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] ADAPTİF BOT | {ZAMAN_DILIMI} | ADX_T:{ADX_TREND_ESIGI} ADX_D:{ADX_DURGUN_ESIGI}", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -690,21 +706,20 @@ def tarayici():
                     df = df.iloc[:-1].reset_index(drop=True)
                     anlik = float(ticker['last'])
 
-                    # Piyasa modu tespit
                     mod, adx, ema20, ema50, bb_ust, bb_alt, bb_orta, rsi, atr = piyasa_modu_tespit(df)
                     
                     print(f"   🔎 [{symbol}] Fiyat: {anlik:.6f} | Mod: {mod} | ADX: {adx:.1f} | RSI: {rsi:.0f} | ATR: {atr:.6f}", flush=True)
 
-                    yon_s, tp_fiyat, sl_fiyat, sebep, atr_b = sinyal_uret(df, anlik)
+                    yon_s, tp_fiyat, sl_fiyat, sebep, atr_b, neden = sinyal_uret(df, anlik)
 
                     if yon_s is None:
-                        print(f"      ⏭️ Sinyal yok", flush=True)
+                        print(f"      ⏭️ Sinyal yok → {neden}", flush=True)
                         continue
                     
                     print(f"      🎯 SİNYAL! {yon_s} | {sebep}", flush=True)
 
                     kapat_yon = 'sell' if yon_s == 'LONG' else 'buy'
-                    rr = 3.0  # Trend modu için 1:3, durgun için daha düşük
+                    rr = 3.0
 
                     with borsa_kilidi:
                         bakiye = exchange.fetch_balance()
