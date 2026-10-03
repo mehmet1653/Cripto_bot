@@ -66,40 +66,36 @@ KALDIRAC = 5
 MAKSIMUM_TOPLAM_POZISYON = 3
 COOLDOWN_SURESI_SANIYE = 20 * 60
 
-POZISYON_ORANI = 0.10
+# ✅ POZISYON 3 KATINA ÇIKARILDI
+POZISYON_ORANI = 0.30   # %10 → %30
 MIN_NET_KAR = 0.005
 
 KOMISYON_ORANI = 0.001
 SPREAD_MALIYETI = 0.0005
 TOPLAM_MALIYET_ORANI = (KOMISYON_ORANI * 2) + SPREAD_MALIYETI
 
-# Mod eşikleri
 ADX_GUCLU_TREND = 30
 ADX_TREND_ESIGI = 25
 ADX_YATAY_ESIGI = 20
 ATR_VOLATIL_CARPAN = 2.0
 
-# Breakout
 BREAKOUT_LOOKBACK = 50
 BREAKOUT_SL_TOLERANS = 0.005
 BREAKOUT_MIN_RR = 2.5
 
-# Trend Takip + Dönüş
 TREND_TAKIP_MUM_ONAY = 5
 TREND_TAKIP_SL_CARPAN = 2.0
 TREND_TAKIP_BITIS_ONAY = 2
 
-# ✅ Geç kalma filtreleri
-MAKS_YUKSEKLIK_TREND = 0.02   # %2'den fazla yükselmişse trend geç
-RSI_TREND_UST_LIMIT = 68      # RSI 68'in üstünde LONG yok
-RSI_TREND_ALT_LIMIT = 32      # RSI 32'nin altında SHORT yok
+MAKS_YUKSEKLIK_TREND = 0.02
+RSI_TREND_UST_LIMIT = 68
+RSI_TREND_ALT_LIMIT = 32
 
-# ✅ Tepe/Dip dönüş eşikleri
-RSI_TEPE_ESIGI = 70           # RSI 70+ tepe
-RSI_DIP_ESIGI = 30            # RSI 30- dip
-FITIL_CARPAN = 1.5            # Üst/alt fitil gövdenin 1.5 katıysa dönüş
+RSI_TEPE_ESIGI = 70
+RSI_DIP_ESIGI = 30
+FITIL_CARPAN = 1.5
 
-# Kademeli trailing
+# Kademeli trailing (Grid/Breakout için)
 TRAILING_SEVIYELER = [
     (5.0, 0.0),
     (10.0, 0.03),
@@ -107,6 +103,16 @@ TRAILING_SEVIYELER = [
     (25.0, 0.12),
     (40.0, 0.20),
 ]
+
+# ✅ Kâr kilidi mesaj eşiği (anlamlı kâr için)
+KAR_KILIT_MESAJ_ESIGI = 0.01   # %1 net kâr üstünde mesaj
+
+# Kill-switch
+ARDISIK_ZARAR_LIMIT = 3
+ARDISIK_ZARAR_BEKLEME = 3600
+ARDISIK_ZARAR_SAYACI = 0
+SON_ARDISIK_ZARAR_ZAMANI = 0
+KILL_SWITCH_AKTIF = False
 
 # ==================== HAFIZA ====================
 def hafizayi_yukle():
@@ -318,7 +324,6 @@ def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
         son_mum = df.iloc[-1]
         onceki = df.iloc[-2]
         
-        # Fitil analizi
         govde = abs(son_mum['close'] - son_mum['open'])
         toplam_boy = son_mum['high'] - son_mum['low']
         if toplam_boy <= 0:
@@ -327,9 +332,8 @@ def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
         ust_fitil = son_mum['high'] - max(son_mum['open'], son_mum['close'])
         alt_fitil = min(son_mum['open'], son_mum['close']) - son_mum['low']
         
-        # ==================== TEPE DÖNÜŞÜ → SHORT ====================
+        # TEPE DÖNÜŞÜ → SHORT
         if mod == 'GUCLU_TREND_UP':
-            # 3 şart: RSI aşırı alım + kırmızı mum + uzun üst fitil
             tepe_donusu = (
                 rsi > RSI_TEPE_ESIGI and
                 son_mum['close'] < son_mum['open'] and
@@ -343,24 +347,21 @@ def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
                 net = brut - TOPLAM_MALIYET_ORANI
                 if net < MIN_NET_KAR:
                     return None, None, None, None, None
-                sebep = f"TEPE DÖNÜŞÜ SHORT | RSI: {rsi:.0f} | Üst fitil: {ust_fitil:.4f}"
+                sebep = f"TEPE DÖNÜŞÜ SHORT | RSI: {rsi:.0f}"
                 return "SHORT", tp, sl, sebep, atr
             
-            # Normal trend takip (LONG)
             hepsi_ustunde = all(son_mumlar['close'] > ema20)
             if not hepsi_ustunde:
                 return None, None, None, None, None
             if rsi > RSI_TREND_UST_LIMIT:
                 return None, None, None, None, None
             
-            # ✅ Geç kalma kontrolü
             son_20 = df.tail(20)
             en_dusuk_20 = son_20['low'].min()
             yukseklik = (anlik - en_dusuk_20) / en_dusuk_20 if en_dusuk_20 > 0 else 0
             if yukseklik > MAKS_YUKSEKLIK_TREND:
                 return None, None, None, None, None
             
-            # ✅ Son mum yeşil olmalı
             if son_mum['close'] < son_mum['open']:
                 return None, None, None, None, None
             
@@ -372,10 +373,10 @@ def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
             net = brut - TOPLAM_MALIYET_ORANI
             if net < MIN_NET_KAR:
                 return None, None, None, None, None
-            sebep = f"TREND↑ TAKİP | EMA20: {ema20:.4f} | RSI: {rsi:.0f} | Yüks: {yukseklik*100:.2f}%"
+            sebep = f"TREND↑ TAKİP | EMA20: {ema20:.4f} | RSI: {rsi:.0f}"
             return "LONG", tp, sl, sebep, atr
         
-        # ==================== DİP DÖNÜŞÜ → LONG ====================
+        # DİP DÖNÜŞÜ → LONG
         if mod == 'GUCLU_TREND_DOWN':
             dip_donusu = (
                 rsi < RSI_DIP_ESIGI and
@@ -390,24 +391,21 @@ def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
                 net = brut - TOPLAM_MALIYET_ORANI
                 if net < MIN_NET_KAR:
                     return None, None, None, None, None
-                sebep = f"DİP DÖNÜŞÜ LONG | RSI: {rsi:.0f} | Alt fitil: {alt_fitil:.4f}"
+                sebep = f"DİP DÖNÜŞÜ LONG | RSI: {rsi:.0f}"
                 return "LONG", tp, sl, sebep, atr
             
-            # Normal trend takip (SHORT)
             hepsi_altinda = all(son_mumlar['close'] < ema20)
             if not hepsi_altinda:
                 return None, None, None, None, None
             if rsi < RSI_TREND_ALT_LIMIT:
                 return None, None, None, None, None
             
-            # ✅ Geç kalma kontrolü
             son_20 = df.tail(20)
             en_yuksek_20 = son_20['high'].max()
             dusus = (en_yuksek_20 - anlik) / en_yuksek_20 if en_yuksek_20 > 0 else 0
             if dusus > MAKS_YUKSEKLIK_TREND:
                 return None, None, None, None, None
             
-            # ✅ Son mum kırmızı olmalı
             if son_mum['close'] > son_mum['open']:
                 return None, None, None, None, None
             
@@ -427,8 +425,10 @@ def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
         print(f"⚠️ Trend takip hatası: {e}", flush=True)
         return None, None, None, None, None
 
-# ==================== TRAILING ====================
+# ==================== TRAILING (DÜZELTİLDİ) ====================
 def trailing_stop_kontrol():
+    global ARDISIK_ZARAR_SAYACI, SON_ARDISIK_ZARAR_ZAMANI, KILL_SWITCH_AKTIF
+    
     with state_lock:
         aktif_kopya = list(AKTIF_POZISYONLAR.items())
     
@@ -460,15 +460,16 @@ def trailing_stop_kontrol():
         else:
             roe = (g - anlik) / g * 100 * kaldirac_v
         
-        # Minimum kâr seviyesi (başabaş + komisyon)
+        # ✅ Kâr kilidi için min SL seviyesi: başabaş + %1 net kâr
         if yon == "LONG":
-            min_kar_sl = g * (1 + TOPLAM_MALIYET_ORANI / kaldirac_v)
+            min_kar_sl = g * (1 + (TOPLAM_MALIYET_ORANI + KAR_KILIT_MESAJ_ESIGI) / kaldirac_v)
         else:
-            min_kar_sl = g * (1 - TOPLAM_MALIYET_ORANI / kaldirac_v)
+            min_kar_sl = g * (1 - (TOPLAM_MALIYET_ORANI + KAR_KILIT_MESAJ_ESIGI) / kaldirac_v)
         
         yeni_sl = None
         trend_bitti = False
         
+        # TREND TAKİP MODU (EMA20 takip)
         if mod in ['GUCLU_TREND_UP', 'GUCLU_TREND_DOWN']:
             try:
                 ohlcv = exchange.fetch_ohlcv(sym, timeframe='15m', limit=50)
@@ -482,27 +483,33 @@ def trailing_stop_kontrol():
                         trend_bitti = True
                     else:
                         hedef_sl = ema20_guncel - (atr_b * TREND_TAKIP_SL_CARPAN)
-                        yeni_sl = max(hedef_sl, min_kar_sl)
+                        # ✅ SL min kâr seviyesinin altına inmesin
+                        yeni_sl = max(hedef_sl, min_kar_sl) if roe > 3.0 else hedef_sl
                 else:
                     if all(son_2['close'] > ema20_guncel):
                         trend_bitti = True
                     else:
                         hedef_sl = ema20_guncel + (atr_b * TREND_TAKIP_SL_CARPAN)
-                        yeni_sl = min(hedef_sl, min_kar_sl)
+                        yeni_sl = min(hedef_sl, min_kar_sl) if roe > 3.0 else hedef_sl
             except Exception as e:
                 print(f"⚠️ Trend EMA hatası: {e}", flush=True)
         
+        # GRID / BREAKOUT MODU (ROE bazlı trailing)
         else:
             for esik_roe, kilit in TRAILING_SEVIYELER:
                 if roe >= esik_roe:
                     if yon == "LONG":
                         yeni_sl = g * (1 + kilit / kaldirac_v)
-                        yeni_sl = max(yeni_sl, min_kar_sl)
                     else:
                         yeni_sl = g * (1 - kilit / kaldirac_v)
-                        yeni_sl = min(yeni_sl, min_kar_sl)
+                    # ✅ Kâr kilidi min başabaş + %1 üstünde olsun
+                    if yon == "LONG":
+                        yeni_sl = max(yeni_sl, min_kar_sl) if roe > 5.0 else yeni_sl
+                    else:
+                        yeni_sl = min(yeni_sl, min_kar_sl) if roe > 5.0 else yeni_sl
                     break
         
+        # TREND BİTTİ
         if trend_bitti:
             try:
                 exchange.cancel_all_orders(sym)
@@ -550,14 +557,16 @@ def trailing_stop_kontrol():
             
             print(f"🔒 [TRAILING] {sym} | {mod} | ROE:%{roe:.1f} → SL:{yeni_sl:.6f}", flush=True)
             
-            if roe > 0:
+            # ✅ Sadece ROE pozitif VE anlamlıysa (>%1) mesaj gönder
+            if roe > 3.0 and mod in ['GUCLU_TREND_UP', 'GUCLU_TREND_DOWN']:
+                tg_gonder(f"🔒 *KÂR KİLİTLENDİ*\n📌 `{sym}` | {mod}\n📊 ROE: `%{roe:+.2f}`\n🛑 SL: `{yeni_sl:.6f}`")
+            elif roe > 5.0 and mod not in ['GUCLU_TREND_UP', 'GUCLU_TREND_DOWN']:
                 tg_gonder(f"🔒 *KÂR KİLİTLENDİ*\n📌 `{sym}` | {mod}\n📊 ROE: `%{roe:+.2f}`\n🛑 SL: `{yeni_sl:.6f}`")
         except Exception as e:
             print(f"⚠️ Trailing: {e}", flush=True)
 
 # ==================== MOD GÜNCELLEME ====================
 def modlari_guncelle():
-    """Her açık pozisyonun modunu güncel piyasa durumuna göre yenile"""
     with state_lock:
         aktif_kopya = list(AKTIF_POZISYONLAR.items())
     
@@ -580,7 +589,6 @@ def modlari_guncelle():
                         AKTIF_POZISYONLAR[sym]["mod"] = mod_guncel
                         AKTIF_POZISYONLAR[sym]["atr_degeri"] = atr_g
                 print(f"🔄 [MOD DEĞİŞİMİ] {sym} | {eski_mod} → {mod_guncel}", flush=True)
-                tg_gonder(f"🔄 *MOD DEĞİŞTİ*\n📌 `{sym}`\n📊 {eski_mod} → {mod_guncel}")
         except Exception as e:
             continue
 
@@ -618,20 +626,24 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f = (gf - g) / g if y == "LONG" else (g - gf) / g
             roe = f * 100 * k
             mod_bilgi = AKTIF_POZISYONLAR.get(sym, {}).get("mod", "?")
-            pos_detay += f"\n• `{sym}` | {y} ({k}x) | {mod_bilgi}\n  ROE: `%{roe:+.2f}`"
+            margin = float(p.get('initialMargin', 0) or 0)
+            pos_detay += f"\n• `{sym}` | {y} ({k}x) | {mod_bilgi}\n  ROE: `%{roe:+.2f}` | Marj: `{margin:.2f}`"
         
         mesaj = (
-            f"📊 *DURUM* [ADAPTİF v4]\n\n"
+            f"📊 *DURUM* [ADAPTİF v4.1]\n\n"
             f"💰 Kasa: `{total:.2f} USDT` | PnL: `{pnl:+.2f}`\n"
             f"📌 Açık: `{len(pos)} / {MAKSIMUM_TOPLAM_POZISYON}`"
             f"{pos_detay}\n\n"
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
-            f"📈 Başarı: `%{oran:.1f}`\n\n"
+            f"📈 Başarı: `%{oran:.1f}`\n"
+            f"⚡ Kill-Switch: `{'AKTİF' if KILL_SWITCH_AKTIF else 'Pasif'}`\n"
+            f"🔻 Ardışık Zarar: `{ARDISIK_ZARAR_SAYACI}`\n\n"
             f"⚙️ *Modlar:*\n"
             f"  🟦 YATAY → Grid\n"
             f"  🟩 ORTA TREND → Breakout+Retest\n"
             f"  🟨 GÜÇLÜ TREND → Trend Takip/Dönüş\n"
-            f"  🔴 VOLATİL → Bekle"
+            f"  🔴 VOLATİL → Bekle\n\n"
+            f"⚙️ Pozisyon: `%{POZISYON_ORANI*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
     except Exception as e:
@@ -640,9 +652,11 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID):
         return
-    global BOT_CALISIYOR_MU
+    global BOT_CALISIYOR_MU, KILL_SWITCH_AKTIF, ARDISIK_ZARAR_SAYACI
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (v4: Tepe/Dip Dönüşü + Mod Güncelleme)")
+    KILL_SWITCH_AKTIF = False
+    ARDISIK_ZARAR_SAYACI = 0
+    await update.message.reply_text("🟢 Bot aktif! (v4.1: Pozisyon %30, Kâr Kilidi Düzeltildi)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID):
@@ -672,7 +686,9 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ANA TARAYICI ====================
 def tarayici():
-    print("🚀 [BAŞLANGIÇ] ADAPTİF v4 (Tepe/Dip Dönüşü)", flush=True)
+    global ARDISIK_ZARAR_SAYACI, SON_ARDISIK_ZARAR_ZAMANI, KILL_SWITCH_AKTIF
+    
+    print("🚀 [BAŞLANGIÇ] ADAPTİF v4.1 (Pozisyon %30)", flush=True)
     try:
         exchange.load_markets()
     except:
@@ -693,6 +709,18 @@ def tarayici():
             print(f"\n{'='*55}", flush=True)
             print(f"🔄 [DÖNGÜ #{dongu}] {time.strftime('%H:%M:%S')}", flush=True)
             
+            # KILL-SWITCH
+            if KILL_SWITCH_AKTIF:
+                if time.time() - SON_ARDISIK_ZARAR_ZAMANI > ARDISIK_ZARAR_BEKLEME:
+                    KILL_SWITCH_AKTIF = False
+                    ARDISIK_ZARAR_SAYACI = 0
+                    tg_gonder("✅ KILL-SWITCH KAPANDI")
+                else:
+                    kalan = int((ARDISIK_ZARAR_BEKLEME - (time.time() - SON_ARDISIK_ZARAR_ZAMANI))/60)
+                    print(f"⏸️ [KILL-SWITCH] {kalan} dk", flush=True)
+                    time.sleep(30)
+                    continue
+            
             try:
                 raw = exchange.fetch_positions()
                 aktif_map = {}
@@ -708,7 +736,7 @@ def tarayici():
                 aktif_map = {}
                 aktif_list = []
             
-            # KAPANIŞ KONTROLÜ
+            # KAPANIŞ
             try:
                 anlik_aktif = [p['symbol'] for p in raw if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                 for eski in list(AKTIF_POZISYONLAR.keys()):
@@ -734,9 +762,12 @@ def tarayici():
                             if karli:
                                 b += 1
                                 tip = "✅ *KÂRLA KAPANDI*"
+                                ARDISIK_ZARAR_SAYACI = 0
                             else:
                                 bz += 1
                                 tip = "❌ *ZARARLA KAPANDI*"
+                                ARDISIK_ZARAR_SAYACI += 1
+                                SON_ARDISIK_ZARAR_ZAMANI = time.time()
                             ANALITIK["basarili_islem_sayisi"] = b
                             ANALITIK["basarisiz_islem_sayisi"] = bz
                             COIN_COOLDOWN[eski] = {"zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), "son_yon": y}
@@ -745,11 +776,15 @@ def tarayici():
                         
                         hafizayi_kaydet()
                         print(f"💰 [KAPANIŞ] {eski} | Çıkış: {cikis}", flush=True)
-                        tg_gonder(f"{tip}\n📌 `{eski}` | Çıkış: `{cikis}`")
+                        tg_gonder(f"{tip}\n📌 `{eski}` | Çıkış: `{cikis}`\n🔻 Ardışık Zarar: `{ARDISIK_ZARAR_SAYACI}`")
+                        
+                        if ARDISIK_ZARAR_SAYACI >= ARDISIK_ZARAR_LIMIT:
+                            KILL_SWITCH_AKTIF = True
+                            tg_gonder(f"🚨 *KILL-SWITCH AKTİF!*\n{ARDISIK_ZARAR_LIMIT} ardışık zarar.\n⏸️ 1 saat bekle.")
             except Exception as e:
                 print(f"⚠️ Kapanış: {e}", flush=True)
             
-            # ✅ MOD GÜNCELLEME
+            # MOD GÜNCELLE
             modlari_guncelle()
             
             # TRAILING
@@ -780,7 +815,7 @@ def tarayici():
                     
                     mod, adx, atr, atr_ort, bb_ust, bb_alt, bb_orta, ema20, ema50, rsi, _ = piyasa_modu_bul(df)
                     
-                    print(f"   🔎 [{symbol}] {anlik:.4f} | Mod: {mod} | ADX: {adx:.1f} | ATR: {atr:.6f} | RSI: {rsi:.0f}", flush=True)
+                    print(f"   🔎 [{symbol}] {anlik:.4f} | Mod: {mod} | ADX: {adx:.1f} | RSI: {rsi:.0f}", flush=True)
                     
                     yon, tp, sl, sebep, atr_b = None, None, None, None, None
                     
@@ -800,11 +835,11 @@ def tarayici():
                             print(f"      ⏭️ TREND TAKİP/DÖNÜŞ sinyal yok", flush=True)
                     
                     elif mod == 'VOLATIL':
-                        print(f"      ⏸️ VOLATIL - işlem yok", flush=True)
+                        print(f"      ⏸️ VOLATIL", flush=True)
                         continue
                     
                     else:
-                        print(f"      ⏸️ BELIRSIZ - işlem yok", flush=True)
+                        print(f"      ⏸️ BELIRSIZ", flush=True)
                         continue
                     
                     if yon is None:
@@ -819,6 +854,7 @@ def tarayici():
                     exchange.set_leverage(KALDIRAC, symbol)
                     market = exchange.market(symbol)
                     
+                    # ✅ %30 pozisyon
                     kullan = min(toplam_b * POZISYON_ORANI, serbest_b)
                     if kullan < 1:
                         continue
@@ -863,7 +899,7 @@ def tarayici():
                         aktif_map[symbol] = {"dummy": True}
                     
                     hafizayi_kaydet()
-                    print(f"      ✅ [AÇILDI] {symbol} {yon} | {mod} | @ {anlik}", flush=True)
+                    print(f"      ✅ [AÇILDI] {symbol} {yon} | {mod} | @ {anlik} | Marj: {kullan:.2f}", flush=True)
                     
                     emoji = "🟦" if mod == 'YATAY' else ("🟩" if mod in ['TREND_YUKARI', 'TREND_ASAGI'] else "🟨")
                     
@@ -873,7 +909,8 @@ def tarayici():
                         f"📊 {sebep}\n"
                         f"🎯 Giriş: `{anlik}`\n"
                         f"💰 TP: `{tp}`\n"
-                        f"🛑 SL: `{sl}`"
+                        f"🛑 SL: `{sl}`\n"
+                        f"💵 Marj: `{kullan:.2f} USDT`"
                     )
                 except Exception as e:
                     print(f"   ⚠️ {symbol}: {e}", flush=True)
@@ -895,13 +932,12 @@ async def main():
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     
-    # ✅ Telegram conflict için agresif temizlik
     try:
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=10)
         time.sleep(2)
         print("✅ Telegram webhook temizlendi.", flush=True)
     except Exception as e:
-        print(f"⚠️ Webhook temizleme: {e}", flush=True)
+        print(f"⚠️ Webhook: {e}", flush=True)
     
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
