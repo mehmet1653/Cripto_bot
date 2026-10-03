@@ -73,23 +73,18 @@ KOMISYON_ORANI = 0.001
 SPREAD_MALIYETI = 0.0005
 TOPLAM_MALIYET_ORANI = (KOMISYON_ORANI * 2) + SPREAD_MALIYETI
 
-# Piyasa modu eşikleri
-ADX_GUCLU_TREND = 30        # > 30 → Trend Takip
-ADX_TREND_ESIGI = 25        # 25-30 → Breakout+Retest
-ADX_YATAY_ESIGI = 20        # < 20 → Grid
+ADX_GUCLU_TREND = 30
+ADX_TREND_ESIGI = 25
+ADX_YATAY_ESIGI = 20
 ATR_VOLATIL_CARPAN = 2.0
 
-# Breakout
 BREAKOUT_LOOKBACK = 50
 BREAKOUT_SL_TOLERANS = 0.005
 BREAKOUT_MIN_RR = 2.5
 
-# Trend Takip
-TREND_TAKIP_EMA = 20
-TREND_TAKIP_MUM_ONAY = 5    # Son 5 mum EMA üstünde/altında olmalı
-TREND_TAKIP_SL_CARPAN = 1.5 # SL = EMA20 ± (ATR × 1.5)
+TREND_TAKIP_MUM_ONAY = 5
+TREND_TAKIP_SL_CARPAN = 1.5
 
-# Trailing (klasik - grid/breakout için)
 TRAILING_SEVIYELER = [
     (15.0, 0.10),
     (10.0, 0.05),
@@ -139,10 +134,6 @@ COIN_COOLDOWN = kalici.get("cooldownlar", {})
 
 # ==================== PİYASA ANALİZİ ====================
 def piyasa_modu_bul(df):
-    """
-    Döner: (mod, adx, atr, atr_ort, bb_ust, bb_alt, bb_orta, ema20, ema50, rsi, anlik)
-    mod: 'YATAY', 'TREND_YUKARI', 'TREND_ASAGI', 'GUCLU_TREND_UP', 'GUCLU_TREND_DOWN', 'VOLATIL', 'BELIRSIZ'
-    """
     try:
         close = df['close']
         high = df['high']
@@ -165,25 +156,21 @@ def piyasa_modu_bul(df):
         
         anlik = close.iloc[-1]
         
-        # VOLATİL kontrolü
         if atr_ort > 0 and atr > atr_ort * ATR_VOLATIL_CARPAN:
             return 'VOLATIL', adx, atr, atr_ort, bb_ust, bb_alt, bb_orta, ema20, ema50, rsi, anlik
         
-        # GÜÇLÜ TREND (Trend Takip)
         if adx > ADX_GUCLU_TREND:
             if ema20 > ema50 and anlik > ema20:
                 return 'GUCLU_TREND_UP', adx, atr, atr_ort, bb_ust, bb_alt, bb_orta, ema20, ema50, rsi, anlik
             elif ema20 < ema50 and anlik < ema20:
                 return 'GUCLU_TREND_DOWN', adx, atr, atr_ort, bb_ust, bb_alt, bb_orta, ema20, ema50, rsi, anlik
         
-        # ORTA TREND (Breakout+Retest)
         if adx > ADX_TREND_ESIGI:
             if ema20 > ema50 and anlik > ema20:
                 return 'TREND_YUKARI', adx, atr, atr_ort, bb_ust, bb_alt, bb_orta, ema20, ema50, rsi, anlik
             elif ema20 < ema50 and anlik < ema20:
                 return 'TREND_ASAGI', adx, atr, atr_ort, bb_ust, bb_alt, bb_orta, ema20, ema50, rsi, anlik
         
-        # YATAY (Grid)
         if adx < ADX_YATAY_ESIGI:
             bb_genislik = (bb_ust - bb_alt) / bb_orta
             if bb_genislik < 0.03:
@@ -194,7 +181,7 @@ def piyasa_modu_bul(df):
         print(f"⚠️ Piyasa modu hatası: {e}", flush=True)
         return 'BELIRSIZ', 0, 0, 0, 0, 0, 0, 0, 0, 50, 0
 
-# ==================== GRID STRATEJİSİ ====================
+# ==================== GRID ====================
 def grid_sinyal(df, anlik, bb_ust, bb_alt, bb_orta, atr):
     try:
         if anlik <= bb_alt * 1.005:
@@ -208,7 +195,7 @@ def grid_sinyal(df, anlik, bb_ust, bb_alt, bb_orta, atr):
             net = brut - TOPLAM_MALIYET_ORANI
             if net < MIN_NET_KAR:
                 return None, None, None, None, None
-            sebep = f"GRID LONG | BB Alt | TP: {bb_orta:.4f}"
+            sebep = f"GRID LONG | BB Alt"
             return "LONG", tp, sl, sebep, atr
         
         if anlik >= bb_ust * 0.995:
@@ -222,14 +209,15 @@ def grid_sinyal(df, anlik, bb_ust, bb_alt, bb_orta, atr):
             net = brut - TOPLAM_MALIYET_ORANI
             if net < MIN_NET_KAR:
                 return None, None, None, None, None
-            sebep = f"GRID SHORT | BB Üst | TP: {bb_orta:.4f}"
+            sebep = f"GRID SHORT | BB Üst"
             return "SHORT", tp, sl, sebep, atr
         
         return None, None, None, None, None
-    except:
+    except Exception as e:
+        print(f"⚠️ Grid hatası: {e}", flush=True)
         return None, None, None, None, None
 
-# ==================== BREAKOUT+RETEST ====================
+# ==================== SWING ====================
 def swing_noktalari_bul(df, lookback=BREAKOUT_LOOKBACK):
     highs = []
     lows = []
@@ -245,6 +233,7 @@ def swing_noktalari_bul(df, lookback=BREAKOUT_LOOKBACK):
             lows.append((i, l))
     return highs, lows
 
+# ==================== BREAKOUT+RETEST ====================
 def breakout_retest_sinyal(df, anlik, yon_trend, atr):
     try:
         highs, lows = swing_noktalari_bul(df)
@@ -277,7 +266,7 @@ def breakout_retest_sinyal(df, anlik, yon_trend, atr):
                         brut = (tp - anlik) / anlik
                         net = brut - TOPLAM_MALIYET_ORANI
                         if net < MIN_NET_KAR: continue
-                        sebep = f"BREAKOUT↑ RETEST | Direnç: {direnc:.4f} | R/R: {rr:.1f}"
+                        sebep = f"BREAKOUT↑ RETEST | R/R: {rr:.1f}"
                         return "LONG", tp, sl, sebep, atr
         
         if yon_trend == 'TREND_ASAGI':
@@ -294,7 +283,7 @@ def breakout_retest_sinyal(df, anlik, yon_trend, atr):
                         brut = (anlik - tp) / anlik
                         net = brut - TOPLAM_MALIYET_ORANI
                         if net < MIN_NET_KAR: continue
-                        sebep = f"BREAKOUT↓ RETEST | Destek: {destek:.4f} | R/R: {rr:.1f}"
+                        sebep = f"BREAKOUT↓ RETEST | R/R: {rr:.1f}"
                         return "SHORT", tp, sl, sebep, atr
         
         return None, None, None, None, None
@@ -302,13 +291,8 @@ def breakout_retest_sinyal(df, anlik, yon_trend, atr):
         print(f"⚠️ Breakout hatası: {e}", flush=True)
         return None, None, None, None, None
 
-# ==================== TREND TAKİP (YENİ) ====================
+# ==================== TREND TAKİP ====================
 def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
-    """
-    Güçlü trendde direkt giriş yapar. Retest beklemez.
-    SL: EMA20 ± (ATR × 1.5)
-    TP: Yok (EMA20 trailing taşır)
-    """
     try:
         if len(df) < TREND_TAKIP_MUM_ONAY + 1:
             return None, None, None, None, None
@@ -316,53 +300,36 @@ def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
         son_mumlar = df.tail(TREND_TAKIP_MUM_ONAY)
         
         if mod == 'GUCLU_TREND_UP':
-            # Son 5 mumun HEPSİ EMA20'nin üstünde mi?
             hepsi_ustunde = all(son_mumlar['close'] > ema20)
-            
             if not hepsi_ustunde:
                 return None, None, None, None, None
-            
-            # RSI aşırı alım değil
             if rsi > 80:
                 return None, None, None, None, None
-            
             sl = ema20 - (atr * TREND_TAKIP_SL_CARPAN)
-            
             if sl >= anlik:
                 return None, None, None, None, None
-            
-            # TP: çok uzak (trend takip - trailing taşıyacak)
-            tp = anlik + (atr * 20)  # Sanal TP (ulaşılmaz, trailing kapatacak)
-            
+            tp = anlik + (atr * 20)
             brut = (tp - anlik) / anlik
             net = brut - TOPLAM_MALIYET_ORANI
             if net < MIN_NET_KAR:
                 return None, None, None, None, None
-            
             sebep = f"TREND↑ TAKİP | EMA20: {ema20:.4f} | RSI: {rsi:.0f}"
             return "LONG", tp, sl, sebep, atr
         
         if mod == 'GUCLU_TREND_DOWN':
             hepsi_altinda = all(son_mumlar['close'] < ema20)
-            
             if not hepsi_altinda:
                 return None, None, None, None, None
-            
             if rsi < 20:
                 return None, None, None, None, None
-            
             sl = ema20 + (atr * TREND_TAKIP_SL_CARPAN)
-            
             if sl <= anlik:
                 return None, None, None, None, None
-            
             tp = anlik - (atr * 20)
-            
             brut = (anlik - tp) / anlik
             net = brut - TOPLAM_MALIYET_ORANI
             if net < MIN_NET_KAR:
                 return None, None, None, None, None
-            
             sebep = f"TREND↓ TAKİP | EMA20: {ema20:.4f} | RSI: {rsi:.0f}"
             return "SHORT", tp, sl, sebep, atr
         
@@ -371,13 +338,14 @@ def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
         print(f"⚠️ Trend takip hatası: {e}", flush=True)
         return None, None, None, None, None
 
-# ==================== TRAILING STOP (İKİ MODLU) ====================
+# ==================== TRAILING ====================
 def trailing_stop_kontrol():
     with state_lock:
         aktif_kopya = list(AKTIF_POZISYONLAR.items())
     
     for sym, bilgi in aktif_kopya:
-        if sym not in AKTIF_POZISYONLAR: continue
+        if sym not in AKTIF_POZISYONLAR:
+            continue
         
         yon = bilgi.get("yon", "LONG")
         g = float(bilgi.get("giris_fiyati", 0))
@@ -387,8 +355,10 @@ def trailing_stop_kontrol():
         mod = bilgi.get("mod", "TREND")
         atr_b = float(bilgi.get("atr_degeri", 0))
         
-        if time.time() - giris_zaman < 120: continue
-        if atr_b <= 0: continue
+        if time.time() - giris_zaman < 120:
+            continue
+        if atr_b <= 0:
+            continue
         
         try:
             t = exchange.fetch_ticker(sym)
@@ -402,8 +372,9 @@ def trailing_stop_kontrol():
             roe = (g - anlik) / g * 100 * kaldirac_v
         
         yeni_sl = None
+        trend_bitti = False
         
-        # ✅ TREND TAKİP MODU: EMA20 takip
+        # TREND TAKİP MODU
         if mod in ['GUCLU_TREND_UP', 'GUCLU_TREND_DOWN']:
             try:
                 ohlcv = exchange.fetch_ohlcv(sym, timeframe='15m', limit=50)
@@ -411,46 +382,19 @@ def trailing_stop_kontrol():
                 ema20_guncel = ta.trend.EMAIndicator(close=df_t['close'], window=20).ema_indicator().iloc[-1]
                 
                 if yon == "LONG":
-                    # Fiyat EMA20'nin altına düştüyse → kapat (trend bitti)
                     if anlik < ema20_guncel:
-                        print(f"🔄 [TREND BİTTİ] {sym} | Fiyat EMA20 altında", flush=True)
-                        # Piyasa emriyle kapat
-                        try:
-                            exchange.cancel_all_orders(sym)
-                            miktar = None
-                            for p in exchange.fetch_positions():
-                                if p['symbol'] == sym:
-                                    miktar = float(p.get('contracts', 0) or p.get('size', 0) or 0)
-                                    break
-                            if miktar and miktar > 0:
-                                exchange.create_order(sym, 'market', 'sell', miktar, None, {'reduceOnly': True})
-                                tg_gonder(f"🔄 *TREND BİTTİ*\n📌 `{sym}` | EMA20 kırıldı\nPozisyon kapatıldı")
-                        except Exception as e:
-                            print(f"⚠️ Trend kapatma: {e}", flush=True)
-                        continue
-                    
-                    # EMA20 takip: SL = EMA20 - (ATR × 0.5)
-                    yeni_sl = ema20_guncel - (atr_b * 0.5)
+                        trend_bitti = True
+                    else:
+                        yeni_sl = ema20_guncel - (atr_b * 0.5)
                 else:
                     if anlik > ema20_guncel:
-                        print(f"🔄 [TREND BİTTİ] {sym} | Fiyat EMA20 üstünde", flush=True)
-                        try:
-                            exchange.cancel_all_orders(sym)
-                            miktar = None
-                            for p in exchange.fetch_positions():
-                                if p['symbol'] == sym:
-                                    miktar = float(p.get('contracts', 0) or p.get('size', 0) or 0)
-                                    break
-                            if miktar and miktar > 0:
-                                exchange.create_order(sym, 'market', 'buy', miktar, None, {'reduceOnly': True})
-                                tg_gonder(f"🔄 *TREND BİTTİ*\n📌 `{sym}` | EMA20 kırıldı\nPozisyon kapatıldı")
-                        except Exception as e:
-                            print(f"⚠️ Trend kapatma: {e}", flush=True)
-                        continue
-                    
-                    yeni_sl = ema20_guncel + (atr_b * 0.5)
+                        trend_bitti = True
+                    else:
+                        yeni_sl = ema20_guncel + (atr_b * 0.5)
+            except Exception as e:
+                print(f"⚠️ Trend EMA hatası: {e}", flush=True)
         
-        # ✅ DİĞER MODLAR: Klasik ROE trailing
+        # DİĞER MODLAR
         else:
             for esik_roe, kilit in TRAILING_SEVIYELER:
                 if roe >= esik_roe:
@@ -460,10 +404,30 @@ def trailing_stop_kontrol():
                         yeni_sl = g * (1 - kilit / kaldirac_v)
                     break
         
-        if yeni_sl is None: continue
+        # TREND BİTTİYSE KAPAT
+        if trend_bitti:
+            try:
+                exchange.cancel_all_orders(sym)
+                miktar = None
+                for p in exchange.fetch_positions():
+                    if p['symbol'] == sym:
+                        miktar = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+                        break
+                if miktar and miktar > 0:
+                    ky = 'sell' if yon == 'LONG' else 'buy'
+                    exchange.create_order(sym, 'market', ky, miktar, None, {'reduceOnly': True})
+                    print(f"🔄 [TREND BİTTİ] {sym} | EMA20 kırıldı", flush=True)
+                    tg_gonder(f"🔄 *TREND BİTTİ*\n📌 `{sym}` | EMA20 kırıldı\nPozisyon kapatıldı")
+            except Exception as e:
+                print(f"⚠️ Trend kapatma hatası: {e}", flush=True)
+            continue
+        
+        if yeni_sl is None:
+            continue
         
         iyilestirme = (yeni_sl > sl_kayitli * 1.0005) if yon == "LONG" else (yeni_sl < sl_kayitli * 0.9995)
-        if not iyilestirme: continue
+        if not iyilestirme:
+            continue
         
         try:
             exchange.cancel_all_orders(sym)
@@ -472,7 +436,8 @@ def trailing_stop_kontrol():
                 if p['symbol'] == sym:
                     miktar = float(p.get('contracts', 0) or p.get('size', 0) or 0)
                     break
-            if not miktar or miktar <= 0: continue
+            if not miktar or miktar <= 0:
+                continue
             
             ky = 'sell' if yon == 'LONG' else 'buy'
             exchange.create_order(sym, 'stop', ky, miktar, yeni_sl, {'stopPrice': yeni_sl, 'reduceOnly': True})
@@ -488,18 +453,21 @@ def trailing_stop_kontrol():
             print(f"🔒 [TRAILING] {sym} | {mod} | ROE:%{roe:.1f} → SL:{yeni_sl:.6f}", flush=True)
             tg_gonder(f"🔒 *KÂR KİLİTLENDİ*\n📌 `{sym}` | {mod}\n📊 ROE: `%{roe:+.2f}`\n🛑 SL: `{yeni_sl:.6f}`")
         except Exception as e:
-            print(f"⚠️ Trailing: {e}", flush=True)
+            print(f"⚠️ Trailing hatası: {e}", flush=True)
 
 # ==================== TELEGRAM ====================
 def tg_gonder(mesaj):
-    if not TELEGRAM_TOKEN or not CHAT_ID: return
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        return
     try:
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                       json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}, timeout=5)
-    except: pass
+    except:
+        pass
 
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != int(CHAT_ID): return
+    if update.effective_chat.id != int(CHAT_ID):
+        return
     try:
         balance = await asyncio.to_thread(exchange.fetch_balance)
         total = float(balance['total'].get('USDT', 0))
@@ -531,9 +499,9 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
             f"📈 Başarı: `%{oran:.1f}`\n\n"
             f"⚙️ *Modlar:*\n"
-            f"  🟦 YATAY (ADX<20) → Grid\n"
-            f"  🟩 ORTA TREND (20-30) → Breakout+Retest\n"
-            f"  🟨 GÜÇLÜ TREND (>30) → Trend Takip (EMA20)\n"
+            f"  🟦 YATAY → Grid\n"
+            f"  🟩 ORTA TREND → Breakout+Retest\n"
+            f"  🟨 GÜÇLÜ TREND → Trend Takip (EMA20)\n"
             f"  🔴 VOLATİL → Bekle"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
@@ -541,19 +509,22 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != int(CHAT_ID): return
+    if update.effective_chat.id != int(CHAT_ID):
+        return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
     await update.message.reply_text("🟢 Bot aktif! (v3: Grid + Breakout + Trend Takip)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != int(CHAT_ID): return
+    if update.effective_chat.id != int(CHAT_ID):
+        return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = False
     await update.message.reply_text("⏸️ Durduruldu.")
 
 async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != int(CHAT_ID): return
+    if update.effective_chat.id != int(CHAT_ID):
+        return
     try:
         positions = await asyncio.to_thread(exchange.fetch_positions)
         for p in positions:
@@ -561,8 +532,10 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if k > 0:
                 y = str(p.get('side', '')).upper() or "LONG"
                 ky = 'sell' if y == 'LONG' else 'buy'
-                try: exchange.cancel_all_orders(p['symbol'])
-                except: pass
+                try:
+                    exchange.cancel_all_orders(p['symbol'])
+                except:
+                    pass
                 exchange.create_order(p['symbol'], 'market', ky, k, None, {'reduceOnly': True})
         await update.message.reply_text("✅ Kapatıldı.")
     except Exception as e:
@@ -573,16 +546,19 @@ def tarayici():
     print("🚀 [BAŞLANGIÇ] ADAPTİF v3 (Grid + Breakout + Trend Takip)", flush=True)
     try:
         exchange.load_markets()
-    except: pass
+    except:
+        pass
     
     dongu = 0
     while True:
         if not tarayici_kilidi.acquire(blocking=False):
-            time.sleep(2); continue
+            time.sleep(2)
+            continue
         
         try:
             if not BOT_CALISIYOR_MU:
-                time.sleep(5); continue
+                time.sleep(5)
+                continue
             
             dongu += 1
             print(f"\n{'='*55}", flush=True)
@@ -603,7 +579,7 @@ def tarayici():
                 aktif_map = {}
                 aktif_list = []
             
-            # KAPANIŞ
+            # KAPANIŞ KONTROLÜ
             try:
                 anlik_aktif = [p['symbol'] for p in raw if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                 for eski in list(AKTIF_POZISYONLAR.keys()):
@@ -627,9 +603,11 @@ def tarayici():
                             b = int(ANALITIK.get("basarili_islem_sayisi", 0))
                             bz = int(ANALITIK.get("basarisiz_islem_sayisi", 0))
                             if karli:
-                                b += 1; tip = "✅ *KÂRLA KAPANDI*"
+                                b += 1
+                                tip = "✅ *KÂRLA KAPANDI*"
                             else:
-                                bz += 1; tip = "❌ *ZARARLA KAPANDI*"
+                                bz += 1
+                                tip = "❌ *ZARARLA KAPANDI*"
                             ANALITIK["basarili_islem_sayisi"] = b
                             ANALITIK["basarisiz_islem_sayisi"] = bz
                             COIN_COOLDOWN[eski] = {"zaman": float(time.time() + COOLDOWN_SURESI_SANIYE), "son_yon": y}
@@ -647,15 +625,19 @@ def tarayici():
             
             # SİNYAL TARAMA
             for symbol in TAKIP_EDILENLER:
-                if not BOT_CALISIYOR_MU: break
-                if len(aktif_map) >= MAKSIMUM_TOPLAM_POZISYON: break
-                if symbol in aktif_list: continue
+                if not BOT_CALISIYOR_MU:
+                    break
+                if len(aktif_map) >= MAKSIMUM_TOPLAM_POZISYON:
+                    break
+                if symbol in aktif_list:
+                    continue
                 
                 with state_lock:
                     cd = COIN_COOLDOWN.get(symbol)
                     if cd:
                         z = cd.get("zaman", 0) if isinstance(cd, dict) else float(cd)
-                        if z - time.time() > 0: continue
+                        if z - time.time() > 0:
+                            continue
                 
                 try:
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=100)
@@ -670,7 +652,6 @@ def tarayici():
                     
                     yon, tp, sl, sebep, atr_b = None, None, None, None, None
                     
-                    # MODA GÖRE STRATEJİ
                     if mod == 'YATAY':
                         yon, tp, sl, sebep, atr_b = grid_sinyal(df, anlik, bb_ust, bb_alt, bb_orta, atr)
                         if yon is None:
@@ -694,11 +675,11 @@ def tarayici():
                         print(f"      ⏸️ BELIRSIZ - işlem yok", flush=True)
                         continue
                     
-                    if yon is None: continue
+                    if yon is None:
+                        continue
                     
                     print(f"      🎯 SİNYAL! [{mod}] {yon} | {sebep}", flush=True)
                     
-                    # POZİSYON AÇ
                     bakiye = exchange.fetch_balance()
                     toplam_b = float(bakiye['total'].get('USDT', 0))
                     serbest_b = float(bakiye.get('free', {}).get('USDT', 0) or 0)
@@ -707,7 +688,8 @@ def tarayici():
                     market = exchange.market(symbol)
                     
                     kullan = min(toplam_b * POZISYON_ORANI, serbest_b)
-                    if kullan < 1: continue
+                    if kullan < 1:
+                        continue
                     
                     miktar = float(exchange.amount_to_precision(
                         symbol,
@@ -732,7 +714,8 @@ def tarayici():
                     if not sl_ok:
                         try:
                             exchange.create_order(symbol, 'market', kapat_y, miktar, None, {'reduceOnly': True})
-                        except: pass
+                        except:
+                            pass
                         continue
                     
                     with state_lock:
@@ -750,7 +733,6 @@ def tarayici():
                     hafizayi_kaydet()
                     print(f"      ✅ [AÇILDI] {symbol} {yon} | {mod} | @ {anlik}", flush=True)
                     
-                    # Moda göre emoji
                     emoji = "🟦" if mod == 'YATAY' else ("🟩" if mod in ['TREND_YUKARI', 'TREND_ASAGI'] else "🟨")
                     
                     tg_gonder(
@@ -768,8 +750,10 @@ def tarayici():
         except Exception as e:
             print(f"⚠️ Ana döngü: {e}", flush=True)
         finally:
-            try: tarayici_kilidi.release()
-            except: pass
+            try:
+                tarayici_kilidi.release()
+            except:
+                pass
         
         time.sleep(15)
 
@@ -780,7 +764,8 @@ async def main():
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     try:
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
-    except: pass
+    except:
+        pass
     
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
