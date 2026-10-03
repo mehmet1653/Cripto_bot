@@ -78,12 +78,15 @@ ADX_TREND_ESIGI = 25
 ADX_YATAY_ESIGI = 20
 ATR_VOLATIL_CARPAN = 2.0
 
+# ✅ SL GENİŞLETİLDİ
+ATR_SL_GRID = 2.0                # Eski: 1.2 → Yeni: 2.0 (Grid SL genişletildi)
+BREAKOUT_SL_TOLERANS = 0.008     # Eski: 0.005 → Yeni: 0.008
+TREND_TAKIP_SL_CARPAN = 2.0      # Aynı
+
 BREAKOUT_LOOKBACK = 50
-BREAKOUT_SL_TOLERANS = 0.005
 BREAKOUT_MIN_RR = 2.5
 
 TREND_TAKIP_MUM_ONAY = 5
-TREND_TAKIP_SL_CARPAN = 2.0
 TREND_TAKIP_BITIS_ONAY = 2
 
 MAKS_YUKSEKLIK_TREND = 0.02
@@ -213,11 +216,12 @@ def piyasa_modu_bul(df):
         print(f"⚠️ Piyasa modu hatası: {e}", flush=True)
         return 'BELIRSIZ', 0, 0, 0, 0, 0, 0, 0, 0, 50, 0
 
-# ==================== GRID ====================
+# ==================== GRID (SL GENİŞLETİLDİ) ====================
 def grid_sinyal(df, anlik, bb_ust, bb_alt, bb_orta, atr):
     try:
         if anlik <= bb_alt * 1.005:
-            sl_mesafe = atr * 1.2
+            # ✅ ATR × 2.0 (eski 1.2)
+            sl_mesafe = atr * ATR_SL_GRID
             tp_mesafe = bb_orta - anlik
             if tp_mesafe <= 0:
                 return None, None, None, None, None
@@ -227,11 +231,12 @@ def grid_sinyal(df, anlik, bb_ust, bb_alt, bb_orta, atr):
             net = brut - TOPLAM_MALIYET_ORANI
             if net < MIN_NET_KAR:
                 return None, None, None, None, None
-            sebep = f"GRID LONG | BB Alt"
+            sebep = f"GRID LONG | BB Alt | SL: {sl_mesafe:.4f}"
             return "LONG", tp, sl, sebep, atr
         
         if anlik >= bb_ust * 0.995:
-            sl_mesafe = atr * 1.2
+            # ✅ ATR × 2.0 (eski 1.2)
+            sl_mesafe = atr * ATR_SL_GRID
             tp_mesafe = anlik - bb_orta
             if tp_mesafe <= 0:
                 return None, None, None, None, None
@@ -241,7 +246,7 @@ def grid_sinyal(df, anlik, bb_ust, bb_alt, bb_orta, atr):
             net = brut - TOPLAM_MALIYET_ORANI
             if net < MIN_NET_KAR:
                 return None, None, None, None, None
-            sebep = f"GRID SHORT | BB Üst"
+            sebep = f"GRID SHORT | BB Üst | SL: {sl_mesafe:.4f}"
             return "SHORT", tp, sl, sebep, atr
         
         return None, None, None, None, None
@@ -612,7 +617,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pnl_nokta = "🟢" if pnl >= 0 else "🔴"
         
         mesaj = (
-            f"📊 *DURUM* [ADAPTİF v4.2]\n\n"
+            f"📊 *DURUM* [ADAPTİF v4.3]\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"{pnl_nokta} Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)} / {MAKSIMUM_TOPLAM_POZISYON}`"
@@ -633,7 +638,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     BOT_CALISIYOR_MU = True
     KILL_SWITCH_AKTIF = False
     ARDISIK_ZARAR_SAYACI = 0
-    await update.message.reply_text("🟢 Bot aktif! (v4.2: 3 Kategori)")
+    await update.message.reply_text("🟢 Bot aktif! (v4.3: SL Genişletildi)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID):
@@ -665,7 +670,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def tarayici():
     global ARDISIK_ZARAR_SAYACI, SON_ARDISIK_ZARAR_ZAMANI, KILL_SWITCH_AKTIF
     
-    print("🚀 [BAŞLANGIÇ] ADAPTİF v4.2 (3 Kategori)", flush=True)
+    print("🚀 [BAŞLANGIÇ] ADAPTİF v4.3 (SL Genişletildi)", flush=True)
     try:
         exchange.load_markets()
     except:
@@ -712,7 +717,6 @@ def tarayici():
                 aktif_map = {}
                 aktif_list = []
             
-            # ==================== KAPANIŞ + 3 KATEGORİ ====================
             try:
                 anlik_aktif = [p['symbol'] for p in raw if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                 for eski in list(AKTIF_POZISYONLAR.keys()):
@@ -729,26 +733,21 @@ def tarayici():
                         except:
                             pass
                         
-                        # ✅ 3 KATEGORİLİ SINIFLANDIRMA
                         if y == "LONG":
                             brut = (cikis - g) / g
                         else:
                             brut = (g - cikis) / g
                         net = brut - TOPLAM_MALIYET_ORANI
                         
-                        # Kategori belirle
                         if tp_k > 0 and abs(cikis - tp_k) / tp_k < 0.002:
-                            # TP'ye çok yakın → GERÇEK TP
                             kategori = "gercek_tp"
                             tip = "✅ *GERÇEK TP*"
                             karli = True
                         elif net > 0:
-                            # Net kâr pozitif → KÂR KİLİDİ
                             kategori = "kar_kilidi"
                             tip = "🔒 *KÂR KİLİDİYLE KAPANDI*"
                             karli = True
                         else:
-                            # Net zarar → ZARAR
                             kategori = "zarar"
                             tip = "❌ *ZARARLA KAPANDI*"
                             karli = False
