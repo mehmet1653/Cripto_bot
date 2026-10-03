@@ -83,13 +83,16 @@ BREAKOUT_SL_TOLERANS = 0.005
 BREAKOUT_MIN_RR = 2.5
 
 TREND_TAKIP_MUM_ONAY = 5
-TREND_TAKIP_SL_CARPAN = 1.5
+TREND_TAKIP_SL_CARPAN = 2.0        # ✅ 1.5 → 2.0 (daha geniş)
+TREND_TAKIP_BITIS_ONAY = 2         # ✅ Trend bitişi 2 mum onay
 
+# ✅ KADEMELİ TRAILING (trend nefes alır)
 TRAILING_SEVIYELER = [
-    (15.0, 0.10),
-    (10.0, 0.05),
-    (6.0, 0.02),
-    (3.0, 0.01),
+    (5.0, 0.0),      # ROE %5 → SL başabaş (kâr garantili)
+    (10.0, 0.03),    # ROE %10 → SL %3 kâra
+    (15.0, 0.06),    # ROE %15 → SL %6 kâra
+    (25.0, 0.12),    # ROE %25 → SL %12 kâra
+    (40.0, 0.20),    # ROE %40 → SL %20 kâra
 ]
 
 def hafizayi_yukle():
@@ -338,7 +341,7 @@ def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
         print(f"⚠️ Trend takip hatası: {e}", flush=True)
         return None, None, None, None, None
 
-# ==================== TRAILING ====================
+# ==================== TRAILING (YENİ MANTIK) ====================
 def trailing_stop_kontrol():
     with state_lock:
         aktif_kopya = list(AKTIF_POZISYONLAR.items())
@@ -371,6 +374,11 @@ def trailing_stop_kontrol():
         else:
             roe = (g - anlik) / g * 100 * kaldirac_v
         
+        # ✅ Başabaş + komisyon için min SL seviyesi
+        min_kar_seviyesi = g * (1 + TOPLAM_MALIYET_ORANI / kaldirac_v)
+        if yon == "SHORT":
+            min_kar_seviyesi = g * (1 - TOPLAM_MALIYET_ORANI / kaldirac_v)
+        
         yeni_sl = None
         trend_bitti = False
         
@@ -381,20 +389,27 @@ def trailing_stop_kontrol():
                 df_t = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 ema20_guncel = ta.trend.EMAIndicator(close=df_t['close'], window=20).ema_indicator().iloc[-1]
                 
+                # ✅ Trend bitişi 2 mum onayı
+                son_2 = df_t.tail(2)
+                
                 if yon == "LONG":
-                    if anlik < ema20_guncel:
+                    # Son 2 mumun HEPSİ EMA20 altındaysa → trend bitti
+                    if all(son_2['close'] < ema20_guncel):
                         trend_bitti = True
                     else:
-                        yeni_sl = ema20_guncel - (atr_b * 0.5)
+                        hedef_sl = ema20_guncel - (atr_b * TREND_TAKIP_SL_CARPAN)
+                        # ✅ SL min kâr seviyesinin altına inmesin
+                        yeni_sl = max(hedef_sl, min_kar_seviyesi)
                 else:
-                    if anlik > ema20_guncel:
+                    if all(son_2['close'] > ema20_guncel):
                         trend_bitti = True
                     else:
-                        yeni_sl = ema20_guncel + (atr_b * 0.5)
+                        hedef_sl = ema20_guncel + (atr_b * TREND_TAKIP_SL_CARPAN)
+                        yeni_sl = min(hedef_sl, min_kar_seviyesi)
             except Exception as e:
                 print(f"⚠️ Trend EMA hatası: {e}", flush=True)
         
-        # DİĞER MODLAR
+        # DİĞER MODLAR (Grid/Breakout) — kademeli ROE trailing
         else:
             for esik_roe, kilit in TRAILING_SEVIYELER:
                 if roe >= esik_roe:
@@ -402,6 +417,11 @@ def trailing_stop_kontrol():
                         yeni_sl = g * (1 + kilit / kaldirac_v)
                     else:
                         yeni_sl = g * (1 - kilit / kaldirac_v)
+                    # ✅ Kâr kilit seviyesi min başabaş üstünde olsun
+                    if yon == "LONG":
+                        yeni_sl = max(yeni_sl, min_kar_seviyesi)
+                    else:
+                        yeni_sl = min(yeni_sl, min_kar_seviyesi)
                     break
         
         # TREND BİTTİYSE KAPAT
@@ -416,8 +436,8 @@ def trailing_stop_kontrol():
                 if miktar and miktar > 0:
                     ky = 'sell' if yon == 'LONG' else 'buy'
                     exchange.create_order(sym, 'market', ky, miktar, None, {'reduceOnly': True})
-                    print(f"🔄 [TREND BİTTİ] {sym} | EMA20 kırıldı", flush=True)
-                    tg_gonder(f"🔄 *TREND BİTTİ*\n📌 `{sym}` | EMA20 kırıldı\nPozisyon kapatıldı")
+                    print(f"🔄 [TREND BİTTİ] {sym} | EMA20 2 mum kırıldı | ROE:%{roe:.1f}", flush=True)
+                    tg_gonder(f"🔄 *TREND BİTTİ*\n📌 `{sym}` | EMA20 2 mum kırıldı\n📊 ROE: `%{roe:+.2f}`")
             except Exception as e:
                 print(f"⚠️ Trend kapatma hatası: {e}", flush=True)
             continue
@@ -451,7 +471,10 @@ def trailing_stop_kontrol():
                     AKTIF_POZISYONLAR[sym]["sl_fiyat"] = yeni_sl
             
             print(f"🔒 [TRAILING] {sym} | {mod} | ROE:%{roe:.1f} → SL:{yeni_sl:.6f}", flush=True)
-            tg_gonder(f"🔒 *KÂR KİLİTLENDİ*\n📌 `{sym}` | {mod}\n📊 ROE: `%{roe:+.2f}`\n🛑 SL: `{yeni_sl:.6f}`")
+            
+            # ✅ Sadece ROE pozitifse mesaj gönder
+            if roe > 0:
+                tg_gonder(f"🔒 *KÂR KİLİTLENDİ*\n📌 `{sym}` | {mod}\n📊 ROE: `%{roe:+.2f}`\n🛑 Yeni SL: `{yeni_sl:.6f}`")
         except Exception as e:
             print(f"⚠️ Trailing hatası: {e}", flush=True)
 
@@ -492,7 +515,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detay += f"\n• `{sym}` | {y} ({k}x) | {mod_bilgi}\n  ROE: `%{roe:+.2f}`"
         
         mesaj = (
-            f"📊 *DURUM* [ADAPTİF v3]\n\n"
+            f"📊 *DURUM* [ADAPTİF v3.1]\n\n"
             f"💰 Kasa: `{total:.2f} USDT` | PnL: `{pnl:+.2f}`\n"
             f"📌 Açık: `{len(pos)} / {MAKSIMUM_TOPLAM_POZISYON}`"
             f"{pos_detay}\n\n"
@@ -502,7 +525,8 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"  🟦 YATAY → Grid\n"
             f"  🟩 ORTA TREND → Breakout+Retest\n"
             f"  🟨 GÜÇLÜ TREND → Trend Takip (EMA20)\n"
-            f"  🔴 VOLATİL → Bekle"
+            f"  🔴 VOLATİL → Bekle\n\n"
+            f"🔒 *Trailing:* %5 başabaş → %10/%15/%25/%40 kademeli"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
     except Exception as e:
@@ -513,7 +537,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (v3: Grid + Breakout + Trend Takip)")
+    await update.message.reply_text("🟢 Bot aktif! (v3.1: Kademeli Trailing)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID):
@@ -543,7 +567,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ANA TARAYICI ====================
 def tarayici():
-    print("🚀 [BAŞLANGIÇ] ADAPTİF v3 (Grid + Breakout + Trend Takip)", flush=True)
+    print("🚀 [BAŞLANGIÇ] ADAPTİF v3.1 (Kademeli Trailing)", flush=True)
     try:
         exchange.load_markets()
     except:
