@@ -108,6 +108,7 @@ MAKSIMUM_TOPLAM_POZISYON = 3
 COOLDOWN_SURESI_SANIYE = 30 * 60
 
 MIN_RR = 1.8
+MIN_RR_TREND_TAKIP = 1.5
 TP_GERI_CEKME = 0.003
 
 # Trailing
@@ -169,11 +170,6 @@ COIN_COOLDOWN = kalici.get("cooldownlar", {})
 
 # ==================== MUM TABANLI TREND TESPİTİ ====================
 def trend_tespit_et(df):
-    """
-    Mumlardan trend tespiti:
-    - Bant genişliği (son 10 mum) → YATAY mı TREND mi?
-    - Yeşil/kırmızı mum sayısı → YUKARI mı ASAGI mı?
-    """
     try:
         son_10 = df.tail(10).reset_index(drop=True)
         son_10_yuksek = son_10['high'].max()
@@ -188,7 +184,6 @@ def trend_tespit_et(df):
             else:
                 kirmizi_sayisi += 1
 
-        # REJİM
         if bant_genisligi < 1.5:
             rejim = "YATAY"
             yon = "BELIRSIZ"
@@ -238,7 +233,6 @@ def likidite_seviyeleri(df, highs, lows, anlik_fiyat):
     return destekler, direncler
 
 def sweep_tespit_et(df_15m, df_5m, destekler, direncler, anlik_fiyat, yon):
-    """Teyitli sweep: 5m mum onayı + hacim."""
     if len(df_15m) < 3: return None, None, None, None
 
     son_mum = df_15m.iloc[-1]
@@ -246,7 +240,6 @@ def sweep_tespit_et(df_15m, df_5m, destekler, direncler, anlik_fiyat, yon):
     iki_onceki = df_15m.iloc[-3]
     atr = ta.volatility.AverageTrueRange(df_15m['high'], df_15m['low'], df_15m['close'], window=14).average_true_range().iloc[-1]
 
-    # 5m teyit
     son_mum_yesil_5m = df_5m['close'].iloc[-1] > df_5m['open'].iloc[-1]
     son_mum_kirmizi_5m = df_5m['close'].iloc[-1] < df_5m['open'].iloc[-1]
     hacim_ort_5m = df_5m['volume'].rolling(20).mean().iloc[-1]
@@ -262,7 +255,6 @@ def sweep_tespit_et(df_15m, df_5m, destekler, direncler, anlik_fiyat, yon):
     long_izinli = (yon in ["YUKARI", "BELIRSIZ"])
     short_izinli = (yon in ["ASAGI", "BELIRSIZ"])
 
-    # LONG sweep
     if long_izinli:
         for destek in destekler:
             kirildi, en_dusuk = False, 999999999
@@ -276,7 +268,6 @@ def sweep_tespit_et(df_15m, df_5m, destekler, direncler, anlik_fiyat, yon):
                             sl_fiyat = anlik_fiyat * 0.98
                         return "LONG", destek, sl_fiyat, en_dusuk
 
-    # SHORT sweep
     if short_izinli:
         for direnc in direncler:
             kirildi, en_yuksek = False, 0
@@ -294,7 +285,6 @@ def sweep_tespit_et(df_15m, df_5m, destekler, direncler, anlik_fiyat, yon):
 
 # ==================== BREAKOUT / BREAKDOWN ====================
 def breakout_sinyal(df_15m, df_5m, anlik_fiyat, yon):
-    """Teyitli breakout/breakdown: 2 mum onayı + hacim."""
     try:
         bb = ta.volatility.BollingerBands(df_15m['close'], window=20, window_dev=2)
         bb_high = bb.bollinger_hband().iloc[-1]
@@ -311,12 +301,10 @@ def breakout_sinyal(df_15m, df_5m, anlik_fiyat, yon):
         long_izinli = (yon in ["YUKARI", "BELIRSIZ"])
         short_izinli = (yon in ["ASAGI", "BELIRSIZ"])
 
-        # LONG breakout
         if long_izinli:
             if anlik_fiyat > bb_high * 1.001 and son_2_yesil and hacim_teyit:
                 return "LONG"
 
-        # SHORT breakdown
         if short_izinli:
             if anlik_fiyat < bb_low * 0.999 and son_2_kirmizi and hacim_teyit:
                 return "SHORT"
@@ -327,7 +315,6 @@ def breakout_sinyal(df_15m, df_5m, anlik_fiyat, yon):
 
 # ==================== BANT DÖNÜŞÜ (YATAY MOD) ====================
 def bant_donusu_sinyal(df_15m, df_5m, anlik_fiyat, yon):
-    """YATAY modda bant dönüşü: 5m mum + Stoch dönüş + hacim."""
     try:
         bb = ta.volatility.BollingerBands(df_15m['close'], window=20, window_dev=2)
         bb_high = bb.bollinger_hband().iloc[-1]
@@ -349,15 +336,48 @@ def bant_donusu_sinyal(df_15m, df_5m, anlik_fiyat, yon):
         long_izinli = (yon in ["YUKARI", "BELIRSIZ"])
         short_izinli = (yon in ["ASAGI", "BELIRSIZ"])
 
-        # LONG: Alt banda değdi
         if long_izinli:
             if anlik_fiyat <= bb_low * 1.005 and son_mum_yesil_5m and stoch_donus_yukari and hacim_teyit:
                 return "LONG"
 
-        # SHORT: Üst banda değdi
         if short_izinli:
             if anlik_fiyat >= bb_high * 0.995 and son_mum_kirmizi_5m and stoch_donus_asagi and hacim_teyit:
                 return "SHORT"
+
+        return None
+    except:
+        return None
+
+# ==================== 🆕 TREND TAKİP ====================
+def trend_takip_sinyal(df_15m, df_5m, anlik_fiyat, yon, rejim):
+    """
+    TREND modda çalışır.
+    Yön uyumlu + son mum onayı + hacim + R/R kontrolü.
+    Sıkı teyitli.
+    """
+    try:
+        if rejim != "TREND":
+            return None
+        
+        # Hacim
+        hacim_ort = df_15m['volume'].rolling(20).mean().iloc[-1]
+        guncel_hacim = df_15m['volume'].iloc[-1]
+        hacim_teyit = guncel_hacim > (hacim_ort * 1.5)
+
+        if not hacim_teyit:
+            return None
+
+        # Son mum onayı
+        son_mum_yesil = df_15m['close'].iloc[-1] > df_15m['open'].iloc[-1]
+        son_mum_kirmizi = df_15m['close'].iloc[-1] < df_15m['open'].iloc[-1]
+
+        # LONG: Yön YUKARI + son mum yeşil
+        if yon == "YUKARI" and son_mum_yesil:
+            return "LONG"
+
+        # SHORT: Yön ASAGI + son mum kırmızı
+        if yon == "ASAGI" and son_mum_kirmizi:
+            return "SHORT"
 
         return None
     except:
@@ -390,21 +410,21 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             y = str(p.get('side', '')).upper() or "?"
             g = float(p.get('entryPrice', 0))
             k = int(p.get('leverage', KALDIRAC))
+            mod = AKTIF_POZISYONLAR.get(sym, {}).get("mod", "?")
             t = await asyncio.to_thread(exchange.fetch_ticker, sym)
             gf = float(t['last'])
             f = (gf - g) / g if y == "LONG" else (g - gf) / g
             roe = f * 100 * k
-            pos_detay += f"\n• `{sym}` | {y} ({k}x)\n  Giriş: `{g}` | ROE: `%{roe:+.2f}`"
+            pos_detay += f"\n• `{sym}` | {y} ({k}x) [{mod}]\n  Giriş: `{g}` | ROE: `%{roe:+.2f}`"
 
         mesaj = (
-            f"📊 *DURUM* [MUM TABANLI SİSTEM]\n\n"
+            f"📊 *DURUM* [MUM + TREND TAKİP]\n\n"
             f"💰 Kasa: `{total:.2f} USDT` | PnL: `{pnl:+.2f}`\n"
             f"📌 Açık: `{len(pos)} / {MAKSIMUM_TOPLAM_POZISYON}`"
             f"{pos_detay}\n\n"
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
             f"📈 Başarı: `%{oran:.1f}`\n\n"
-            f"📋 Havuz: `{len(takip_listesi())}` coin\n"
-            f"   Çekirdek: `{len(CEKIRDEK_LISTE)}` | Dinamik: `{len(DINAMIK_LISTE)}`"
+            f"📋 Havuz: `{len(takip_listesi())}` coin"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
     except Exception as e:
@@ -414,7 +434,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Bot aktif! (Mum Tabanlı Sistem)")
+    await update.message.reply_text("🟢 Bot aktif! (Mum + Trend Takip)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -660,7 +680,7 @@ def akilli_seviye(anlik, yon, df):
 # ==================== ANA TARAYICI ====================
 def tarayici():
     global SON_HAVUZ_GUNCELLEME
-    print("🚀 [BAŞLANGIÇ] MUM TABANLI SİSTEM + HİBRİT HAVUZ...", flush=True)
+    print("🚀 [BAŞLANGIÇ] MUM + TREND TAKİP + HİBRİT HAVUZ...", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -767,7 +787,7 @@ def tarayici():
                     # TREND TESPİT
                     rejim, yon = trend_tespit_et(df_15m)
 
-                    # SWEEP
+                    # DESTEK/DİRENÇ
                     highs, lows = swing_noktalari_bul(df_15m)
                     destekler, direncler = [], []
                     if len(highs) >= 2 and len(lows) >= 2:
@@ -777,9 +797,8 @@ def tarayici():
                         if direncler:
                             print(f"   🎯 Direnç: {[f'{d:.4f}' for d in direncler]}", flush=True)
 
-                    yon_s, likidite, sl_s, sweep_uc = sweep_tespit_et(df_15m, df_5m, destekler, direncler, anlik, yon)
-
                     mod = None
+                    yon_s = None
                     tp_fiyat = None
                     sl_fiyat = None
                     kapat_yon = None
@@ -787,8 +806,9 @@ def tarayici():
                     rr = 0
                     sebep = ""
 
+                    # 1. SWEEP
+                    yon_s, likidite, sl_s, sweep_uc = sweep_tespit_et(df_15m, df_5m, destekler, direncler, anlik, yon)
                     if yon_s:
-                        # SWEEP
                         atr = ta.volatility.AverageTrueRange(df_15m['high'], df_15m['low'], df_15m['close'], window=14).average_true_range().iloc[-1]
                         tp_fiyat, rr = tp_hesapla_sweep(yon_s, anlik, sl_s, destekler, direncler, atr)
                         if rr >= MIN_RR:
@@ -796,14 +816,14 @@ def tarayici():
                             sl_fiyat = sl_s
                             kapat_yon = 'sell' if yon_s == 'LONG' else 'buy'
                             hedef_roe = abs((tp_fiyat - anlik) / anlik) * 100 * KALDIRAC
-                            sebep = f"Sweep {yon_s} | Likidite: {likidite:.4f}"
-                            print(f"   🎯 [{mod}] SİNYAL! {yon_s} | R/R: {rr:.2f}", flush=True)
+                            sebep = f"Sweep {yon_s}"
+                            print(f"   🎯 [SWEEP] SİNYAL! {yon_s} | R/R: {rr:.2f}", flush=True)
                         else:
                             print(f"   ⏭️ Sweep R/R düşük: {rr:.2f}", flush=True)
                     else:
                         print(f"   ⏭️ Sweep yok", flush=True)
 
-                    # BREAKOUT
+                    # 2. BREAKOUT
                     if mod is None and rejim == "TREND":
                         yon_b = breakout_sinyal(df_15m, df_5m, anlik, yon)
                         if yon_b:
@@ -814,22 +834,42 @@ def tarayici():
                                 yon_s = yon_b
                                 sebep = f"Breakout {yon_b}"
                                 print(f"   🎯 [BREAKOUT] SİNYAL! {yon_b} | R/R: {rr:.2f}", flush=True)
+                            else:
+                                print(f"   ⏭️ Breakout R/R düşük: {rr:.2f}", flush=True)
                         else:
                             print(f"   ⏭️ Breakout yok", flush=True)
 
-                    # BANT DÖNÜŞÜ
+                    # 3. BANT DÖNÜŞÜ (YATAY)
                     if mod is None and rejim == "YATAY":
                         yon_bd = bant_donusu_sinyal(df_15m, df_5m, anlik, yon)
                         if yon_bd:
                             tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = akilli_seviye(anlik, yon_bd, df_15m)
                             rr = abs(tp_fiyat - anlik) / abs(anlik - sl_fiyat) if abs(anlik - sl_fiyat) > 0 else 0
                             if rr >= MIN_RR:
-                                mod = "BANT DÖNÜŞÜ"
+                                mod = "BANT_DONUSU"
                                 yon_s = yon_bd
                                 sebep = f"Bant Dönüşü {yon_bd}"
                                 print(f"   🎯 [BANT DÖNÜŞÜ] SİNYAL! {yon_bd} | R/R: {rr:.2f}", flush=True)
+                            else:
+                                print(f"   ⏭️ Bant dönüşü R/R düşük: {rr:.2f}", flush=True)
                         else:
                             print(f"   ⏭️ Bant dönüşü yok", flush=True)
+
+                    # 4. 🆕 TREND TAKİP
+                    if mod is None:
+                        yon_tt = trend_takip_sinyal(df_15m, df_5m, anlik, yon, rejim)
+                        if yon_tt:
+                            tp_fiyat, sl_fiyat, kapat_yon, hedef_roe = akilli_seviye(anlik, yon_tt, df_15m)
+                            rr = abs(tp_fiyat - anlik) / abs(anlik - sl_fiyat) if abs(anlik - sl_fiyat) > 0 else 0
+                            if rr >= MIN_RR_TREND_TAKIP:
+                                mod = "TREND_TAKIP"
+                                yon_s = yon_tt
+                                sebep = f"Trend Takip {yon_tt} | Yön: {yon}"
+                                print(f"   🎯 [TREND TAKİP] SİNYAL! {yon_tt} | R/R: {rr:.2f}", flush=True)
+                            else:
+                                print(f"   ⏭️ Trend Takip R/R düşük: {rr:.2f}", flush=True)
+                        else:
+                            print(f"   ⏭️ Trend Takip yok", flush=True)
 
                     if mod is None:
                         continue
