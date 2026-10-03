@@ -218,7 +218,7 @@ AKTIF_POZISYONLAR = kalici.get("aktif_sistemler", {})
 ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0})
 COIN_COOLDOWN = kalici.get("cooldownlar", {})
 
-# ==================== EŞİK TAZELEME (700 MUM - DİNAMİK SINIRLAR) ====================
+# ==================== EŞİK TAZELEME (DARALTILMIŞ SINIRLAR) ====================
 def esikleri_tazele():
     global SON_ESIK_GUNCELLEME, COIN_ESIKLERI
     
@@ -235,7 +235,7 @@ def esikleri_tazele():
     
     for symbol in takip_listesi():
         try:
-            # 7 GÜNLÜK VERİ (700 mum = 15m x 700 = ~7.3 gün)
+            # 7 GÜNLÜK VERİ (700 mum)
             with borsa_kilidi:
                 ohlcv = exchange.fetch_ohlcv(symbol, timeframe=ZAMAN_DILIMI, limit=700)
             
@@ -246,7 +246,7 @@ def esikleri_tazele():
                 yeni_esikler[symbol] = VARSAYILAN_ESIK.copy()
                 continue
             
-            # ============ UZUN VADELİ (7 GÜN) → DİNAMİK SINIRLAR ============
+            # UZUN VADELİ (7 GÜN) → SINIRLAR
             adx_uzun = ta.trend.ADXIndicator(
                 high=df['high'], low=df['low'], close=df['close'], window=14
             ).adx().dropna()
@@ -258,11 +258,11 @@ def esikleri_tazele():
             adx_alt_sinir = float(adx_uzun.quantile(0.20))
             adx_ust_sinir = float(adx_uzun.quantile(0.85))
             
-            # Güvenlik sınırları
-            adx_alt_sinir = max(15, min(22, adx_alt_sinir))
-            adx_ust_sinir = max(24, min(40, adx_ust_sinir))
+            # ⚡ DARALTILMIŞ GÜVENLİK SINIRLARI
+            adx_alt_sinir = max(15, min(20, adx_alt_sinir))   # MAX 20
+            adx_ust_sinir = max(22, min(28, adx_ust_sinir))   # MAX 28
             
-            # ============ KISA VADELİ (SON 100 MUM) → EŞİK DEĞERLERİ ============
+            # KISA VADELİ (SON 100 MUM) → EŞİK DEĞERLERİ
             son_100 = df.tail(100)
             
             adx_kisa = ta.trend.ADXIndicator(
@@ -278,14 +278,14 @@ def esikleri_tazele():
             
             # Dinamik sınırlarla kırp
             adx_trend = max(adx_alt_sinir, min(adx_ust_sinir, adx_trend_ham))
-            adx_durgun = max(15, min(adx_alt_sinir, adx_durgun_ham))
+            adx_durgun = max(13, min(adx_alt_sinir, adx_durgun_ham))
             
             # RSI
             rsi_uzun = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi().dropna()
             rsi_alt_sinir = float(rsi_uzun.quantile(0.20))
             rsi_ust_sinir = float(rsi_uzun.quantile(0.80))
-            rsi_alt_sinir = max(35, min(45, rsi_alt_sinir))
-            rsi_ust_sinir = max(55, min(65, rsi_ust_sinir))
+            rsi_alt_sinir = max(38, min(48, rsi_alt_sinir))   # MAX 48
+            rsi_ust_sinir = max(52, min(62, rsi_ust_sinir))   # MAX 62
             
             rsi_kisa = ta.momentum.RSIIndicator(close=son_100['close'], window=14).rsi().dropna()
             rsi_alt_ham = float(rsi_kisa.quantile(0.25))
@@ -363,7 +363,7 @@ def piyasa_modu_tespit(df, symbol):
     except Exception:
         return 'BELIRSIZ', 0, 0, 0, 0, 0, 0, 50, 0
 
-# ==================== SİNYAL ÜRETİCİ (GEVŞETİLMİŞ) ====================
+# ==================== SİNYAL ÜRETİCİ (DAHA GEVŞEK) ====================
 def sinyal_uret(df, anlik_fiyat, symbol):
     try:
         if len(df) < 60:
@@ -381,13 +381,13 @@ def sinyal_uret(df, anlik_fiyat, symbol):
         
         # TREND YUKARI
         if mod == 'TREND_YUKARI':
-            ema20_yakin = abs(son_mum['low'] - ema20) / ema20 < 0.01
+            ema20_yakin = abs(son_mum['low'] - ema20) / ema20 < 0.012
             yesil_kapanis = son_mum['close'] > son_mum['open']
             ustunde = son_mum['close'] > ema20
             
-            momentum = (anlik_fiyat > ema20 and ema20 > ema50 and 45 < rsi < RSI_TREND_UST and son_mum['close'] > onceki['close'])
+            momentum = (anlik_fiyat > ema20 and ema20 > ema50 and 42 < rsi < RSI_TREND_UST and son_mum['close'] > onceki['close'])
             son_3_yesil = sum(1 for i in range(len(son_3)) if son_3['close'].iloc[i] > son_3['open'].iloc[i]) >= 2
-            giris_var = (ema20_yakin and yesil_kapanis and ustunde) or momentum or (ustunde and son_3_yesil and 40 < rsi < RSI_TREND_UST)
+            giris_var = (ema20_yakin and yesil_kapanis and ustunde) or momentum or (ustunde and son_3_yesil and 38 < rsi < RSI_TREND_UST)
             
             if giris_var and rsi < RSI_TREND_UST:
                 sl_mesafe = atr * ATR_SL_TREND
@@ -410,13 +410,13 @@ def sinyal_uret(df, anlik_fiyat, symbol):
         
         # TREND ASAGI
         if mod == 'TREND_ASAGI':
-            ema20_yakin = abs(son_mum['high'] - ema20) / ema20 < 0.01
+            ema20_yakin = abs(son_mum['high'] - ema20) / ema20 < 0.012
             kirmizi_kapanis = son_mum['close'] < son_mum['open']
             altinda = son_mum['close'] < ema20
             
-            momentum = (anlik_fiyat < ema20 and ema20 < ema50 and RSI_TREND_ALT < rsi < 55 and son_mum['close'] < onceki['close'])
+            momentum = (anlik_fiyat < ema20 and ema20 < ema50 and RSI_TREND_ALT < rsi < 58 and son_mum['close'] < onceki['close'])
             son_3_kirmizi = sum(1 for i in range(len(son_3)) if son_3['close'].iloc[i] < son_3['open'].iloc[i]) >= 2
-            giris_var = (ema20_yakin and kirmizi_kapanis and altinda) or momentum or (altinda and son_3_kirmizi and RSI_TREND_ALT < rsi < 60)
+            giris_var = (ema20_yakin and kirmizi_kapanis and altinda) or momentum or (altinda and son_3_kirmizi and RSI_TREND_ALT < rsi < 62)
             
             if giris_var and rsi > RSI_TREND_ALT:
                 sl_mesafe = atr * ATR_SL_TREND
@@ -437,10 +437,10 @@ def sinyal_uret(df, anlik_fiyat, symbol):
             else:
                 return None, None, None, None, None, "TREND↓ şart yok"
         
-        # DURGUN (GEVŞETİLDİ)
+        # DURGUN (ÇOK GEVŞETİLDİ)
         if mod == 'DURGUN':
-            alt_banda_yakin = son_mum['low'] <= bb_alt * 1.01     # %1 tolerans
-            asiri_satim = rsi < es['rsi_alt'] + 5                 # +5 tolerans
+            alt_banda_yakin = son_mum['low'] <= bb_alt * 1.015    # %1.5 tolerans
+            asiri_satim = rsi < es['rsi_alt'] + 8                 # +8 tolerans
             
             if alt_banda_yakin and asiri_satim:
                 sl_mesafe = atr * ATR_SL_DURGUN
@@ -456,8 +456,8 @@ def sinyal_uret(df, anlik_fiyat, symbol):
                 sebep = f"DURGUN LONG | BB Alt + RSI:{rsi:.0f} | ADX:{adx:.1f}"
                 return "LONG", tp, sl, sebep, atr, "OK"
             
-            ust_banda_yakin = son_mum['high'] >= bb_ust * 0.99   # %1 tolerans
-            asiri_alim = rsi > es['rsi_ust'] - 5                  # -5 tolerans
+            ust_banda_yakin = son_mum['high'] >= bb_ust * 0.985   # %1.5 tolerans
+            asiri_alim = rsi > es['rsi_ust'] - 8                  # -8 tolerans
             
             if ust_banda_yakin and asiri_alim:
                 sl_mesafe = atr * ATR_SL_DURGUN
@@ -636,7 +636,7 @@ async def esikler_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global SON_ESIK_GUNCELLEME
     SON_ESIK_GUNCELLEME = 0
-    await update.message.reply_text("⚙️ Eşikler zorla tazeleniyor (7 günlük veriyle)...")
+    await update.message.reply_text("⚙️ Eşikler zorla tazeleniyor (daraltılmış sınırlarla)...")
     await asyncio.to_thread(esikleri_tazele)
 
 # ==================== TRAILING ====================
@@ -811,7 +811,7 @@ def kapanis_kontrol():
 # ==================== ANA TARAYICI ====================
 def tarayici():
     global SON_HAVUZ_GUNCELLEME, KILL_SWITCH_AKTIF, ARDISIK_ZARAR_SAYACI
-    print(f"🚀 [BAŞLANGIÇ] DİNAMİK SINIRLAR + ADAPTİF | {ZAMAN_DILIMI}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] DARALTILMIŞ SINIRLAR + ADAPTİF | {ZAMAN_DILIMI}", flush=True)
     try:
         exchange.load_markets()
     except: pass
