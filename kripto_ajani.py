@@ -89,7 +89,9 @@ def havuzu_guncelle():
         return False
 
 def takip_listesi():
-    return CEKIRDEK_LISTE + DINAMIK_LISTE
+    with state_lock:
+        acik = list(AKTIF_POZISYONLAR.keys())
+    return list(set(CEKIRDEK_LISTE + DINAMIK_LISTE + acik))
 
 # ==================== DURUM ====================
 BOT_CALISIYOR_MU = True
@@ -133,9 +135,11 @@ TRAILING_ATR = [
 MAKS_ACIK_KALMA_SURESI_TREND = 4 * 60 * 60
 MAKS_ACIK_KALMA_SURESI_DURGUN = 45 * 60
 
-# Coin bazlı eşik
+# EŞİK TAZELEME (2 SAAT + ACİL DURUM)
 SON_ESIK_GUNCELLEME = 0
-ESIK_GUNCELLEME_SURESI = 4 * 60 * 60
+ESIK_GUNCELLEME_SURESI = 2 * 60 * 60      # 2 saat (eski: 4 saat)
+SON_ACIL_TAZELEME = 0
+ACIL_TAZELEME_MIN_ARALIK = 15 * 60        # Acil tazelemeler arası min 15 dakika
 COIN_ESIKLERI = {}
 
 VARSAYILAN_ESIK = {
@@ -218,15 +222,15 @@ AKTIF_POZISYONLAR = kalici.get("aktif_sistemler", {})
 ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0})
 COIN_COOLDOWN = kalici.get("cooldownlar", {})
 
-# ==================== EŞİK TAZELEME (DARALTILMIŞ SINIRLAR) ====================
-def esikleri_tazele():
+# ==================== EŞİK TAZELEME ====================
+def esikleri_tazele(force=False):
     global SON_ESIK_GUNCELLEME, COIN_ESIKLERI
     
-    if time.time() - SON_ESIK_GUNCELLEME < ESIK_GUNCELLEME_SURESI:
+    if not force and time.time() - SON_ESIK_GUNCELLEME < ESIK_GUNCELLEME_SURESI:
         return
     
     print(f"\n{'='*60}", flush=True)
-    print(f"⚙️ [EŞİK TAZELEME] Başlıyor... {time.strftime('%H:%M:%S')}", flush=True)
+    print(f"⚙️ [EŞİK TAZELEME] {'(ZORLA) ' if force else ''}Başlıyor... {time.strftime('%H:%M:%S')}", flush=True)
     print(f"{'='*60}", flush=True)
     
     SON_ESIK_GUNCELLEME = time.time()
@@ -235,7 +239,6 @@ def esikleri_tazele():
     
     for symbol in takip_listesi():
         try:
-            # 7 GÜNLÜK VERİ (700 mum)
             with borsa_kilidi:
                 ohlcv = exchange.fetch_ohlcv(symbol, timeframe=ZAMAN_DILIMI, limit=700)
             
@@ -246,7 +249,6 @@ def esikleri_tazele():
                 yeni_esikler[symbol] = VARSAYILAN_ESIK.copy()
                 continue
             
-            # UZUN VADELİ (7 GÜN) → SINIRLAR
             adx_uzun = ta.trend.ADXIndicator(
                 high=df['high'], low=df['low'], close=df['close'], window=14
             ).adx().dropna()
@@ -258,11 +260,9 @@ def esikleri_tazele():
             adx_alt_sinir = float(adx_uzun.quantile(0.20))
             adx_ust_sinir = float(adx_uzun.quantile(0.85))
             
-            # ⚡ DARALTILMIŞ GÜVENLİK SINIRLARI
-            adx_alt_sinir = max(15, min(20, adx_alt_sinir))   # MAX 20
-            adx_ust_sinir = max(22, min(28, adx_ust_sinir))   # MAX 28
+            adx_alt_sinir = max(15, min(20, adx_alt_sinir))
+            adx_ust_sinir = max(22, min(28, adx_ust_sinir))
             
-            # KISA VADELİ (SON 100 MUM) → EŞİK DEĞERLERİ
             son_100 = df.tail(100)
             
             adx_kisa = ta.trend.ADXIndicator(
@@ -276,16 +276,14 @@ def esikleri_tazele():
             adx_trend_ham = float(adx_kisa.quantile(0.70))
             adx_durgun_ham = float(adx_kisa.quantile(0.30))
             
-            # Dinamik sınırlarla kırp
             adx_trend = max(adx_alt_sinir, min(adx_ust_sinir, adx_trend_ham))
             adx_durgun = max(13, min(adx_alt_sinir, adx_durgun_ham))
             
-            # RSI
             rsi_uzun = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi().dropna()
             rsi_alt_sinir = float(rsi_uzun.quantile(0.20))
             rsi_ust_sinir = float(rsi_uzun.quantile(0.80))
-            rsi_alt_sinir = max(38, min(48, rsi_alt_sinir))   # MAX 48
-            rsi_ust_sinir = max(52, min(62, rsi_ust_sinir))   # MAX 62
+            rsi_alt_sinir = max(38, min(48, rsi_alt_sinir))
+            rsi_ust_sinir = max(52, min(62, rsi_ust_sinir))
             
             rsi_kisa = ta.momentum.RSIIndicator(close=son_100['close'], window=14).rsi().dropna()
             rsi_alt_ham = float(rsi_kisa.quantile(0.25))
@@ -325,6 +323,38 @@ def coin_esigi_al(symbol):
     with state_lock:
         return COIN_ESIKLERI.get(symbol, VARSAYILAN_ESIK.copy())
 
+# ==================== ACİL DURUM KONTROLÜ ====================
+def acil_durum_kontrol(df):
+    """Piyasada ani değişim var mı? ADX %50 artış veya fiyat %2 hareket."""
+    try:
+        if len(df) < 10:
+            return False
+        
+        son_6 = df.tail(6)
+        
+        adx_series = ta.trend.ADXIndicator(
+            high=son_6['high'], low=son_6['low'], close=son_6['close'], window=14
+        ).adx().dropna()
+        
+        if len(adx_series) >= 3:
+            adx_baslangic = adx_series.iloc[0]
+            adx_son = adx_series.iloc[-1]
+            if adx_baslangic > 0:
+                adx_artis = (adx_son - adx_baslangic) / adx_baslangic
+                if adx_artis > 0.5:
+                    return True
+        
+        fiyat_baslangic = son_6['close'].iloc[0]
+        fiyat_son = son_6['close'].iloc[-1]
+        if fiyat_baslangic > 0:
+            fiyat_degisim = abs(fiyat_son - fiyat_baslangic) / fiyat_baslangic
+            if fiyat_degisim > 0.02:
+                return True
+        
+        return False
+    except:
+        return False
+
 # ==================== PİYASA MODU ====================
 def piyasa_modu_tespit(df, symbol):
     try:
@@ -363,7 +393,7 @@ def piyasa_modu_tespit(df, symbol):
     except Exception:
         return 'BELIRSIZ', 0, 0, 0, 0, 0, 0, 50, 0
 
-# ==================== SİNYAL ÜRETİCİ (DAHA GEVŞEK) ====================
+# ==================== SİNYAL ÜRETİCİ ====================
 def sinyal_uret(df, anlik_fiyat, symbol):
     try:
         if len(df) < 60:
@@ -379,7 +409,6 @@ def sinyal_uret(df, anlik_fiyat, symbol):
         onceki = df.iloc[-2]
         son_3 = df.tail(3)
         
-        # TREND YUKARI
         if mod == 'TREND_YUKARI':
             ema20_yakin = abs(son_mum['low'] - ema20) / ema20 < 0.012
             yesil_kapanis = son_mum['close'] > son_mum['open']
@@ -408,7 +437,6 @@ def sinyal_uret(df, anlik_fiyat, symbol):
             else:
                 return None, None, None, None, None, "TREND↑ şart yok"
         
-        # TREND ASAGI
         if mod == 'TREND_ASAGI':
             ema20_yakin = abs(son_mum['high'] - ema20) / ema20 < 0.012
             kirmizi_kapanis = son_mum['close'] < son_mum['open']
@@ -437,10 +465,9 @@ def sinyal_uret(df, anlik_fiyat, symbol):
             else:
                 return None, None, None, None, None, "TREND↓ şart yok"
         
-        # DURGUN (ÇOK GEVŞETİLDİ)
         if mod == 'DURGUN':
-            alt_banda_yakin = son_mum['low'] <= bb_alt * 1.015    # %1.5 tolerans
-            asiri_satim = rsi < es['rsi_alt'] + 8                 # +8 tolerans
+            alt_banda_yakin = son_mum['low'] <= bb_alt * 1.015
+            asiri_satim = rsi < es['rsi_alt'] + 8
             
             if alt_banda_yakin and asiri_satim:
                 sl_mesafe = atr * ATR_SL_DURGUN
@@ -456,8 +483,8 @@ def sinyal_uret(df, anlik_fiyat, symbol):
                 sebep = f"DURGUN LONG | BB Alt + RSI:{rsi:.0f} | ADX:{adx:.1f}"
                 return "LONG", tp, sl, sebep, atr, "OK"
             
-            ust_banda_yakin = son_mum['high'] >= bb_ust * 0.985   # %1.5 tolerans
-            asiri_alim = rsi > es['rsi_ust'] - 8                  # -8 tolerans
+            ust_banda_yakin = son_mum['high'] >= bb_ust * 0.985
+            asiri_alim = rsi > es['rsi_ust'] - 8
             
             if ust_banda_yakin and asiri_alim:
                 sl_mesafe = atr * ATR_SL_DURGUN
@@ -636,8 +663,20 @@ async def esikler_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global SON_ESIK_GUNCELLEME
     SON_ESIK_GUNCELLEME = 0
-    await update.message.reply_text("⚙️ Eşikler zorla tazeleniyor (daraltılmış sınırlarla)...")
-    await asyncio.to_thread(esikleri_tazele)
+    await update.message.reply_text("⚙️ Eşikler zorla tazeleniyor...")
+    await asyncio.to_thread(esikleri_tazele, True)
+
+async def sifirla_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """İstatistikleri sıfırla"""
+    if update.effective_chat.id != int(CHAT_ID): return
+    global ARDISIK_ZARAR_SAYACI, KILL_SWITCH_AKTIF
+    with state_lock:
+        ANALITIK["basarili_islem_sayisi"] = 0
+        ANALITIK["basarisiz_islem_sayisi"] = 0
+    ARDISIK_ZARAR_SAYACI = 0
+    KILL_SWITCH_AKTIF = False
+    hafizayi_kaydet()
+    await update.message.reply_text("✅ İstatistikler sıfırlandı! (TP/SL: 0/0, Ardışık Zarar: 0)")
 
 # ==================== TRAILING ====================
 def trailing_stop_kontrol():
@@ -709,7 +748,7 @@ def trailing_stop_kontrol():
         except Exception as e:
             print(f"⚠️ Trailing: {e}", flush=True)
 
-# ==================== KAPANIŞ ====================
+# ==================== KAPANIŞ (NET KÂR BAZLI SINIFLANDIRMA) ====================
 def kapanis_kontrol():
     global ARDISIK_ZARAR_SAYACI, SON_ARDISIK_ZARAR_ZAMANI, KILL_SWITCH_AKTIF
     with state_lock:
@@ -729,27 +768,27 @@ def kapanis_kontrol():
         if sym not in aktif_borsa:
             g = bilgi.get("giris_fiyati", 0)
             y = bilgi.get("yon", "LONG")
-            tp_k = bilgi.get("tp_fiyat", g)
-            sl_k = bilgi.get("sl_fiyat", g)
-            karli = False
             cikis = g
             try:
                 with borsa_kilidi:
                     t = exchange.fetch_ticker(sym)
                 cikis = float(t['last'])
-                karli = abs(cikis - tp_k) < abs(cikis - sl_k)
             except:
-                karli = cikis > g if y == "LONG" else cikis < g
+                pass
+
+            # ✅ NET KÂR/ZARAR BAZLI SINIFLANDIRMA
+            if y == "LONG":
+                brut = (cikis - g) / g
+            else:
+                brut = (g - cikis) / g
+            net = brut - TOPLAM_MALIYET_ORANI
+
+            # KÂRLI mı? (Net pozitifse başarı)
+            karli = net > 0
 
             with state_lock:
                 b = int(ANALITIK.get("basarili_islem_sayisi", 0))
                 bz = int(ANALITIK.get("basarisiz_islem_sayisi", 0))
-                
-                if y == "LONG":
-                    brut = (cikis - g) / g
-                else:
-                    brut = (g - cikis) / g
-                net = brut - TOPLAM_MALIYET_ORANI
                 
                 if karli:
                     b += 1; tip = "✅ KÂRLA KAPANDI"
@@ -766,7 +805,7 @@ def kapanis_kontrol():
                     del AKTIF_POZISYONLAR[sym]
 
             hafizayi_kaydet()
-            print(f"💰 [KAPANIŞ] {sym} | Çıkış: {cikis} | Net: %{net*100:.2f}", flush=True)
+            print(f"💰 [KAPANIŞ] {sym} | Çıkış: {cikis} | Net: %{net*100:.2f} | {'KÂR' if karli else 'ZARAR'}", flush=True)
             tg_gonder(
                 f"{tip}\n{sym} | Çıkış: {cikis}\n"
                 f"Net Kâr: %{net*100:.2f}\n"
@@ -810,15 +849,15 @@ def kapanis_kontrol():
 
 # ==================== ANA TARAYICI ====================
 def tarayici():
-    global SON_HAVUZ_GUNCELLEME, KILL_SWITCH_AKTIF, ARDISIK_ZARAR_SAYACI
-    print(f"🚀 [BAŞLANGIÇ] DARALTILMIŞ SINIRLAR + ADAPTİF | {ZAMAN_DILIMI}", flush=True)
+    global SON_HAVUZ_GUNCELLEME, KILL_SWITCH_AKTIF, ARDISIK_ZARAR_SAYACI, SON_ACIL_TAZELEME
+    print(f"🚀 [BAŞLANGIÇ] ACİL TAZELEME + 2 SAAT + ADAPTİF | {ZAMAN_DILIMI}", flush=True)
     try:
         exchange.load_markets()
     except: pass
 
     havuzu_guncelle()
     SON_HAVUZ_GUNCELLEME = time.time()
-    esikleri_tazele()
+    esikleri_tazele(force=True)
 
     dongu = 0
     while True:
@@ -834,7 +873,7 @@ def tarayici():
                 SON_HAVUZ_GUNCELLEME = time.time()
 
             haber_kontrol()
-            esikleri_tazele()
+            esikleri_tazele()  # Normal tazeleme (2 saatte bir)
 
             if KILL_SWITCH_AKTIF:
                 if time.time() - SON_ARDISIK_ZARAR_ZAMANI > ARDISIK_ZARAR_BEKLEME:
@@ -884,6 +923,14 @@ def tarayici():
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     df = df.iloc[:-1].reset_index(drop=True)
                     anlik = float(ticker['last'])
+
+                    # 🚨 ACİL DURUM KONTROLÜ
+                    if acil_durum_kontrol(df):
+                        if time.time() - SON_ACIL_TAZELEME > ACIL_TAZELEME_MIN_ARALIK:
+                            print(f"   🚨 [ACİL] {symbol} ani değişim! Eşikler zorla tazeleniyor...", flush=True)
+                            SON_ACIL_TAZELEME = time.time()
+                            esikleri_tazele(force=True)
+                            tg_gonder(f"🚨 ACİL TAZELEME\n{symbol} ani hareket\nEşikler güncellendi")
 
                     es = coin_esigi_al(symbol)
                     mod, adx, ema20, ema50, bb_ust, bb_alt, bb_orta, rsi, atr = piyasa_modu_tespit(df, symbol)
@@ -992,6 +1039,7 @@ async def main():
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     app_tg.add_handler(CommandHandler("havuz", havuz_komutu))
     app_tg.add_handler(CommandHandler("esikler", esikler_komutu))
+    app_tg.add_handler(CommandHandler("sifirla", sifirla_komutu))
 
     await app_tg.initialize()
     await app_tg.start()
