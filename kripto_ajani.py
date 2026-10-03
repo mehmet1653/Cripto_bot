@@ -99,15 +99,15 @@ state_lock = threading.Lock()
 borsa_kilidi = threading.Lock()
 tarayici_kilidi = threading.Lock()
 
-# ==================== AYARLAR ====================
-KALDIRAC = 7
+# ==================== AYARLAR (KÖKLÜ DEĞİŞİKLİK) ====================
+KALDIRAC = 5                                 # ✅ 7 → 5
 MAKSIMUM_TOPLAM_POZISYON = 3
-COOLDOWN_SURESI_SANIYE = 30 * 60          # ✅ 10 dk → 30 dk
+COOLDOWN_SURESI_SANIYE = 60 * 60             # ✅ 30 dk → 60 dk
 
 KOMISYON_ORANI = 0.001
 SPREAD_MALIYETI = 0.0005
 TOPLAM_MALIYET_ORANI = (KOMISYON_ORANI * 2) + SPREAD_MALIYETI
-MIN_NET_KAR = 0.003
+MIN_NET_KAR = 0.005                          # ✅ 0.3% → 0.5% (daha kaliteli)
 
 ZAMAN_DILIMI = '15m'
 MUM_LIMIT = 200
@@ -123,18 +123,16 @@ RSI_TREND_UST = 75
 RSI_TREND_ALT = 25
 
 ATR_SL_TREND = 1.5
-ATR_SL_DURGUN = 1.2
+ATR_TP_TREND = 2.0                           # ✅ Yeni: TP = 2x ATR (ulaşılabilir)
 
-# ✅ TRAILING AGRESİFLEŞTİRİLDİ (0.7x ATR'den başabaş)
+# ✅ TRAILING ARTIK 2x ATR'DEN BAŞLIYOR (kârı öldürmüyor)
 TRAILING_ATR = [
-    (0.7, 0.3),    # 0.7x ATR kâr → SL başabaş+%0.3
-    (1.2, 0.6),    # 1.2x ATR kâr → SL %0.6 kâra
-    (2.0, 1.2),    # 2.0x ATR kâr → SL %1.2 kâra
-    (3.5, 2.0),    # 3.5x ATR kâr → SL %2.0 kâra
+    (2.0, 0.5),    # 2.0x ATR kâr → SL başabaş+%0.5
+    (3.0, 1.0),    # 3.0x ATR kâr → SL %1.0 kâra
+    (5.0, 2.0),    # 5.0x ATR kâr → SL %2.0 kâra
 ]
 
 MAKS_ACIK_KALMA_SURESI_TREND = 4 * 60 * 60
-MAKS_ACIK_KALMA_SURESI_DURGUN = 45 * 60
 
 # Eşik tazeleme
 SON_ESIK_GUNCELLEME = 0
@@ -150,11 +148,11 @@ VARSAYILAN_ESIK = {
     'rsi_ust': 55.0
 }
 
-# ✅ KAYIP SAYACI (yeni)
-COIN_KAYIP_SAYACI = {}          # {symbol: ardışık zarar sayısı}
-COIN_KAYIP_BEKLEME = {}         # {symbol: bekleme bitiş zamanı}
-KAYIP_LIMIT = 2                 # 2 zarar → o coini 1 saat açma
-KAYIP_BEKLEME_SURESI = 3600     # 1 saat
+# Kayıp sayacı
+COIN_KAYIP_SAYACI = {}
+COIN_KAYIP_BEKLEME = {}
+KAYIP_LIMIT = 2
+KAYIP_BEKLEME_SURESI = 3600
 
 ARDISIK_ZARAR_LIMIT = 3
 ARDISIK_ZARAR_BEKLEME = 3600
@@ -395,7 +393,7 @@ def piyasa_modu_tespit(df, symbol):
     except Exception:
         return 'BELIRSIZ', 0, 0, 0, 0, 0, 0, 50, 0
 
-# ==================== SİNYAL ÜRETİCİ ====================
+# ==================== SİNYAL ÜRETİCİ (SADECE TREND) ====================
 def sinyal_uret(df, anlik_fiyat, symbol):
     try:
         if len(df) < 60:
@@ -411,6 +409,7 @@ def sinyal_uret(df, anlik_fiyat, symbol):
         onceki = df.iloc[-2]
         son_3 = df.tail(3)
         
+        # ✅ SADECE TREND MODU
         if mod == 'TREND_YUKARI':
             ema20_yakin = abs(son_mum['low'] - ema20) / ema20 < 0.012
             yesil_kapanis = son_mum['close'] > son_mum['open']
@@ -422,7 +421,7 @@ def sinyal_uret(df, anlik_fiyat, symbol):
             
             if giris_var and rsi < RSI_TREND_UST:
                 sl_mesafe = atr * ATR_SL_TREND
-                tp_mesafe = atr * ATR_SL_TREND * 4      # ✅ 3x → 4x ATR (daha geniş TP)
+                tp_mesafe = atr * ATR_TP_TREND       # ✅ 2x ATR
                 tp = anlik_fiyat + tp_mesafe
                 sl = anlik_fiyat - sl_mesafe
                 brut = tp_mesafe / anlik_fiyat
@@ -450,7 +449,7 @@ def sinyal_uret(df, anlik_fiyat, symbol):
             
             if giris_var and rsi > RSI_TREND_ALT:
                 sl_mesafe = atr * ATR_SL_TREND
-                tp_mesafe = atr * ATR_SL_TREND * 4      # ✅ 3x → 4x ATR
+                tp_mesafe = atr * ATR_TP_TREND
                 tp = anlik_fiyat - tp_mesafe
                 sl = anlik_fiyat + sl_mesafe
                 brut = tp_mesafe / anlik_fiyat
@@ -467,42 +466,9 @@ def sinyal_uret(df, anlik_fiyat, symbol):
             else:
                 return None, None, None, None, None, "TREND↓ şart yok"
         
+        # DURGUN modda işlem YOK (kâr getirmiyor, komisyon yiyor)
         if mod == 'DURGUN':
-            alt_banda_yakin = son_mum['low'] <= bb_alt * 1.015
-            asiri_satim = rsi < es['rsi_alt'] + 8
-            
-            if alt_banda_yakin and asiri_satim:
-                sl_mesafe = atr * ATR_SL_DURGUN
-                tp_mesafe = bb_orta - anlik_fiyat
-                if tp_mesafe <= 0:
-                    return None, None, None, None, None, "TP<0"
-                tp = bb_orta
-                sl = anlik_fiyat - sl_mesafe
-                brut = tp_mesafe / anlik_fiyat
-                net = brut - TOPLAM_MALIYET_ORANI
-                if net < MIN_NET_KAR:
-                    return None, None, None, None, None, "Net kâr düşük"
-                sebep = f"DURGUN LONG | BB Alt + RSI:{rsi:.0f} | ADX:{adx:.1f}"
-                return "LONG", tp, sl, sebep, atr, "OK"
-            
-            ust_banda_yakin = son_mum['high'] >= bb_ust * 0.985
-            asiri_alim = rsi > es['rsi_ust'] - 8
-            
-            if ust_banda_yakin and asiri_alim:
-                sl_mesafe = atr * ATR_SL_DURGUN
-                tp_mesafe = anlik_fiyat - bb_orta
-                if tp_mesafe <= 0:
-                    return None, None, None, None, None, "TP<0"
-                tp = bb_orta
-                sl = anlik_fiyat + sl_mesafe
-                brut = tp_mesafe / anlik_fiyat
-                net = brut - TOPLAM_MALIYET_ORANI
-                if net < MIN_NET_KAR:
-                    return None, None, None, None, None, "Net kâr düşük"
-                sebep = f"DURGUN SHORT | BB Üst + RSI:{rsi:.0f} | ADX:{adx:.1f}"
-                return "SHORT", tp, sl, sebep, atr, "OK"
-            
-            return None, None, None, None, None, f"DURGUN şart yok (bb:{alt_banda_yakin} rsi:{rsi:.0f})"
+            return None, None, None, None, None, "DURGUN mod (işlem yok)"
         
         return None, None, None, None, None, "BELIRSIZ mod"
     except Exception as e:
@@ -526,7 +492,6 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             positions = await asyncio.to_thread(exchange.fetch_positions)
             pos = [p for p in positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
 
-        # ✅ YENİ İSTATİSTİKLER
         gercek_tp = int(ANALITIK.get("gercek_tp", 0))
         kar_kilidi = int(ANALITIK.get("kar_kilidi", 0))
         zarar = int(ANALITIK.get("zarar", 0))
@@ -594,7 +559,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         toplam_nokta = "🟢" if toplam_pnl_usd >= 0 else "🔴"
 
         mesaj = (
-            f"📊 DURUM [ADAPTIF BOT]\n\n"
+            f"📊 DURUM [RADIKAL v2]\n\n"
             f"💰 Kasa: {total:.2f} USDT\n"
             f"{toplam_nokta} Toplam PnL: {toplam_pnl_usd:+.2f} USDT (ROE: %{toplam_pnl_pct:+.2f})\n"
             f"📌 Açık Pozisyon: {len(pos)} / {MAKSIMUM_TOPLAM_POZISYON}\n"
@@ -608,7 +573,8 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⏱️ Sonraki tazeleme: {sonraki_tazeleme} dk\n\n"
             f"📋 Havuz: {len(takip_listesi())} coin\n"
             f"⏱️ Zaman Dilimi: {ZAMAN_DILIMI}\n"
-            f"💸 Toplam Maliyet: %{TOPLAM_MALIYET_ORANI*100:.2f}"
+            f"💸 Toplam Maliyet: %{TOPLAM_MALIYET_ORANI*100:.2f}\n"
+            f"⚙️ Ayar: {KALDIRAC}x | Pozisyon: %10 | TP: {ATR_TP_TREND}x ATR | SL: {ATR_SL_TREND}x ATR"
         )
         await update.message.reply_text(mesaj)
     except Exception as e:
@@ -620,7 +586,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     BOT_CALISIYOR_MU = True
     KILL_SWITCH_AKTIF = False
     ARDISIK_ZARAR_SAYACI = 0
-    await update.message.reply_text("🟢 Bot aktif! (4 Katmanlı Koruma)")
+    await update.message.reply_text("🟢 Bot aktif! (Radikal v2 - Sadece TREND)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -665,7 +631,6 @@ async def esikler_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await asyncio.to_thread(esikleri_tazele, True)
 
 async def sifirla_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Tüm istatistikleri sıfırla"""
     if update.effective_chat.id != int(CHAT_ID): return
     global ARDISIK_ZARAR_SAYACI, KILL_SWITCH_AKTIF, COIN_KAYIP_SAYACI, COIN_KAYIP_BEKLEME
     with state_lock:
@@ -679,7 +644,7 @@ async def sifirla_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ARDISIK_ZARAR_SAYACI = 0
     KILL_SWITCH_AKTIF = False
     hafizayi_kaydet()
-    await update.message.reply_text("✅ Tüm istatistikler ve kayıp sayaçları sıfırlandı!")
+    await update.message.reply_text("✅ Tüm istatistikler sıfırlandı!")
 
 # ==================== TRAILING ====================
 def trailing_stop_kontrol():
@@ -713,10 +678,9 @@ def trailing_stop_kontrol():
             kar_mesafe = g - anlik
 
         kar_orani = kar_mesafe / atr_degeri
-        carpanlar = TRAILING_ATR if mod == "TREND" else [(0.6, 0.25), (1.0, 0.5), (1.7, 1.0)]
 
         yeni_sl = None
-        for esik, sl_kilit in carpanlar:
+        for esik, sl_kilit in TRAILING_ATR:
             if kar_orani >= esik:
                 if yon == "LONG":
                     yeni_sl = g + (atr_degeri * sl_kilit) + (g * TOPLAM_MALIYET_ORANI)
@@ -751,7 +715,7 @@ def trailing_stop_kontrol():
         except Exception as e:
             print(f"⚠️ Trailing: {e}", flush=True)
 
-# ==================== KAPANIŞ (3 KATEGORİLİ) ====================
+# ==================== KAPANIŞ ====================
 def kapanis_kontrol():
     global ARDISIK_ZARAR_SAYACI, SON_ARDISIK_ZARAR_ZAMANI, KILL_SWITCH_AKTIF
     global COIN_KAYIP_SAYACI, COIN_KAYIP_BEKLEME
@@ -774,7 +738,6 @@ def kapanis_kontrol():
             g = bilgi.get("giris_fiyati", 0)
             y = bilgi.get("yon", "LONG")
             tp_k = float(bilgi.get("tp_fiyat", 0))
-            sl_k = float(bilgi.get("sl_fiyat", 0))
             cikis = g
             try:
                 with borsa_kilidi:
@@ -783,24 +746,20 @@ def kapanis_kontrol():
             except:
                 pass
 
-            # ✅ 3 KATEGORİLİ SINIFLANDIRMA
             if y == "LONG":
                 brut = (cikis - g) / g
             else:
                 brut = (g - cikis) / g
             net = brut - TOPLAM_MALIYET_ORANI
 
-            # Kategori belirle
+            # 3 kategori
             if tp_k > 0 and abs(cikis - tp_k) / tp_k < 0.002:
-                # TP'ye çok yakın kapanmış → GERÇEK TP
                 kategori = "gercek_tp"
                 tip = "✅ GERÇEK TP"
             elif net > 0:
-                # Kârla kapanmış ama TP'ye ulaşmamış → KÂR KİLİDİ
                 kategori = "kar_kilidi"
                 tip = "🔒 KÂR KİLİDİYLE KAPANDI"
             else:
-                # Net negatif → ZARAR
                 kategori = "zarar"
                 tip = "❌ ZARARLA KAPANDI"
 
@@ -810,7 +769,6 @@ def kapanis_kontrol():
                 if kategori == "zarar":
                     ARDISIK_ZARAR_SAYACI += 1
                     SON_ARDISIK_ZARAR_ZAMANI = time.time()
-                    # ✅ COIN KAYIP SAYACI
                     COIN_KAYIP_SAYACI[sym] = COIN_KAYIP_SAYACI.get(sym, 0) + 1
                     if COIN_KAYIP_SAYACI[sym] >= KAYIP_LIMIT:
                         COIN_KAYIP_BEKLEME[sym] = time.time() + KAYIP_BEKLEME_SURESI
@@ -818,13 +776,12 @@ def kapanis_kontrol():
                         tg_gonder(f"🚫 {sym} {KAYIP_LIMIT} kez üst üste zarar\n1 saat boyunca açılmayacak")
                 else:
                     ARDISIK_ZARAR_SAYACI = 0
-                    COIN_KAYIP_SAYACI[sym] = 0  # Kâr edince sıfırla
+                    COIN_KAYIP_SAYACI[sym] = 0
                 
-                # Cooldown kaydet (son fiyatla)
                 COIN_COOLDOWN[sym] = {
                     "zaman": float(time.time() + COOLDOWN_SURESI_SANIYE),
                     "son_yon": y,
-                    "son_fiyat": float(cikis)      # ✅ Fiyat kaydediliyor
+                    "son_fiyat": float(cikis)
                 }
                 if sym in AKTIF_POZISYONLAR:
                     del AKTIF_POZISYONLAR[sym]
@@ -844,7 +801,7 @@ def kapanis_kontrol():
 
         giris_zaman = float(bilgi.get("giris_zamani", 0))
         mod = bilgi.get("mod", "TREND")
-        max_sure = MAKS_ACIK_KALMA_SURESI_TREND if mod == "TREND" else MAKS_ACIK_KALMA_SURESI_DURGUN
+        max_sure = MAKS_ACIK_KALMA_SURESI_TREND
         gecen_sure = time.time() - giris_zaman
         
         if gecen_sure > max_sure:
@@ -875,7 +832,7 @@ def kapanis_kontrol():
 # ==================== ANA TARAYICI ====================
 def tarayici():
     global SON_HAVUZ_GUNCELLEME, KILL_SWITCH_AKTIF, ARDISIK_ZARAR_SAYACI, SON_ACIL_TAZELEME
-    print(f"🚀 [BAŞLANGIÇ] 4 KATMANLI KORUMA | {ZAMAN_DILIMI}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] RADIKAL v2 | Sadece TREND | {KALDIRAC}x | Pozisyon %10", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -933,7 +890,7 @@ def tarayici():
                 if len(aktif_map) >= MAKSIMUM_TOPLAM_POZISYON: break
                 if symbol in aktif_list: continue
 
-                # ✅ KAYIP SAYACI KONTROLÜ
+                # Kayıp sayacı
                 with state_lock:
                     kayip_bekleme = COIN_KAYIP_BEKLEME.get(symbol, 0)
                     if kayip_bekleme > time.time():
@@ -941,7 +898,7 @@ def tarayici():
                         print(f"   🚫 [{symbol}] Kayıp sayacı aktif. {kalan} dk", flush=True)
                         continue
 
-                # ✅ COOLDOWN + FİYAT HAREKETİ KONTROLÜ
+                # Cooldown + fiyat hareketi
                 with state_lock:
                     cd = COIN_COOLDOWN.get(symbol)
                     if cd:
@@ -949,18 +906,15 @@ def tarayici():
                         if z - time.time() > 0:
                             continue
                         
-                        # Cooldown doldu ama fiyat kontrolü
                         if isinstance(cd, dict):
                             son_fiyat = float(cd.get("son_fiyat", 0))
-                            son_yon = cd.get("son_yon", "")
                             if son_fiyat > 0:
-                                # Güncel fiyatı al
                                 try:
                                     with borsa_kilidi:
                                         tt = exchange.fetch_ticker(symbol)
                                     guncel = float(tt['last'])
                                     hareket = abs(guncel - son_fiyat) / son_fiyat
-                                    if hareket < 0.01:  # %1'den az hareket
+                                    if hareket < 0.01:
                                         continue
                                 except:
                                     pass
@@ -1003,7 +957,8 @@ def tarayici():
                         exchange.set_leverage(KALDIRAC, symbol)
                         market = exchange.market(symbol)
 
-                    kullan = min(toplam_b * 0.2, serbest_b)
+                    # ✅ POZİSYON BOYUTU %10
+                    kullan = min(toplam_b * 0.10, serbest_b)
                     if kullan < 1: continue
 
                     miktar = float(exchange.amount_to_precision(
@@ -1055,8 +1010,8 @@ def tarayici():
                         f"{symbol} | {yon_s}\n"
                         f"{sebep}\n"
                         f"Giriş: {anlik}\n"
-                        f"TP: {tp_fiyat}\n"
-                        f"SL: {sl_fiyat}\n"
+                        f"TP: {tp_fiyat} (2x ATR)\n"
+                        f"SL: {sl_fiyat} (1.5x ATR)\n"
                         f"ATR: {atr_b:.6f}\n"
                         f"Maliyet: %{TOPLAM_MALIYET_ORANI*100:.2f}"
                     )
