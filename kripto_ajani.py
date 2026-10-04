@@ -78,15 +78,13 @@ ADX_TREND_ESIGI = 25
 ADX_YATAY_ESIGI = 20
 ATR_VOLATIL_CARPAN = 2.0
 
-# ✅ SL GENİŞLETİLDİ
-ATR_SL_GRID = 2.0                # Eski: 1.2 → Yeni: 2.0 (Grid SL genişletildi)
-BREAKOUT_SL_TOLERANS = 0.008     # Eski: 0.005 → Yeni: 0.008
-TREND_TAKIP_SL_CARPAN = 2.0      # Aynı
-
+ATR_SL_GRID = 2.0
+BREAKOUT_SL_TOLERANS = 0.008
 BREAKOUT_LOOKBACK = 50
 BREAKOUT_MIN_RR = 2.5
 
 TREND_TAKIP_MUM_ONAY = 5
+TREND_TAKIP_SL_CARPAN = 2.0
 TREND_TAKIP_BITIS_ONAY = 2
 
 MAKS_YUKSEKLIK_TREND = 0.02
@@ -216,11 +214,10 @@ def piyasa_modu_bul(df):
         print(f"⚠️ Piyasa modu hatası: {e}", flush=True)
         return 'BELIRSIZ', 0, 0, 0, 0, 0, 0, 0, 0, 50, 0
 
-# ==================== GRID (SL GENİŞLETİLDİ) ====================
+# ==================== GRID ====================
 def grid_sinyal(df, anlik, bb_ust, bb_alt, bb_orta, atr):
     try:
         if anlik <= bb_alt * 1.005:
-            # ✅ ATR × 2.0 (eski 1.2)
             sl_mesafe = atr * ATR_SL_GRID
             tp_mesafe = bb_orta - anlik
             if tp_mesafe <= 0:
@@ -231,11 +228,10 @@ def grid_sinyal(df, anlik, bb_ust, bb_alt, bb_orta, atr):
             net = brut - TOPLAM_MALIYET_ORANI
             if net < MIN_NET_KAR:
                 return None, None, None, None, None
-            sebep = f"GRID LONG | BB Alt | SL: {sl_mesafe:.4f}"
+            sebep = f"GRID LONG | BB Alt"
             return "LONG", tp, sl, sebep, atr
         
         if anlik >= bb_ust * 0.995:
-            # ✅ ATR × 2.0 (eski 1.2)
             sl_mesafe = atr * ATR_SL_GRID
             tp_mesafe = anlik - bb_orta
             if tp_mesafe <= 0:
@@ -246,7 +242,7 @@ def grid_sinyal(df, anlik, bb_ust, bb_alt, bb_orta, atr):
             net = brut - TOPLAM_MALIYET_ORANI
             if net < MIN_NET_KAR:
                 return None, None, None, None, None
-            sebep = f"GRID SHORT | BB Üst | SL: {sl_mesafe:.4f}"
+            sebep = f"GRID SHORT | BB Üst"
             return "SHORT", tp, sl, sebep, atr
         
         return None, None, None, None, None
@@ -538,9 +534,9 @@ def trailing_stop_kontrol():
             print(f"🔒 [TRAILING] {sym} | {mod} | ROE:%{roe:.1f} → SL:{yeni_sl:.6f}", flush=True)
             
             if roe > 3.0 and mod in ['GUCLU_TREND_UP', 'GUCLU_TREND_DOWN']:
-                tg_gonder(f"🔒 *KÂR KİLİTLENDİ*\n📌 `{sym}` | {mod}\n📊 ROE: `%{roe:+.2f}`\n🛑 SL: `{yeni_sl:.6f}`")
+                tg_gonder(f"🔒 KÂR KİLİTLENDİ\n📌 {sym} | {mod}\n📊 ROE: %{roe:+.2f}\n🛑 SL: {yeni_sl:.6f}")
             elif roe > 5.0 and mod not in ['GUCLU_TREND_UP', 'GUCLU_TREND_DOWN']:
-                tg_gonder(f"🔒 *KÂR KİLİTLENDİ*\n📌 `{sym}` | {mod}\n📊 ROE: `%{roe:+.2f}`\n🛑 SL: `{yeni_sl:.6f}`")
+                tg_gonder(f"🔒 KÂR KİLİTLENDİ\n📌 {sym} | {mod}\n📊 ROE: %{roe:+.2f}\n🛑 SL: {yeni_sl:.6f}")
         except Exception as e:
             print(f"⚠️ Trailing: {e}", flush=True)
 
@@ -576,8 +572,9 @@ def tg_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID:
         return
     try:
+        # ✅ parse_mode KALDIRILDI
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                      json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}, timeout=5)
+                      json={"chat_id": CHAT_ID, "text": mesaj}, timeout=5)
     except:
         pass
 
@@ -612,22 +609,23 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             nokta = "🟢" if unrealized >= 0 else "🔴"
             
-            pos_detay += f"\n{nokta} `{sym}` | {y} ({k}x) | {mod_bilgi}\n  K/Z: `{unrealized:+.2f} USDT` | ROE: `%{roe:+.2f}`\n  Marj: `{margin:.2f}`"
+            pos_detay += f"\n{nokta} {sym} | {y} ({k}x) | {mod_bilgi}\n  K/Z: {unrealized:+.2f} USDT | ROE: %{roe:+.2f}\n  Marj: {margin:.2f}"
         
         pnl_nokta = "🟢" if pnl >= 0 else "🔴"
         
         mesaj = (
-            f"📊 *DURUM* [ADAPTİF v4.3]\n\n"
-            f"💰 Kasa: `{total:.2f} USDT`\n"
-            f"{pnl_nokta} Toplam PnL: `{pnl:+.2f} USDT`\n"
-            f"📌 Açık: `{len(pos)} / {MAKSIMUM_TOPLAM_POZISYON}`"
+            f"📊 DURUM [ADAPTİF v4.3]\n\n"
+            f"💰 Kasa: {total:.2f} USDT\n"
+            f"{pnl_nokta} Toplam PnL: {pnl:+.2f} USDT\n"
+            f"📌 Açık: {len(pos)} / {MAKSIMUM_TOPLAM_POZISYON}"
             f"{pos_detay}\n\n"
-            f"🎯 Gerçek TP: `{gercek_tp}` | 🔒 Kâr Kilidi: `{kar_kilidi}` | ❌ Zarar: `{zarar}`\n"
-            f"📈 Başarı: `%{oran:.1f}` ({toplam_islem} işlem)\n"
-            f"⚡ Kill-Switch: `{'AKTİF' if KILL_SWITCH_AKTIF else 'Pasif'}`\n"
-            f"🔻 Ardışık Zarar: `{ARDISIK_ZARAR_SAYACI}`"
+            f"🎯 Gerçek TP: {gercek_tp} | 🔒 Kâr Kilidi: {kar_kilidi} | ❌ Zarar: {zarar}\n"
+            f"📈 Başarı: %{oran:.1f} ({toplam_islem} işlem)\n"
+            f"⚡ Kill-Switch: {'AKTİF' if KILL_SWITCH_AKTIF else 'Pasif'}\n"
+            f"🔻 Ardışık Zarar: {ARDISIK_ZARAR_SAYACI}"
         )
-        await update.message.reply_text(mesaj, parse_mode='Markdown')
+        # ✅ parse_mode KALDIRILDI
+        await update.message.reply_text(mesaj)
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
 
@@ -638,7 +636,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     BOT_CALISIYOR_MU = True
     KILL_SWITCH_AKTIF = False
     ARDISIK_ZARAR_SAYACI = 0
-    await update.message.reply_text("🟢 Bot aktif! (v4.3: SL Genişletildi)")
+    await update.message.reply_text("🟢 Bot aktif! (v4.3)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID):
@@ -670,7 +668,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def tarayici():
     global ARDISIK_ZARAR_SAYACI, SON_ARDISIK_ZARAR_ZAMANI, KILL_SWITCH_AKTIF
     
-    print("🚀 [BAŞLANGIÇ] ADAPTİF v4.3 (SL Genişletildi)", flush=True)
+    print("🚀 [BAŞLANGIÇ] ADAPTİF v4.3", flush=True)
     try:
         exchange.load_markets()
     except:
@@ -741,15 +739,15 @@ def tarayici():
                         
                         if tp_k > 0 and abs(cikis - tp_k) / tp_k < 0.002:
                             kategori = "gercek_tp"
-                            tip = "✅ *GERÇEK TP*"
+                            tip = "✅ GERÇEK TP"
                             karli = True
                         elif net > 0:
                             kategori = "kar_kilidi"
-                            tip = "🔒 *KÂR KİLİDİYLE KAPANDI*"
+                            tip = "🔒 KÂR KİLİDİYLE KAPANDI"
                             karli = True
                         else:
                             kategori = "zarar"
-                            tip = "❌ *ZARARLA KAPANDI*"
+                            tip = "❌ ZARARLA KAPANDI"
                             karli = False
                         
                         with state_lock:
@@ -768,14 +766,14 @@ def tarayici():
                         hafizayi_kaydet()
                         print(f"💰 [KAPANIŞ] {eski} | Çıkış: {cikis} | Net: %{net*100:.2f} | {kategori}", flush=True)
                         tg_gonder(
-                            f"{tip}\n📌 `{eski}` | Çıkış: `{cikis}`\n"
-                            f"📊 Net: `%{net*100:+.2f}`\n"
-                            f"🔻 Ardışık Zarar: `{ARDISIK_ZARAR_SAYACI}`"
+                            f"{tip}\n📌 {eski} | Çıkış: {cikis}\n"
+                            f"📊 Net: %{net*100:+.2f}\n"
+                            f"🔻 Ardışık Zarar: {ARDISIK_ZARAR_SAYACI}"
                         )
                         
                         if ARDISIK_ZARAR_SAYACI >= ARDISIK_ZARAR_LIMIT:
                             KILL_SWITCH_AKTIF = True
-                            tg_gonder(f"🚨 *KILL-SWITCH AKTİF!*\n{ARDISIK_ZARAR_LIMIT} ardışık zarar.\n⏸️ 1 saat bekle.")
+                            tg_gonder(f"🚨 KILL-SWITCH AKTİF!\n{ARDISIK_ZARAR_LIMIT} ardışık zarar.\n1 saat bekle.")
             except Exception as e:
                 print(f"⚠️ Kapanış: {e}", flush=True)
             
@@ -894,13 +892,13 @@ def tarayici():
                     emoji = "🟦" if mod == 'YATAY' else ("🟩" if mod in ['TREND_YUKARI', 'TREND_ASAGI'] else "🟨")
                     
                     tg_gonder(
-                        f"{emoji} *SİNYAL!* [{mod}]\n"
-                        f"📌 `{symbol}` | {yon}\n"
+                        f"{emoji} SİNYAL! [{mod}]\n"
+                        f"📌 {symbol} | {yon}\n"
                         f"📊 {sebep}\n"
-                        f"🎯 Giriş: `{anlik}`\n"
-                        f"💰 TP: `{tp}`\n"
-                        f"🛑 SL: `{sl}`\n"
-                        f"💵 Marj: `{kullan:.2f} USDT`"
+                        f"🎯 Giriş: {anlik}\n"
+                        f"💰 TP: {tp}\n"
+                        f"🛑 SL: {sl}\n"
+                        f"💵 Marj: {kullan:.2f} USDT"
                     )
                 except Exception as e:
                     print(f"   ⚠️ {symbol}: {e}", flush=True)
