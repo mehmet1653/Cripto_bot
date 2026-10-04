@@ -85,7 +85,6 @@ BREAKOUT_MIN_RR = 2.5
 
 TREND_TAKIP_MUM_ONAY = 5
 TREND_TAKIP_SL_CARPAN = 2.0
-TREND_TAKIP_BITIS_ONAY = 2
 
 MAKS_YUKSEKLIK_TREND = 0.02
 RSI_TREND_UST_LIMIT = 68
@@ -95,30 +94,116 @@ RSI_TEPE_ESIGI = 70
 RSI_DIP_ESIGI = 30
 FITIL_CARPAN = 1.5
 
-# Kademeli trailing (Grid/Breakout için)
+# ✅ İLK KİLİT %1.5 → %3
 TRAILING_SEVIYELER = [
-    (1.5, 0.0),
-    (3.0, 0.01),
-    (5.0, 0.02),
-    (8.0, 0.035),
-    (12.0, 0.06),
-    (20.0, 0.12),
-    (30.0, 0.20),
-    (50.0, 0.35),
+    (3.0, 0.0),      # %3 → başabaş + komisyon
+    (5.0, 0.015),    # %5 → %1.5 kâr
+    (8.0, 0.03),     # %8 → %3 kâr
+    (12.0, 0.06),    # %12 → %6 kâr
+    (20.0, 0.12),    # %20 → %12 kâr
+    (30.0, 0.20),    # %30 → %20 kâr
+    (50.0, 0.35),    # %50 → %35 kâr
 ]
 
-# ✅ TREND KAYIP (Kademeli Kapatma) Ayarları
-TREND_KAYIP_MIN_ROE = 5.0     # Sadece ROE > %5 ise trend kaybı kapatır
-ADX_DUSUS_ESIGI = 20.0         # Açılışta >30 ise, şimdi <20 → kapat
-MUM_DONUS_ONAY = 3             # 3 mum üst üste ters renk → kapat
-
-KAR_KILIT_MESAJ_ESIGI = 0.01
+TREND_KAYIP_MIN_ROE = 5.0
+ADX_DUSUS_ESIGI = 20.0
+MUM_DONUS_ONAY = 3
 
 ARDISIK_ZARAR_LIMIT = 3
 ARDISIK_ZARAR_BEKLEME = 3600
 ARDISIK_ZARAR_SAYACI = 0
 SON_ARDISIK_ZARAR_ZAMANI = 0
 KILL_SWITCH_AKTIF = False
+
+# ==================== YARDIMCI: EMİR YÖNETİMİ ====================
+def emir_sl_mi(order):
+    """Emir SL mi? (stop/conditional)"""
+    try:
+        otype = str(order.get('type', '')).lower()
+        info_type = str(order.get('info', {}).get('type', '')).lower()
+        
+        if otype in ['stop', 'stop_market', 'stop_limit']:
+            return True
+        if 'stop' in otype or 'conditional' in otype:
+            return True
+        if 'conditional' in info_type or 'stop' in info_type:
+            return True
+        
+        if order.get('stopPrice') or order.get('triggerPrice'):
+            return True
+        
+        return False
+    except:
+        return False
+
+def eski_sl_sil(sym, yeni_sl_id):
+    """Eski SL'leri sil (yeni SL hariç, TP'ye DOKUNMA)"""
+    try:
+        open_orders = exchange.fetch_open_orders(sym)
+        silinen = 0
+        for order in open_orders:
+            oid = order['id']
+            if oid == yeni_sl_id:
+                continue
+            if emir_sl_mi(order):
+                try:
+                    exchange.cancel_order(oid, sym)
+                    silinen += 1
+                except:
+                    pass
+        
+        if silinen > 0:
+            print(f"🧹 [{sym}] {silinen} eski SL silindi (TP'ler korundu)", flush=True)
+        return silinen
+    except Exception as e:
+        print(f"⚠️ Eski SL silme hatası {sym}: {e}", flush=True)
+        return 0
+
+def pozisyon_emirlerini_temizle(sym):
+    """Pozisyon kapanırken TÜM emirleri sil"""
+    try:
+        open_orders = exchange.fetch_open_orders(sym)
+        silinen = 0
+        for order in open_orders:
+            try:
+                exchange.cancel_order(order['id'], sym)
+                silinen += 1
+            except:
+                pass
+        if silinen > 0:
+            print(f"🧹 [{sym}] {silinen} emir temizlendi", flush=True)
+    except Exception as e:
+        print(f"⚠️ Emir temizleme hatası {sym}: {e}", flush=True)
+
+def yeni_sl_koy(sym, miktar, yeni_sl, yon):
+    """Yeni SL koy → eski SL'leri sil (TP'ye dokunma)"""
+    ky = 'sell' if yon == 'LONG' else 'buy'
+    
+    try:
+        yeni_sl_order = exchange.create_order(
+            sym, 'stop', ky, miktar, yeni_sl,
+            {'stopPrice': yeni_sl, 'reduceOnly': True}
+        )
+        yeni_sl_id = yeni_sl_order['id']
+    except Exception as e:
+        print(f"⚠️ Yeni SL koyulamadı {sym}: {e}", flush=True)
+        return False
+    
+    time.sleep(0.3)
+    eski_sl_sil(sym, yeni_sl_id)
+    return True
+
+def pozisyon_kapat(sym, miktar, yon):
+    """Pozisyonu kapat ve tüm emirleri sil"""
+    ky = 'sell' if yon == 'LONG' else 'buy'
+    try:
+        exchange.create_order(sym, 'market', ky, miktar, None, {'reduceOnly': True})
+        time.sleep(0.3)
+        pozisyon_emirlerini_temizle(sym)
+        return True
+    except Exception as e:
+        print(f"⚠️ Pozisyon kapatma hatası {sym}: {e}", flush=True)
+        return False
 
 # ==================== HAFIZA ====================
 def hafizayi_yukle():
@@ -341,7 +426,6 @@ def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
         
         son_mumlar = df.tail(TREND_TAKIP_MUM_ONAY)
         son_mum = df.iloc[-1]
-        onceki = df.iloc[-2]
         
         govde = abs(son_mum['close'] - son_mum['open'])
         toplam_boy = son_mum['high'] - son_mum['low']
@@ -386,7 +470,7 @@ def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
             sl = ema20 - (atr * TREND_TAKIP_SL_CARPAN)
             if sl >= anlik:
                 return None, None, None, None, None
-            tp = anlik + (atr * 5)  # ✅ ATR × 20 → 5 (ulaşılabilir)
+            tp = anlik + (atr * 5)
             brut = (tp - anlik) / anlik
             net = brut - TOPLAM_MALIYET_ORANI
             if net < MIN_NET_KAR:
@@ -429,7 +513,7 @@ def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
             sl = ema20 + (atr * TREND_TAKIP_SL_CARPAN)
             if sl <= anlik:
                 return None, None, None, None, None
-            tp = anlik - (atr * 5)  # ✅ ATR × 20 → 5
+            tp = anlik - (atr * 5)
             brut = (anlik - tp) / anlik
             net = brut - TOPLAM_MALIYET_ORANI
             if net < MIN_NET_KAR:
@@ -442,13 +526,8 @@ def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
         print(f"⚠️ Trend takip hatası: {e}", flush=True)
         return None, None, None, None, None
 
-# ==================== TREND KAYIP KONTROLÜ (YENİ) ====================
+# ==================== TREND KAYIP KONTROLÜ ====================
 def trend_kayip_kontrol():
-    """
-    Kademeli kapatma:
-    - ROE > %5 VE (mod değişti VEYA ADX düştü VEYA mum dönüşü) → kapat
-    - Trend ters döndüyse (LONG→SHORT trend) → her zaman kapat
-    """
     with state_lock:
         aktif_kopya = list(AKTIF_POZISYONLAR.items())
     
@@ -474,7 +553,6 @@ def trend_kayip_kontrol():
         except:
             continue
         
-        # ROE
         if yon == "LONG":
             roe = (anlik - g) / g * 100 * KALDIRAC
         else:
@@ -483,7 +561,6 @@ def trend_kayip_kontrol():
         kapat = False
         sebep = ""
         
-        # ✅ 1. TREND TERS DÖNDÜ (her zaman kapat)
         if yon == "LONG" and mod_guncel == 'GUCLU_TREND_DOWN':
             kapat = True
             sebep = f"Trend ters döndü: LONG → {mod_guncel}"
@@ -492,62 +569,51 @@ def trend_kayip_kontrol():
             kapat = True
             sebep = f"Trend ters döndü: SHORT → {mod_guncel}"
         
-        # ✅ 2. YÜKSEK KÂR + MOD BOZULDU (kademeli)
         if not kapat and roe > TREND_KAYIP_MIN_ROE:
             if eski_mod in ['GUCLU_TREND_UP', 'GUCLU_TREND_DOWN'] and mod_guncel in ['YATAY', 'BELIRSIZ', 'VOLATIL']:
                 kapat = True
                 sebep = f"Kâr %{roe:.1f} + trend bitti: {eski_mod} → {mod_guncel}"
         
-        # ✅ 3. YÜKSEK KÂR + ADX DÜŞTÜ
         if not kapat and roe > TREND_KAYIP_MIN_ROE and acilis_adx > 30 and adx_g < ADX_DUSUS_ESIGI:
             kapat = True
             sebep = f"Kâr %{roe:.1f} + ADX düştü: {acilis_adx:.0f} → {adx_g:.0f}"
         
-        # ✅ 4. YÜKSEK KÂR + MUM DÖNÜŞÜ
         if not kapat and roe > TREND_KAYIP_MIN_ROE:
             son_mumlar = df.tail(MUM_DONUS_ONAY)
             
-            # LONG için: 3 mum kırmızı
             if yon == "LONG":
                 hepsi_kirmizi = all(m['close'] < m['open'] for _, m in son_mumlar.iterrows())
                 if hepsi_kirmizi and rsi_g < 50:
                     kapat = True
                     sebep = f"Kâr %{roe:.1f} + 3 mum kırmızı + RSI {rsi_g:.0f}"
             
-            # SHORT için: 3 mum yeşil
             if yon == "SHORT":
                 hepsi_yesil = all(m['close'] > m['open'] for _, m in son_mumlar.iterrows())
                 if hepsi_yesil and rsi_g > 50:
                     kapat = True
                     sebep = f"Kâr %{roe:.1f} + 3 mum yeşil + RSI {rsi_g:.0f}"
         
-        # KAPAT
         if kapat:
-            try:
-                exchange.cancel_all_orders(sym)
-                miktar = None
-                for p in exchange.fetch_positions():
-                    if p['symbol'] == sym:
-                        miktar = float(p.get('contracts', 0) or p.get('size', 0) or 0)
-                        break
-                
-                if miktar and miktar > 0:
-                    ky = 'sell' if yon == 'LONG' else 'buy'
-                    exchange.create_order(sym, 'market', ky, miktar, None, {'reduceOnly': True})
+            miktar = None
+            for p in exchange.fetch_positions():
+                if p['symbol'] == sym:
+                    miktar = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+                    break
+            
+            if miktar and miktar > 0:
+                if pozisyon_kapat(sym, miktar, yon):
                     print(f"🚪 [TREND KAYIP] {sym} | {sebep} | ROE:%{roe:.1f}", flush=True)
                     tg_gonder(f"🚪 TREND KAYIP - KAPATILDI\n📌 {sym}\n📊 {sebep}\n💰 ROE: %{roe:+.2f}")
-            except Exception as e:
-                print(f"⚠️ Trend kayıp hatası: {e}", flush=True)
 
 # ==================== TRAILING ====================
 def trailing_stop_kontrol():
-    global ARDISIK_ZARAR_SAYACI, SON_ARDISIK_ZARAR_ZAMANI, KILL_SWITCH_AKTIF
-    
     with state_lock:
         aktif_kopya = list(AKTIF_POZISYONLAR.items())
     
     for sym, bilgi in aktif_kopya:
         if sym not in AKTIF_POZISYONLAR:
+            continue
+        if not isinstance(bilgi, dict):
             continue
         
         yon = bilgi.get("yon", "LONG")
@@ -574,13 +640,9 @@ def trailing_stop_kontrol():
         else:
             roe = (g - anlik) / g * 100 * kaldirac_v
         
-        if yon == "LONG":
-            min_kar_sl = g * (1 + (TOPLAM_MALIYET_ORANI + 0.005) / kaldirac_v)
-        else:
-            min_kar_sl = g * (1 - (TOPLAM_MALIYET_ORANI + 0.005) / kaldirac_v)
-        
         yeni_sl = None
         
+        # ✅ TREND TAKİP: %1.5 → %3 (ilk kilit geç)
         if mod in ['GUCLU_TREND_UP', 'GUCLU_TREND_DOWN']:
             try:
                 ohlcv = exchange.fetch_ohlcv(sym, timeframe='15m', limit=50)
@@ -589,10 +651,12 @@ def trailing_stop_kontrol():
                 
                 if yon == "LONG":
                     hedef_sl = ema20_guncel - (atr_b * TREND_TAKIP_SL_CARPAN)
-                    yeni_sl = max(hedef_sl, min_kar_sl) if roe > 1.5 else hedef_sl
+                    min_kar_sl = g * (1 + (TOPLAM_MALIYET_ORANI + 0.01) / kaldirac_v)
+                    yeni_sl = max(hedef_sl, min_kar_sl) if roe > 3.0 else hedef_sl
                 else:
                     hedef_sl = ema20_guncel + (atr_b * TREND_TAKIP_SL_CARPAN)
-                    yeni_sl = min(hedef_sl, min_kar_sl) if roe > 1.5 else hedef_sl
+                    min_kar_sl = g * (1 - (TOPLAM_MALIYET_ORANI + 0.01) / kaldirac_v)
+                    yeni_sl = min(hedef_sl, min_kar_sl) if roe > 3.0 else hedef_sl
             except Exception as e:
                 print(f"⚠️ Trend EMA hatası: {e}", flush=True)
         
@@ -612,23 +676,16 @@ def trailing_stop_kontrol():
         if not iyilestirme:
             continue
         
-        try:
-            exchange.cancel_all_orders(sym)
-            miktar = None
-            for p in exchange.fetch_positions():
-                if p['symbol'] == sym:
-                    miktar = float(p.get('contracts', 0) or p.get('size', 0) or 0)
-                    break
-            if not miktar or miktar <= 0:
-                continue
-            
-            ky = 'sell' if yon == 'LONG' else 'buy'
-            exchange.create_order(sym, 'stop', ky, miktar, yeni_sl, {'stopPrice': yeni_sl, 'reduceOnly': True})
-            
-            tp_kayitli = float(bilgi.get("tp_fiyat", 0))
-            if tp_kayitli > 0:
-                exchange.create_order(sym, 'limit', ky, miktar, tp_kayitli, {'reduceOnly': True})
-            
+        miktar = None
+        for p in exchange.fetch_positions():
+            if p['symbol'] == sym:
+                miktar = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+                break
+        
+        if not miktar or miktar <= 0:
+            continue
+        
+        if yeni_sl_koy(sym, miktar, yeni_sl, yon):
             with state_lock:
                 if sym in AKTIF_POZISYONLAR:
                     AKTIF_POZISYONLAR[sym]["sl_fiyat"] = yeni_sl
@@ -637,8 +694,6 @@ def trailing_stop_kontrol():
             
             if roe > 3.0:
                 tg_gonder(f"🔒 KÂR KİLİTLENDİ\n📌 {sym} | {mod}\n📊 ROE: %{roe:+.2f}\n🛑 SL: {yeni_sl:.6f}")
-        except Exception as e:
-            print(f"⚠️ Trailing: {e}", flush=True)
 
 # ==================== MOD GÜNCELLEME ====================
 def modlari_guncelle():
@@ -713,7 +768,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pnl_nokta = "🟢" if pnl >= 0 else "🔴"
         
         mesaj = (
-            f"📊 DURUM [ADAPTİF v4.4]\n\n"
+            f"📊 DURUM [ADAPTİF v4.6]\n\n"
             f"💰 Kasa: {total:.2f} USDT\n"
             f"{pnl_nokta} Toplam PnL: {pnl:+.2f} USDT\n"
             f"📌 Açık: {len(pos)} / {MAKSIMUM_TOPLAM_POZISYON}"
@@ -734,7 +789,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     BOT_CALISIYOR_MU = True
     KILL_SWITCH_AKTIF = False
     ARDISIK_ZARAR_SAYACI = 0
-    await update.message.reply_text("🟢 Bot aktif! (v4.4: Trend Kayıp Kademeli)")
+    await update.message.reply_text("🟢 Bot aktif! (v4.6: İlk Kilit %3)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID):
@@ -752,12 +807,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             k = float(p.get('contracts', 0) or p.get('size', 0) or 0)
             if k > 0:
                 y = str(p.get('side', '')).upper() or "LONG"
-                ky = 'sell' if y == 'LONG' else 'buy'
-                try:
-                    exchange.cancel_all_orders(p['symbol'])
-                except:
-                    pass
-                exchange.create_order(p['symbol'], 'market', ky, k, None, {'reduceOnly': True})
+                pozisyon_kapat(p['symbol'], k, y)
         await update.message.reply_text("✅ Kapatıldı.")
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
@@ -766,7 +816,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def tarayici():
     global ARDISIK_ZARAR_SAYACI, SON_ARDISIK_ZARAR_ZAMANI, KILL_SWITCH_AKTIF
     
-    print("🚀 [BAŞLANGIÇ] ADAPTİF v4.4 (Trend Kayıp Kademeli)", flush=True)
+    print("🚀 [BAŞLANGIÇ] ADAPTİF v4.6 (İlk Kilit %3)", flush=True)
     try:
         exchange.load_markets()
     except:
@@ -861,6 +911,8 @@ def tarayici():
                             if eski in AKTIF_POZISYONLAR:
                                 del AKTIF_POZISYONLAR[eski]
                         
+                        pozisyon_emirlerini_temizle(eski)
+                        
                         hafizayi_kaydet()
                         print(f"💰 [KAPANIŞ] {eski} | Çıkış: {cikis} | Net: %{net*100:.2f} | {kategori}", flush=True)
                         tg_gonder(
@@ -875,9 +927,7 @@ def tarayici():
             except Exception as e:
                 print(f"⚠️ Kapanış: {e}", flush=True)
             
-            # ✅ TREND KAYIP KONTROLÜ (YENİ)
             trend_kayip_kontrol()
-            
             modlari_guncelle()
             trailing_stop_kontrol()
             
@@ -963,6 +1013,7 @@ def tarayici():
                     sl_ok = False
                     try:
                         exchange.create_order(symbol, 'limit', kapat_y, miktar, tp, {'reduceOnly': True})
+                        time.sleep(0.3)
                         exchange.create_order(symbol, 'stop', kapat_y, miktar, sl, {'stopPrice': sl, 'reduceOnly': True})
                         sl_ok = True
                     except Exception as e:
@@ -970,7 +1021,7 @@ def tarayici():
                     
                     if not sl_ok:
                         try:
-                            exchange.create_order(symbol, 'market', kapat_y, miktar, None, {'reduceOnly': True})
+                            pozisyon_kapat(symbol, miktar, yon)
                         except:
                             pass
                         continue
