@@ -14,7 +14,7 @@ import requests
 import ccxt
 import pandas as pd
 import ta
-from datetime import date, datetime
+from datetime import date
 from dotenv import load_dotenv
 from flask import Flask
 from telegram import Update
@@ -24,16 +24,17 @@ from supabase import create_client, Client
 # ==================== .ENV ====================
 if os.path.exists('/etc/secrets/.env'):
     load_dotenv('/etc/secrets/.env', override=True)
-    print("✅ .env yüklendi", flush=True)
+    print("✅ .env (secrets) yüklendi", flush=True)
 else:
     load_dotenv(override=True)
+    print("✅ .env yüklendi", flush=True)
 
-# ==================== FLASK ====================
+# ==================== RENDER WEB ====================
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Nötr Grid Bot aktif!"
+    return "Bot aktif!"
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
@@ -44,15 +45,18 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.environ.get("CHAT_ID", "").strip()
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
+GATE_API_KEY = os.environ.get("GATE_API_KEY", "").strip()
+GATE_SECRET = os.environ.get("GATE_SECRET", "").strip()
 
-if not SUPABASE_URL or not SUPABASE_KEY: sys.exit(1)
 if not TELEGRAM_TOKEN or not CHAT_ID: sys.exit(1)
+if not SUPABASE_URL or not SUPABASE_KEY: sys.exit(1)
+if not GATE_API_KEY or not GATE_SECRET: sys.exit(1)
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 exchange = ccxt.gate({
-    'apiKey': os.environ.get("GATE_API_KEY", "").strip(),
-    'secret': os.environ.get("GATE_SECRET", "").strip(),
+    'apiKey': GATE_API_KEY,
+    'secret': GATE_SECRET,
     'enableRateLimit': True,
     'timeout': 30000,
     'options': {'defaultType': 'swap'}
@@ -60,336 +64,260 @@ exchange = ccxt.gate({
 exchange.set_sandbox_mode(True)
 
 # ==================== AYARLAR ====================
-SEMBOL = 'BTC/USDT:USDT'
-KALDIRAC = 3
+BOT_CALISIYOR_MU = True
+state_lock = threading.Lock()
+
+KALDIRAC = 5
+MAKSIMUM_TOPLAM_POZISYON = 3
 POZISYON_ORANI = 0.15
+COOLDOWN_SURESI_SANIYE = 20 * 60
 
 KOMISYON_ORANI = 0.001
 SPREAD_MALIYETI = 0.0005
 TOPLAM_MALIYET_ORANI = (KOMISYON_ORANI * 2) + SPREAD_MALIYETI
 
-# ✅ GRID - YAKIN ARALIKLAR
-TOPLAM_SEVIYE = 12              # 6 LONG + 6 SHORT
-LONG_SEVIYE = 6
-SHORT_SEVIYE = 6
-SEVIYE_ARASI_YUZDE = 0.003       # Her seviye arası %0.3 (yakın)
+KADEMELI_KAR = [
+    (2.0, 0.40),
+    (4.0, 0.30),
+    (6.0, 0.30),
+]
 
-# Trend algılama
-ADX_YATAY_ESIGI = 20
-ADX_TREND_ESIGI = 28
-ATR_VOLATIL_CARPAN = 2.5
+ERKEN_ZARAR_ROE = -2.0
+MAKS_ACIK_KALMA = 60 * 60
 
-# Risk
-MAKS_GRID_ZARAR = 0.10
-KAR_KILITLEME = 5.0
+TRAILING_KAR = [
+    (2.0, 0.005),
+    (4.0, 0.015),
+    (6.0, 0.03),
+]
 
-# Zamanlama
-PIYASA_ANALIZ_SURESI = 15 * 60
-GRID_KONTROL_SURESI = 20
-ANA_DONGU_SURESI = 30
-
-BOT_CALISIYOR_MU = True
-state_lock = threading.Lock()
-
-# ==================== GRID DURUMU ====================
-AKTIF_GRID = {
-    'aktif': False,
-    'merkez': 0,
-    'ust': 0,
-    'alt': 0,
-    'seviyeler': [],
-    'marj_per_seviye': 0,
-    'kurulus_zamani': 0,
-    'toplam_kar': 0,
-    'kilitlenen_kar': 0
-}
-
+ARDISIK_ZARAR_LIMIT = 4
 ARDISIK_ZARAR_SAYACI = 0
 SON_ARDISIK_ZARAR_ZAMANI = 0
 KILL_SWITCH_AKTIF = False
 
-# ==================== PİYASA ANALİZİ ====================
-def piyasa_modu_bul():
-    try:
-        ohlcv_1m = exchange.fetch_ohlcv(SEMBOL, timeframe='1m', limit=100)
-        ohlcv_5m = exchange.fetch_ohlcv(SEMBOL, timeframe='5m', limit=100)
-        ohlcv_15m = exchange.fetch_ohlcv(SEMBOL, timeframe='15m', limit=100)
-        ohlcv_1h = exchange.fetch_ohlcv(SEMBOL, timeframe='1h', limit=100)
-        
-        df_1m = pd.DataFrame(ohlcv_1m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
-        df_5m = pd.DataFrame(ohlcv_5m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
-        df_15m = pd.DataFrame(ohlcv_15m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
-        df_1h = pd.DataFrame(ohlcv_1h, columns=['t', 'o', 'h', 'l', 'c', 'v'])
-        
-        adx_1m = ta.trend.ADXIndicator(high=df_1m['h'], low=df_1m['l'], close=df_1m['c'], window=14).adx().iloc[-1]
-        adx_5m = ta.trend.ADXIndicator(high=df_5m['h'], low=df_5m['l'], close=df_5m['c'], window=14).adx().iloc[-1]
-        adx_15m = ta.trend.ADXIndicator(high=df_15m['h'], low=df_15m['l'], close=df_15m['c'], window=14).adx().iloc[-1]
-        adx_1h = ta.trend.ADXIndicator(high=df_1h['h'], low=df_1h['l'], close=df_1h['c'], window=14).adx().iloc[-1]
-        
-        atr_serisi = ta.volatility.AverageTrueRange(high=df_15m['h'], low=df_15m['l'], close=df_15m['c'], window=14).average_true_range()
-        atr = atr_serisi.iloc[-1]
-        atr_ort = atr_serisi.tail(50).mean()
-        
-        rsi = ta.momentum.RSIIndicator(close=df_15m['c'], window=14).rsi().iloc[-1]
-        anlik = float(df_15m['c'].iloc[-1])
-        
-        adx_ort = (adx_1m + adx_5m + adx_15m + adx_1h) / 4
-        
-        if atr_ort > 0 and atr > atr_ort * ATR_VOLATIL_CARPAN:
-            return 'VOLATIL', adx_ort, atr, anlik, rsi, atr_ort
-        
-        if adx_ort > ADX_TREND_ESIGI:
-            return 'TREND', adx_ort, atr, anlik, rsi, atr_ort
-        
-        if adx_ort < ADX_YATAY_ESIGI:
-            return 'YATAY', adx_ort, atr, anlik, rsi, atr_ort
-        
-        return 'BELIRSIZ', adx_ort, atr, anlik, rsi, atr_ort
-    
-    except Exception as e:
-        print(f"⚠️ Analiz hatası: {e}", flush=True)
-        return 'BELIRSIZ', 0, 0, 0, 50, 0
+# ==================== DİNAMİK COIN LİSTESİ ====================
+DINAMIK_LISTE = []
+SON_DINAMIK_GUNCELLEME = 0
+DINAMIK_GUNCELLEME_SURESI = 3600
+DINAMIK_LISTE_BOYUT = 10
 
-# ==================== GRID KUR (NÖTR) ====================
-def grid_kur(fiyat, bakiye):
+# Hariç tutulacaklar (Kara Liste)
+KARA_LISTE = [
+    'BTC/USDT:USDT', 'ETH/USDT:USDT', 'AVAX/USDT:USDT',
+    'USDC/USDT:USDT', 'USDT/USDT:USDT', 'DAI/USDT:USDT',
+    'FDUSD/USDT:USDT', 'TUSD/USDT:USDT', 'BUSD/USDT:USDT',
+    'USDE/USDT:USDT', 'PYUSD/USDT:USDT'
+]
+
+def dinamik_liste_guncelle():
     """
-    Nötr grid: Hem LONG hem SHORT seviyeler.
-    Alt seviyeler → LONG aç
-    Üst seviyeler → SHORT aç
+    En hacimli + en hareketli 10 coini seçer.
+    Skor: (hacim / 1M) × |değişim|
     """
+    global DINAMIK_LISTE, SON_DINAMIK_GUNCELLEME
+    
+    if time.time() - SON_DINAMIK_GUNCELLEME < DINAMIK_GUNCELLEME_SURESI:
+        return
+    
+    print(f"\n🔄 [DİNAMİK LİSTE] Güncelleniyor...", flush=True)
+    SON_DINAMIK_GUNCELLEME = time.time()
+    
     try:
-        adim = fiyat * SEVIYE_ARASI_YUZDE
+        tickers = exchange.fetch_tickers()
+        adaylar = []
         
-        marj_per_seviye = (bakiye * POZISYON_ORANI) / TOPLAM_SEVIYE
-        
-        market = exchange.market(SEMBOL)
-        contract_size = float(market.get('contractSize', 1.0))
-        
-        seviyeler = []
-        
-        print(f"\n🔧 [NÖTR GRID KURULUYOR] {SEMBOL}", flush=True)
-        print(f"   Merkez: {fiyat:.2f}", flush=True)
-        print(f"   Adım: {adim:.2f} (%{SEVIYE_ARASI_YUZDE*100})", flush=True)
-        print(f"   Marj/seviye: {marj_per_seviye:.2f} USDT", flush=True)
-        
-        # ✅ ALT SEVİYELER (LONG)
-        for i in range(1, LONG_SEVIYE + 1):
-            seviye_fiyat = fiyat - (adim * i)
-            miktar = (marj_per_seviye * KALDIRAC) / seviye_fiyat
-            miktar = float(exchange.amount_to_precision(SEMBOL, miktar))
+        for sym, t in tickers.items():
+            if ':USDT' not in sym: continue
+            if sym in KARA_LISTE: continue
             
-            if miktar <= 0: continue
-            
-            seviyeler.append({
-                'fiyat': seviye_fiyat,
-                'miktar': miktar,
-                'yon': 'LONG',
-                'emir_id': None,
-                'aktif': True,
-                'pozisyon': False
-            })
-        
-        # ✅ ÜST SEVİYELER (SHORT)
-        for i in range(1, SHORT_SEVIYE + 1):
-            seviye_fiyat = fiyat + (adim * i)
-            miktar = (marj_per_seviye * KALDIRAC) / seviye_fiyat
-            miktar = float(exchange.amount_to_precision(SEMBOL, miktar))
-            
-            if miktar <= 0: continue
-            
-            seviyeler.append({
-                'fiyat': seviye_fiyat,
-                'miktar': miktar,
-                'yon': 'SHORT',
-                'emir_id': None,
-                'aktif': True,
-                'pozisyon': False
-            })
-        
-        # ✅ HER SEVİYEYE EMİR KOY
-        for sev in seviyeler:
             try:
-                if sev['yon'] == 'LONG':
-                    # LONG aç - limit buy
-                    order = exchange.create_order(
-                        SEMBOL, 'limit', 'buy', sev['miktar'], sev['fiyat'],
-                        {'reduceOnly': False}
-                    )
-                else:
-                    # SHORT aç - limit sell
-                    order = exchange.create_order(
-                        SEMBOL, 'limit', 'sell', sev['miktar'], sev['fiyat'],
-                        {'reduceOnly': False}
-                    )
-                sev['emir_id'] = order['id']
-                print(f"   ✅ {sev['yon']} emri: {sev['fiyat']:.2f}", flush=True)
-            except Exception as e:
-                print(f"   ⚠️ {sev['yon']} emri {sev['fiyat']:.2f}: {e}", flush=True)
-                sev['aktif'] = False
-        
-        AKTIF_GRID['aktif'] = True
-        AKTIF_GRID['merkez'] = fiyat
-        AKTIF_GRID['alt'] = fiyat - (adim * LONG_SEVIYE)
-        AKTIF_GRID['ust'] = fiyat + (adim * SHORT_SEVIYE)
-        AKTIF_GRID['seviyeler'] = seviyeler
-        AKTIF_GRID['marj_per_seviye'] = marj_per_seviye
-        AKTIF_GRID['kurulus_zamani'] = time.time()
-        AKTIF_GRID['toplam_kar'] = 0
-        AKTIF_GRID['kilitlenen_kar'] = 0
-        
-        print(f"   ✅ Grid kuruldu | Aralık: {AKTIF_GRID['alt']:.2f} - {AKTIF_GRID['ust']:.2f}", flush=True)
-        tg_gonder(
-            f"🔧 *NÖTR GRID KURULDU*\n\n"
-            f"📌 {SEMBOL}\n"
-            f"💰 Merkez: `{fiyat:.2f}`\n"
-            f"📉 Alt: `{AKTIF_GRID['alt']:.2f}` ({LONG_SEVIYE} LONG)\n"
-            f"📈 Üst: `{AKTIF_GRID['ust']:.2f}` ({SHORT_SEVIYE} SHORT)\n"
-            f"💵 Marj/seviye: `{marj_per_seviye:.2f} USDT`\n"
-            f"⚙️ Kaldıraç: `{KALDIRAC}x`\n"
-            f"🎯 Adım: `%{SEVIYE_ARASI_YUZDE*100}`"
-        )
-        return True
-    except Exception as e:
-        print(f"⚠️ Grid kurma hatası: {e}", flush=True)
-        return False
-
-# ==================== GRID KAPAT ====================
-def grid_kapat(sebep=""):
-    try:
-        print(f"\n🛑 [GRID KAPATILIYOR] {sebep}", flush=True)
-        
-        # Tüm emirleri iptal
-        try:
-            open_orders = exchange.fetch_open_orders(SEMBOL)
-            for order in open_orders:
-                try: exchange.cancel_order(order['id'], SEMBOL)
-                except: pass
-        except: pass
-        
-        # Tüm pozisyonları kapat
-        try:
-            positions = exchange.fetch_positions([SEMBOL])
-            for p in positions:
-                k = float(p.get('contracts', 0) or p.get('size', 0) or 0)
-                if k > 0:
-                    y = str(p.get('side', '')).upper()
-                    ky = 'sell' if y == 'LONG' else 'buy'
-                    try:
-                        exchange.create_order(SEMBOL, 'market', ky, k, None, {'reduceOnly': True})
-                    except: pass
-        except: pass
-        
-        toplam_kar = AKTIF_GRID.get('toplam_kar', 0)
-        AKTIF_GRID['aktif'] = False
-        AKTIF_GRID['seviyeler'] = []
-        
-        print(f"   ✅ Grid kapatıldı | Kâr: {toplam_kar:.2f} USDT", flush=True)
-        tg_gonder(f"🛑 *GRID KAPATILDI*\n\n📌 {SEMBOL}\n📊 {sebep}\n💰 Kâr: `{toplam_kar:.2f} USDT`")
-        return True
-    except Exception as e:
-        print(f"⚠️ Kapatma hatası: {e}", flush=True)
-        return False
-
-# ==================== GRID KONTROL ====================
-def grid_kontrol():
-    if not AKTIF_GRID['aktif']:
-        return
-    
-    try:
-        ticker = exchange.fetch_ticker(SEMBOL)
-        anlik = float(ticker['last'])
-        
-        # Aralık dışı mı?
-        if anlik < AKTIF_GRID['alt'] * 0.99 or anlik > AKTIF_GRID['ust'] * 1.01:
-            grid_kapat(f"Aralık dışı: {anlik:.2f}")
-            return
-        
-        # Açık emirleri al
-        open_orders = exchange.fetch_open_orders(SEMBOL)
-        open_ids = {o['id']: o for o in open_orders}
-        
-        # Açık pozisyonları al
-        positions = exchange.fetch_positions([SEMBOL])
-        aktif_poz = {}
-        for p in positions:
-            k = float(p.get('contracts', 0) or p.get('size', 0) or 0)
-            if k > 0:
-                side = str(p.get('side', '')).upper()
-                entry = float(p.get('entryPrice', 0))
-                aktif_poz[side] = {'miktar': k, 'giris': entry, 'pnl': float(p.get('unrealizedPnl', 0) or 0)}
-        
-        # Her seviyeyi kontrol et
-        for sev in AKTIF_GRID['seviyeler']:
-            if not sev['aktif']:
+                hacim = float(t.get('quoteVolume', 0) or 0)
+                degisim = abs(float(t.get('percentage', 0) or 0))
+                
+                # Filtreler: hacim > 5M, değişim > %1
+                if hacim < 5_000_000: continue
+                if degisim < 1.0: continue
+                
+                # Skor: hacim × değişim (her ikisi de yüksek olan kazanır)
+                skor = (hacim / 1_000_000) * degisim
+                adaylar.append((sym, skor, degisim, hacim))
+            except:
                 continue
-            
-            # Emir açık mı?
-            if sev['emir_id'] and sev['emir_id'] not in open_ids:
-                # Emir tetiklenmiş olabilir
-                try:
-                    order = exchange.fetch_order(sev['emir_id'], SEMBOL)
-                    if order['status'] == 'closed':
-                        # ✅ Tetiklendi
-                        print(f"   ✅ Tetiklendi: {sev['yon']} @ {sev['fiyat']:.2f}", flush=True)
-                        
-                        # Bu seviye için karşıt emir koy (TP)
-                        if sev['yon'] == 'LONG':
-                            # LONG açıldı → üstte TP (kapat)
-                            tp_fiyat = sev['fiyat'] * (1 + SEVIYE_ARASI_YUZDE)
-                            try:
-                                tp_order = exchange.create_order(
-                                    SEMBOL, 'limit', 'sell', sev['miktar'], tp_fiyat,
-                                    {'reduceOnly': True}
-                                )
-                                sev['tp_emir_id'] = tp_order['id']
-                                sev['pozisyon'] = True
-                                print(f"      🎯 TP: {tp_fiyat:.2f}", flush=True)
-                            except Exception as e:
-                                print(f"      ⚠️ TP hatası: {e}", flush=True)
-                        
-                        elif sev['yon'] == 'SHORT':
-                            # SHORT açıldı → altta TP
-                            tp_fiyat = sev['fiyat'] * (1 - SEVIYE_ARASI_YUZDE)
-                            try:
-                                tp_order = exchange.create_order(
-                                    SEMBOL, 'limit', 'buy', sev['miktar'], tp_fiyat,
-                                    {'reduceOnly': True}
-                                )
-                                sev['tp_emir_id'] = tp_order['id']
-                                sev['pozisyon'] = True
-                                print(f"      🎯 TP: {tp_fiyat:.2f}", flush=True)
-                            except Exception as e:
-                                print(f"      ⚠️ TP hatası: {e}", flush=True)
-                    else:
-                        sev['aktif'] = False
-                except:
-                    sev['aktif'] = False
         
-        # Kâr kilitleme
-        if AKTIF_GRID['toplam_kar'] - AKTIF_GRID['kilitlenen_kar'] >= KAR_KILITLEME:
-            kilit = AKTIF_GRID['toplam_kar']
-            AKTIF_GRID['kilitlenen_kar'] = kilit
-            tg_gonder(f"💰 *KÂR KİLİTLENDİ*\n\n{SEMBOL}\nToplam: `{kilit:.2f} USDT`")
-    
+        # Skora göre sırala
+        adaylar.sort(key=lambda x: x[1], reverse=True)
+        DINAMIK_LISTE = [a[0] for a in adaylar[:DINAMIK_LISTE_BOYUT]]
+        
+        print(f"✅ [DİNAMİK] {len(DINAMIK_LISTE)} coin seçildi:", flush=True)
+        for s, skor, deg, hac in adaylar[:DINAMIK_LISTE_BOYUT]:
+            print(f"   • {s} | Değişim: %{deg:.1f} | Hacim: {hac/1_000_000:.0f}M | Skor: {skor:.0f}", flush=True)
+        
+        if DINAMIK_LISTE:
+            liste_str = "\n".join([f"• {s.replace('/USDT:USDT','')} (%{d:.1f})" for s, _, d, _ in adaylar[:DINAMIK_LISTE_BOYUT]])
+            tg_gonder(f"🔄 DİNAMİK LİSTE\n\n{liste_str}")
+        
     except Exception as e:
-        print(f"⚠️ Grid kontrol: {e}", flush=True)
+        print(f"⚠️ Dinamik liste hatası: {e}", flush=True)
 
-# ==================== POZİSYON TAKİBİ ====================
-def pozisyon_kar_takip():
-    """
-    Açık pozisyonları izle, kâr realize olunca AKTIF_GRID['toplam_kar'] güncelle.
-    """
-    if not AKTIF_GRID['aktif']:
-        return
-    
+def takip_listesi():
+    return DINAMIK_LISTE
+
+# ==================== HAFIZA ====================
+def hafizayi_yukle():
     try:
-        positions = exchange.fetch_positions([SEMBOL])
-        for p in positions:
-            k = float(p.get('contracts', 0) or p.get('size', 0) or 0)
-            if k > 0:
-                # Açık pozisyon var
-                pass  # PnL zaten unrealized, kapanınca realize olur
+        response = supabase.table("bot_hafiza").select("*").eq("id", 1).execute()
+        if response.data and len(response.data) > 0:
+            veri = response.data[0]
+            print("💾 Hafıza yüklendi.", flush=True)
+            return {
+                "aktif_sistemler": veri.get("aktif_sistemler", {}),
+                "analitik": veri.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0}),
+                "cooldownlar": veri.get("cooldownlar", {})
+            }
+    except Exception as e:
+        print(f"⚠️ Hafıza: {e}", flush=True)
+    return {
+        "aktif_sistemler": {},
+        "analitik": {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0},
+        "cooldownlar": {}
+    }
+
+def hafizayi_kaydet():
+    with state_lock:
+        try:
+            payload = {
+                "basarili_islem_sayisi": int(ANALITIK.get("basarili_islem_sayisi", 0)),
+                "basarisiz_islem_sayisi": int(ANALITIK.get("basarisiz_islem_sayisi", 0))
+            }
+            clean_cd = {}
+            for k, v in COIN_COOLDOWNLAR.items():
+                if isinstance(v, dict):
+                    clean_cd[k] = {
+                        "zaman": float(v.get("zaman", 0)),
+                        "son_yon": str(v.get("son_yon", "")),
+                        "son_cikis_fiyat": float(v.get("son_cikis_fiyat", 0))
+                    }
+            
+            supabase.table("bot_hafiza").upsert({
+                "id": 1,
+                "aktif_sistemler": AKTIF_SISTEMLER,
+                "analitik": payload,
+                "cooldownlar": clean_cd
+            }).execute()
+        except Exception as e:
+            print(f"⚠️ Kayıt: {e}", flush=True)
+
+kalici = hafizayi_yukle()
+AKTIF_SISTEMLER = kalici.get("aktif_sistemler", {})
+ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0})
+COIN_COOLDOWNLAR = kalici.get("cooldownlar", {})
+
+# ==================== YARDIMCI EMİR ====================
+def emir_sl_mi(order):
+    try:
+        otype = str(order.get('type', '')).lower()
+        info_type = str(order.get('info', {}).get('type', '')).lower()
+        if otype in ['stop', 'stop_market', 'stop_limit']: return True
+        if 'stop' in otype or 'conditional' in otype: return True
+        if 'conditional' in info_type or 'stop' in info_type: return True
+        if order.get('stopPrice') or order.get('triggerPrice'): return True
+        return False
+    except: return False
+
+def eski_sl_sil(symbol, yeni_sl_id):
+    try:
+        orders = exchange.fetch_open_orders(symbol)
+        silinen = 0
+        for o in orders:
+            if o['id'] == yeni_sl_id: continue
+            if emir_sl_mi(o):
+                try: exchange.cancel_order(o['id'], symbol); silinen += 1
+                except: pass
+        return silinen
+    except: return 0
+
+def pozisyon_emirlerini_temizle(symbol):
+    try:
+        orders = exchange.fetch_open_orders(symbol)
+        for o in orders:
+            try: exchange.cancel_order(o['id'], symbol)
+            except: pass
     except: pass
+
+def yeni_sl_koy(symbol, miktar, yeni_sl, yon):
+    ky = 'sell' if yon == 'LONG' else 'buy'
+    try:
+        order = exchange.create_order(symbol, 'stop', ky, miktar, yeni_sl, {'stopPrice': yeni_sl, 'reduceOnly': True})
+        time.sleep(0.3)
+        eski_sl_sil(symbol, order['id'])
+        return True
+    except Exception as e:
+        print(f"⚠️ SL koyulamadı {symbol}: {e}", flush=True)
+        return False
+
+def pozisyon_kapat(symbol, miktar, yon, oran=1.0):
+    ky = 'sell' if yon == 'LONG' else 'buy'
+    try:
+        kapat = float(exchange.amount_to_precision(symbol, miktar * oran))
+        if kapat <= 0: return False
+        exchange.create_order(symbol, 'market', ky, kapat, None, {'reduceOnly': True})
+        time.sleep(0.3)
+        if oran >= 1.0: pozisyon_emirlerini_temizle(symbol)
+        return True
+    except Exception as e:
+        print(f"⚠️ Kapatma {symbol}: {e}", flush=True)
+        return False
+
+# ==================== PİYASA REJİMİ ====================
+def piyasa_rejimini_tespit_et():
+    try:
+        ohlcv = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=50)
+        df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        
+        adx = ta.trend.ADXIndicator(df['h'], df['l'], df['c'], window=14).adx().iloc[-1]
+        
+        bb = ta.volatility.BollingerBands(close=df['c'], window=20, window_dev=2)
+        bb_high = bb.bollinger_hband().iloc[-1]
+        bb_low = bb.bollinger_lband().iloc[-1]
+        bb_mid = bb.bollinger_mavg().iloc[-1]
+        bb_bw = (bb_high - bb_low) / bb_mid if bb_mid > 0 else 0
+        
+        ema9 = ta.trend.ema_indicator(df['c'], window=9).iloc[-1]
+        ema21 = ta.trend.ema_indicator(df['c'], window=21).iloc[-1]
+        fark = abs(ema9 - ema21) / ema21 * 100 if ema21 > 0 else 0
+        
+        if adx < 32 or bb_bw < 0.035 or fark < 0.25:
+            return "YATAY", "TESTERE"
+        else:
+            yon = "LONG" if ema9 > ema21 else "SHORT"
+            return "TREND", yon
+    except Exception as e:
+        print(f"⚠️ Rejim: {e}", flush=True)
+        return "YATAY", "TESTERE"
+
+# ==================== EMİR DEFTERİ ====================
+def emir_defteri_analizi(symbol):
+    try:
+        ob = exchange.fetch_order_book(symbol, limit=20)
+        bids = ob.get('bids', [])
+        asks = ob.get('asks', [])
+        t_alis = sum([b[1] for b in bids]) if bids else 1
+        t_satis = sum([a[1] for a in asks]) if asks else 1
+        t_toplam = t_alis + t_satis
+        return (t_alis / t_toplam * 100) if t_toplam > 0 else 50
+    except: return 50
+
+# ==================== AKILLI SL/TP ====================
+def akilli_seviye(anlik, yon, df):
+    atr = ta.volatility.AverageTrueRange(df['h'], df['l'], df['c'], window=14).average_true_range().iloc[-1]
+    if yon == 'LONG':
+        tp = anlik + (atr * 2.5)
+        sl = anlik - (atr * 1.5)
+    else:
+        tp = anlik - (atr * 2.5)
+        sl = anlik + (atr * 1.5)
+    return float(tp), float(sl)
 
 # ==================== TELEGRAM ====================
 def tg_gonder(mesaj):
@@ -404,39 +332,45 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         balance = await asyncio.to_thread(exchange.fetch_balance)
         total = float(balance['total'].get('USDT', 0))
+        pos = [p for p in await asyncio.to_thread(exchange.fetch_positions) if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
+        pnl = sum(float(p.get('unrealizedPnl', 0)) for p in pos)
         
-        grid_durum = "🟢 AKTİF" if AKTIF_GRID['aktif'] else "🔴 PASİF"
+        rejim, yon_btc = await asyncio.to_thread(piyasa_rejimini_tespit_et)
         
-        pos = [p for p in await asyncio.to_thread(exchange.fetch_positions, [SEMBOL]) if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
+        bas = int(ANALITIK.get("basarili_islem_sayisi", 0))
+        basz = int(ANALITIK.get("basarisiz_islem_sayisi", 0))
+        top = bas + basz
+        oran = (bas / top * 100) if top > 0 else 0
+        
         pos_detay = ""
         for p in pos:
+            sym = p['symbol']
             y = str(p.get('side', '')).upper()
             g = float(p.get('entryPrice', 0))
+            t = await asyncio.to_thread(exchange.fetch_ticker, sym)
+            gf = float(t['last'])
+            f = (gf - g) / g if y == "LONG" else (g - gf) / g
+            roe = f * 100 * KALDIRAC
             u = float(p.get('unrealizedPnl', 0) or 0)
+            kademe = len(AKTIF_SISTEMLER.get(sym, {}).get("alinan_kademeler", []))
             nokta = "🟢" if u >= 0 else "🔴"
-            pos_detay += f"\n{nokta} {y} @ `{g:.2f}` | K/Z: `{u:+.2f}`"
+            pos_detay += f"\n{nokta} {sym} | {y} ({KALDIRAC}x)\n  Giriş: `{g:.4f}` | ROE: `%{roe:+.2f}` | Kademe: {kademe}/3"
         
-        grid_detay = ""
-        if AKTIF_GRID['aktif']:
-            aktif_sev = sum(1 for s in AKTIF_GRID['seviyeler'] if s['aktif'])
-            poz_sev = sum(1 for s in AKTIF_GRID['seviyeler'] if s.get('pozisyon', False))
-            grid_detay = (
-                f"\n📊 Merkez: `{AKTIF_GRID['merkez']:.2f}`"
-                f"\n📉 Alt: `{AKTIF_GRID['alt']:.2f}` | 📈 Üst: `{AKTIF_GRID['ust']:.2f}`"
-                f"\n🎯 Aktif emir: `{aktif_sev}` | Pozisyon: `{poz_sev}`"
-                f"\n💰 Toplam kâr: `{AKTIF_GRID['toplam_kar']:.2f} USDT`"
-                f"\n🔒 Kilit: `{AKTIF_GRID['kilitlenen_kar']:.2f} USDT`"
-            )
+        pnl_nokta = "🟢" if pnl >= 0 else "🔴"
+        
+        liste_str = "\n".join([f"• {s.replace('/USDT:USDT','')}" for s in DINAMIK_LISTE[:5]])
         
         mesaj = (
-            f"📊 *NÖTR GRID DURUM*\n\n"
+            f"📊 DURUM [v8.0]\n\n"
+            f"🌐 BTC Rejim: `{rejim}` ({yon_btc})\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
-            f"📌 Sembol: `{SEMBOL}`\n"
-            f"⚙️ Kaldıraç: `{KALDIRAC}x`\n"
-            f"🎯 Grid: {grid_durum}"
-            f"{grid_detay}"
+            f"{pnl_nokta} Toplam PnL: `{pnl:+.2f} USDT`\n"
+            f"📌 Açık: `{len(pos)} / {MAKSIMUM_TOPLAM_POZISYON}`"
             f"{pos_detay}\n\n"
-            f"⚡ Kill-Switch: `{'AKTİF' if KILL_SWITCH_AKTIF else 'Pasif'}`"
+            f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
+            f"📈 Başarı: `%{oran:.1f}` ({top} işlem)\n"
+            f"⚡ Kill-Switch: `{'AKTİF' if KILL_SWITCH_AKTIF else 'Pasif'}`\n\n"
+            f"📋 Dinamik Liste ({len(DINAMIK_LISTE)}):\n{liste_str}"
         )
         await update.message.reply_text(mesaj)
     except Exception as e:
@@ -444,9 +378,11 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
-    global BOT_CALISIYOR_MU
+    global BOT_CALISIYOR_MU, KILL_SWITCH_AKTIF, ARDISIK_ZARAR_SAYACI
     BOT_CALISIYOR_MU = True
-    await update.message.reply_text("🟢 Nötr grid bot aktif!")
+    KILL_SWITCH_AKTIF = False
+    ARDISIK_ZARAR_SAYACI = 0
+    await update.message.reply_text("🟢 Bot aktif! (v8.0 Dinamik Liste)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -457,93 +393,377 @@ async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     try:
-        await asyncio.to_thread(grid_kapat, "Manuel kapatma")
-        await update.message.reply_text("✅ Grid kapatıldı.")
+        positions = await asyncio.to_thread(exchange.fetch_positions)
+        for p in positions:
+            k = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+            if k > 0:
+                y = str(p.get('side', '')).upper() or "LONG"
+                pozisyon_kapat(p['symbol'], k, y, oran=1.0)
+        await update.message.reply_text("✅ Kapatıldı.")
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
 
-async def analiz_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def liste_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     try:
-        mod, adx, atr, fiyat, rsi, atr_ort = await asyncio.to_thread(piyasa_modu_bul)
-        await update.message.reply_text(
-            f"📊 *PİYASA ANALİZİ*\n\n"
-            f"📌 {SEMBOL}\n"
-            f"💰 Fiyat: `{fiyat:.2f}`\n"
-            f"🎯 Mod: `{mod}`\n"
-            f"📈 ADX: `{adx:.1f}`\n"
-            f"📊 ATR: `{atr:.2f}` (ort: `{atr_ort:.2f}`)\n"
-            f"📉 RSI: `{rsi:.0f}`"
-        )
+        liste_str = "📋 *DİNAMİK LİSTE*\n\n"
+        for i, s in enumerate(DINAMIK_LISTE, 1):
+            liste_str += f"{i}. {s.replace('/USDT:USDT','')}\n"
+        await update.message.reply_text(liste_str)
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
+
+async def liste_guncelle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != int(CHAT_ID): return
+    global SON_DINAMIK_GUNCELLEME
+    SON_DINAMIK_GUNCELLEME = 0
+    await update.message.reply_text("🔄 Liste zorla güncelleniyor...")
+    await asyncio.to_thread(dinamik_liste_guncelle)
+    liste_str = "\n".join([f"• {s.replace('/USDT:USDT','')}" for s in DINAMIK_LISTE])
+    await update.message.reply_text(f"✅ Güncellendi:\n\n{liste_str}")
+
+# ==================== KADEMELİ KÂR + ERKEN ZARAR ====================
+def kar_zarar_yonetimi():
+    with state_lock:
+        kopya = list(AKTIF_SISTEMLER.items())
+    
+    for sym, bilgi in kopya:
+        if sym not in AKTIF_SISTEMLER: continue
+        if not isinstance(bilgi, dict): continue
+        
+        yon = bilgi.get("yon", "LONG")
+        g = float(bilgi.get("giris_fiyati", 0))
+        giris_zaman = float(bilgi.get("giris_zamani", 0))
+        alinan = bilgi.get("alinan_kademeler", [])
+        
+        if time.time() - giris_zaman < 60: continue
+        
+        try:
+            t = exchange.fetch_ticker(sym)
+            anlik = float(t['last'])
+        except: continue
+        
+        roe = ((anlik - g) / g * 100 * KALDIRAC) if yon == "LONG" else ((g - anlik) / g * 100 * KALDIRAC)
+        
+        miktar = None
+        for p in exchange.fetch_positions():
+            if p['symbol'] == sym:
+                miktar = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+                break
+        
+        if not miktar or miktar <= 0: continue
+        
+        if roe <= ERKEN_ZARAR_ROE:
+            if pozisyon_kapat(sym, miktar, yon, oran=1.0):
+                print(f"🛑 [ERKEN ZARAR] {sym} | ROE:%{roe:.1f}", flush=True)
+                tg_gonder(f"🛑 ERKEN ZARAR KES\n📌 {sym}\n💰 ROE: %{roe:+.2f}")
+            continue
+        
+        gecen = time.time() - giris_zaman
+        if gecen > MAKS_ACIK_KALMA:
+            if pozisyon_kapat(sym, miktar, yon, oran=1.0):
+                print(f"⏰ [ZAMAN] {sym} | {int(gecen/60)}dk", flush=True)
+                tg_gonder(f"⏰ ZAMAN DOLDU\n📌 {sym}\n🕐 {int(gecen/60)} dk\n💰 ROE: %{roe:+.2f}")
+            continue
+        
+        for i, (esik, oran) in enumerate(KADEMELI_KAR):
+            if i in alinan: continue
+            if roe >= esik:
+                if pozisyon_kapat(sym, miktar, yon, oran=oran):
+                    with state_lock:
+                        if sym in AKTIF_SISTEMLER:
+                            yeni = AKTIF_SISTEMLER[sym].get("alinan_kademeler", [])
+                            yeni.append(i)
+                            AKTIF_SISTEMLER[sym]["alinan_kademeler"] = yeni
+                    print(f"💰 [KADEME] {sym} | ROE:%{roe:.1f} → %{int(oran*100)}", flush=True)
+                    tg_gonder(f"💰 KADEMELİ KÂR\n📌 {sym}\n📊 ROE: %{roe:+.2f}\n🎯 %{int(oran*100)} kapatıldı")
+                break
+
+# ==================== TRAILING ====================
+def trailing_kontrol():
+    with state_lock:
+        kopya = list(AKTIF_SISTEMLER.items())
+    
+    for sym, bilgi in kopya:
+        if sym not in AKTIF_SISTEMLER: continue
+        if not isinstance(bilgi, dict): continue
+        
+        yon = bilgi.get("yon", "LONG")
+        g = float(bilgi.get("giris_fiyati", 0))
+        sl_kayitli = float(bilgi.get("sl_fiyat", 0))
+        giris_zaman = float(bilgi.get("giris_zamani", 0))
+        
+        if time.time() - giris_zaman < 60: continue
+        
+        try:
+            t = exchange.fetch_ticker(sym)
+            anlik = float(t['last'])
+        except: continue
+        
+        roe = ((anlik - g) / g * 100 * KALDIRAC) if yon == "LONG" else ((g - anlik) / g * 100 * KALDIRAC)
+        
+        yeni_sl = None
+        for esik, kilit in TRAILING_KAR:
+            if roe >= esik:
+                if yon == "LONG":
+                    yeni_sl = g * (1 + (TOPLAM_MALIYET_ORANI + kilit) / KALDIRAC)
+                else:
+                    yeni_sl = g * (1 - (TOPLAM_MALIYET_ORANI + kilit) / KALDIRAC)
+                break
+        
+        if yeni_sl is None: continue
+        
+        iyilestirme = (yeni_sl > sl_kayitli * 1.0005) if yon == "LONG" else (yeni_sl < sl_kayitli * 0.9995)
+        if not iyilestirme: continue
+        
+        miktar = None
+        for p in exchange.fetch_positions():
+            if p['symbol'] == sym:
+                miktar = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+                break
+        
+        if not miktar or miktar <= 0: continue
+        
+        if yeni_sl_koy(sym, miktar, yeni_sl, yon):
+            with state_lock:
+                if sym in AKTIF_SISTEMLER:
+                    AKTIF_SISTEMLER[sym]["sl_fiyat"] = yeni_sl
+            print(f"🔒 [TRAILING] {sym} | ROE:%{roe:.1f} → SL:{yeni_sl:.6f}", flush=True)
 
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global ARDISIK_ZARAR_SAYACI, SON_ARDISIK_ZARAR_ZAMANI, KILL_SWITCH_AKTIF
     
-    print(f"🚀 [NÖTR GRID BOT] {SEMBOL}", flush=True)
+    print("🚀 [BAŞLANGIÇ] v8.0 Aktif - Dinamik Liste", flush=True)
     try:
         exchange.load_markets()
     except: pass
     
-    son_analiz = 0
-    son_grid_kontrol = 0
+    # İlk listeyi hemen oluştur
+    dinamik_liste_guncelle()
     
     while True:
         try:
             if not BOT_CALISIYOR_MU:
-                time.sleep(10)
-                continue
-            
-            simdi = time.time()
+                time.sleep(5); continue
             
             # Kill-switch
             if KILL_SWITCH_AKTIF:
-                if simdi - SON_ARDISIK_ZARAR_ZAMANI > 3600:
+                if time.time() - SON_ARDISIK_ZARAR_ZAMANI > 3600:
                     KILL_SWITCH_AKTIF = False
                     ARDISIK_ZARAR_SAYACI = 0
                     tg_gonder("✅ Kill-switch kapandı")
                 else:
-                    time.sleep(30)
+                    time.sleep(30); continue
+            
+            # Dinamik liste güncelle (1 saatte bir)
+            dinamik_liste_guncelle()
+            
+            rejim, btc_yonu = piyasa_rejimini_tespit_et()
+            
+            # KAPANIŞ KONTROLÜ
+            try:
+                raw_pos = exchange.fetch_positions()
+                anlik_aktif = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
+                
+                aktif_map = {}
+                for p in raw_pos:
+                    k = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+                    if k > 0:
+                        aktif_map[p['symbol']] = p
+                
+                for eski in list(AKTIF_SISTEMLER.keys()):
+                    if eski not in anlik_aktif:
+                        bilgi = AKTIF_SISTEMLER[eski]
+                        g = float(bilgi.get("giris_fiyati", 0))
+                        y = bilgi.get("yon", "LONG")
+                        
+                        cikis = g
+                        try:
+                            t = exchange.fetch_ticker(eski)
+                            cikis = float(t['last'])
+                        except: pass
+                        
+                        net = ((cikis - g) / g - TOPLAM_MALIYET_ORANI) if y == "LONG" else ((g - cikis) / g - TOPLAM_MALIYET_ORANI)
+                        
+                        if net > 0:
+                            tip = "✅ KÂRLA KAPANDI"
+                            karli = True
+                        else:
+                            tip = "❌ ZARARLA KAPANDI"
+                            karli = False
+                        
+                        with state_lock:
+                            if karli:
+                                ANALITIK["basarili_islem_sayisi"] = int(ANALITIK.get("basarili_islem_sayisi", 0)) + 1
+                                ARDISIK_ZARAR_SAYACI = 0
+                            else:
+                                ANALITIK["basarisiz_islem_sayisi"] = int(ANALITIK.get("basarisiz_islem_sayisi", 0)) + 1
+                                ARDISIK_ZARAR_SAYACI += 1
+                                SON_ARDISIK_ZARAR_ZAMANI = time.time()
+                            
+                            COIN_COOLDOWNLAR[eski] = {
+                                "zaman": float(time.time() + COOLDOWN_SURESI_SANIYE),
+                                "son_yon": y,
+                                "son_cikis_fiyat": float(cikis)
+                            }
+                            if eski in AKTIF_SISTEMLER:
+                                del AKTIF_SISTEMLER[eski]
+                        
+                        pozisyon_emirlerini_temizle(eski)
+                        hafizayi_kaydet()
+                        print(f"💰 [KAPANIŞ] {eski} | Çıkış:{cikis} | Net:%{net*100:.2f}", flush=True)
+                        tg_gonder(f"{tip}\n📌 {eski} | Çıkış: {cikis}\n📊 Net: %{net*100:+.2f}")
+                        
+                        if ARDISIK_ZARAR_SAYACI >= ARDISIK_ZARAR_LIMIT:
+                            KILL_SWITCH_AKTIF = True
+                            tg_gonder(f"🚨 KILL-SWITCH AKTİF!")
+            except Exception as e:
+                print(f"⚠️ Kapanış: {e}", flush=True)
+            
+            # KÂR/ZARAR YÖNETİMİ
+            kar_zarar_yonetimi()
+            trailing_kontrol()
+            
+            # SİNYAL TARAMA
+            adaylar = []
+            
+            for symbol in takip_listesi():
+                if not BOT_CALISIYOR_MU: break
+                if symbol in aktif_map: continue
+                
+                with state_lock:
+                    cd = COIN_COOLDOWNLAR.get(symbol)
+                    if cd:
+                        z = cd.get("zaman", 0) if isinstance(cd, dict) else float(cd)
+                        if z > time.time(): continue
+                
+                try:
+                    ticker = exchange.fetch_ticker(symbol)
+                    anlik = float(ticker['last'])
+                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=100)
+                    if len(ohlcv) < 50: continue
+                    
+                    df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+                    
+                    rsi = ta.momentum.rsi(df['c'], window=14).iloc[-1]
+                    emir_orani = emir_defteri_analizi(symbol)
+                    
+                    yon = None
+                    sebep = ""
+                    
+                    if rejim == "YATAY":
+                        # Testere: RSI aşırı uçlarda DÖNÜŞ
+                        if rsi < 32:
+                            yon = "LONG"
+                            sebep = f"TESTERE LONG (RSI:{rsi:.0f})"
+                        elif rsi > 68:
+                            yon = "SHORT"
+                            sebep = f"TESTERE SHORT (RSI:{rsi:.0f})"
+                    else:
+                        # TREND: BTC yönünde
+                        if btc_yonu == "LONG" and 40 < rsi < 55 and emir_orani > 55:
+                            yon = "LONG"
+                            sebep = f"TREND LONG (RSI:{rsi:.0f}, Emir:{emir_orani:.0f}%)"
+                        elif btc_yonu == "SHORT" and 45 < rsi < 60 and emir_orani < 45:
+                            yon = "SHORT"
+                            sebep = f"TREND SHORT (RSI:{rsi:.0f}, Emir:{emir_orani:.0f}%)"
+                    
+                    if yon is None: continue
+                    
+                    tp, sl = akilli_seviye(anlik, yon, df)
+                    
+                    if yon == "LONG":
+                        net_kar = ((tp - anlik) / anlik) - TOPLAM_MALIYET_ORANI
+                    else:
+                        net_kar = ((anlik - tp) / anlik) - TOPLAM_MALIYET_ORANI
+                    
+                    if net_kar < 0.005: continue
+                    
+                    adaylar.append({
+                        "symbol": symbol, "yon": yon, "tp": tp, "sl": sl,
+                        "rsi": rsi, "fiyat": anlik, "sebep": sebep, "df": df
+                    })
+                except: continue
+            
+            # KAPASİTE
+            kapasite = MAKSIMUM_TOPLAM_POZISYON - len(aktif_map)
+            
+            for aday in adaylar[:kapasite]:
+                if not BOT_CALISIYOR_MU: break
+                if aday["symbol"] in aktif_map: continue
+                
+                try:
+                    bakiye = exchange.fetch_balance()
+                    toplam_b = float(bakiye['total'].get('USDT', 0))
+                    serbest_b = float(bakiye.get('free', {}).get('USDT', 0) or 0)
+                    
+                    exchange.set_leverage(KALDIRAC, aday["symbol"])
+                    market = exchange.market(aday["symbol"])
+                    
+                    kullan = min(toplam_b * POZISYON_ORANI, serbest_b)
+                    if kullan < 1: continue
+                    
+                    giris = aday["fiyat"]
+                    miktar = float(exchange.amount_to_precision(
+                        aday["symbol"],
+                        max((kullan * KALDIRAC) / giris / float(market.get('contractSize', 1.0)),
+                            float(market['limits']['amount']['min'] or 1.0))
+                    ))
+                    
+                    iy = 'buy' if aday["yon"] == 'LONG' else 'sell'
+                    ky = 'sell' if aday["yon"] == 'LONG' else 'buy'
+                    
+                    exchange.create_order(aday["symbol"], 'market', iy, miktar)
+                    time.sleep(0.5)
+                    
+                    sl_ok = False
+                    try:
+                        exchange.create_order(aday["symbol"], 'limit', ky, miktar, aday["tp"], {'reduceOnly': True})
+                        time.sleep(0.3)
+                        exchange.create_order(aday["symbol"], 'stop', ky, miktar, aday["sl"], {'stopPrice': aday["sl"], 'reduceOnly': True})
+                        sl_ok = True
+                    except Exception as e:
+                        print(f"   ⚠️ TP/SL: {e}", flush=True)
+                    
+                    if not sl_ok:
+                        try: pozisyon_kapat(aday["symbol"], miktar, aday["yon"], oran=1.0)
+                        except: pass
+                        continue
+                    
+                    with state_lock:
+                        AKTIF_SISTEMLER[aday["symbol"]] = {
+                            "giris_fiyati": giris,
+                            "yon": aday["yon"],
+                            "tp_fiyat": aday["tp"],
+                            "sl_fiyat": aday["sl"],
+                            "giris_zamani": time.time(),
+                            "kaldirac": KALDIRAC,
+                            "giris_rsi": float(aday["rsi"]),
+                            "alinan_kademeler": []
+                        }
+                        aktif_map[aday["symbol"]] = {"dummy": True}
+                    
+                    hafizayi_kaydet()
+                    print(f"   ✅ [AÇILDI] {aday['symbol']} {aday['yon']} @ {giris}", flush=True)
+                    
+                    tg_gonder(
+                        f"🎯 SİNYAL! [{rejim}]\n"
+                        f"📌 {aday['symbol']} | {aday['yon']}\n"
+                        f"📊 {aday['sebep']}\n"
+                        f"🎯 Giriş: {giris:.4f}\n"
+                        f"💰 TP: {aday['tp']:.4f}\n"
+                        f"🛑 SL: {aday['sl']:.4f}\n"
+                        f"💵 Marj: {kullan:.2f} USDT"
+                    )
+                except Exception as e:
+                    print(f"   ⚠️ Açma {aday['symbol']}: {e}", flush=True)
                     continue
-            
-            # Piyasa analizi
-            if simdi - son_analiz > PIYASA_ANALIZ_SURESI:
-                son_analiz = simdi
-                
-                mod, adx, atr, fiyat, rsi, atr_ort = piyasa_modu_bul()
-                
-                print(f"\n📊 [ANALİZ] {mod} | ADX:{adx:.1f} | ATR:{atr:.2f} | Fiyat:{fiyat:.2f}", flush=True)
-                
-                if mod == 'YATAY':
-                    if not AKTIF_GRID['aktif']:
-                        bakiye = exchange.fetch_balance()
-                        toplam_b = float(bakiye['total'].get('USDT', 0))
-                        if toplam_b >= 20:
-                            exchange.set_leverage(KALDIRAC, SEMBOL)
-                            grid_kur(fiyat, toplam_b)
-                
-                elif mod == 'TREND':
-                    if AKTIF_GRID['aktif']:
-                        grid_kapat(f"Trend başladı (ADX:{adx:.1f})")
-                    tg_gonder(f"📈 *TREND ALGILANDI*\nADX: `{adx:.1f}`\nGrid kapalı, beklemede.")
-                
-                elif mod == 'VOLATIL':
-                    if AKTIF_GRID['aktif']:
-                        grid_kapat(f"Volatilite yüksek (ATR:{atr:.2f})")
-                    tg_gonder(f"⚡ *VOLATİLİTE YÜKSEK*\nATR: `{atr:.2f}`\nBeklemede.")
-            
-            # Grid kontrolü
-            if AKTIF_GRID['aktif'] and simdi - son_grid_kontrol > GRID_KONTROL_SURESI:
-                son_grid_kontrol = simdi
-                grid_kontrol()
-            
-            time.sleep(ANA_DONGU_SURESI)
         
         except Exception as e:
             print(f"⚠️ Ana döngü: {e}", flush=True)
-            time.sleep(30)
+        
+        time.sleep(15)
 
 # ==================== MAIN ====================
 async def main():
@@ -551,19 +771,16 @@ async def main():
     web_thread.start()
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    
     try:
-        requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=10)
-        time.sleep(2)
-        print("✅ Telegram webhook temizlendi.", flush=True)
-    except Exception as e:
-        print(f"⚠️ Webhook: {e}", flush=True)
+        requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
+    except: pass
     
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
-    app_tg.add_handler(CommandHandler("analiz", analiz_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
+    app_tg.add_handler(CommandHandler("liste", liste_komutu))
+    app_tg.add_handler(CommandHandler("listeguncelle", liste_guncelle))
     
     await app_tg.initialize()
     await app_tg.start()
