@@ -94,15 +94,30 @@ RSI_TEPE_ESIGI = 70
 RSI_DIP_ESIGI = 30
 FITIL_CARPAN = 1.5
 
-# ✅ İLK KİLİT %1.5 → %3
+# ✅ KADEMELİ KÂR ALMA (A Şıkkı)
+# (ROE eşiği, kapatılacak oran)
+KADEMELI_KAR_ALMA = [
+    (3.0, 0.25),    # %3 ROE → %25 kapat
+    (5.0, 0.25),    # %5 ROE → %25 kapat
+    (8.0, 0.25),    # %8 ROE → %25 kapat
+    (12.0, 1.00),   # %12 ROE → kalan tamamını kapat
+]
+
+# ✅ ERKEN ZARAR KES
+ERKEN_ZARAR_ROE = -3.0     # ROE -%3 → kapat
+
+# ✅ ZAMAN LİMİTİ
+MAKS_ACIK_KALMA_SURESI = 4 * 3600   # 4 saat
+
+# Klasik Trailing (kademeli kâr almadan sonra kalan kısım için)
 TRAILING_SEVIYELER = [
-    (3.0, 0.0),      # %3 → başabaş + komisyon
-    (5.0, 0.015),    # %5 → %1.5 kâr
-    (8.0, 0.03),     # %8 → %3 kâr
-    (12.0, 0.06),    # %12 → %6 kâr
-    (20.0, 0.12),    # %20 → %12 kâr
-    (30.0, 0.20),    # %30 → %20 kâr
-    (50.0, 0.35),    # %50 → %35 kâr
+    (3.0, 0.0),
+    (5.0, 0.015),
+    (8.0, 0.03),
+    (12.0, 0.06),
+    (20.0, 0.12),
+    (30.0, 0.20),
+    (50.0, 0.35),
 ]
 
 TREND_KAYIP_MIN_ROE = 5.0
@@ -117,27 +132,22 @@ KILL_SWITCH_AKTIF = False
 
 # ==================== YARDIMCI: EMİR YÖNETİMİ ====================
 def emir_sl_mi(order):
-    """Emir SL mi? (stop/conditional)"""
     try:
         otype = str(order.get('type', '')).lower()
         info_type = str(order.get('info', {}).get('type', '')).lower()
-        
         if otype in ['stop', 'stop_market', 'stop_limit']:
             return True
         if 'stop' in otype or 'conditional' in otype:
             return True
         if 'conditional' in info_type or 'stop' in info_type:
             return True
-        
         if order.get('stopPrice') or order.get('triggerPrice'):
             return True
-        
         return False
     except:
         return False
 
 def eski_sl_sil(sym, yeni_sl_id):
-    """Eski SL'leri sil (yeni SL hariç, TP'ye DOKUNMA)"""
     try:
         open_orders = exchange.fetch_open_orders(sym)
         silinen = 0
@@ -151,16 +161,14 @@ def eski_sl_sil(sym, yeni_sl_id):
                     silinen += 1
                 except:
                     pass
-        
         if silinen > 0:
-            print(f"🧹 [{sym}] {silinen} eski SL silindi (TP'ler korundu)", flush=True)
+            print(f"🧹 [{sym}] {silinen} eski SL silindi", flush=True)
         return silinen
     except Exception as e:
         print(f"⚠️ Eski SL silme hatası {sym}: {e}", flush=True)
         return 0
 
 def pozisyon_emirlerini_temizle(sym):
-    """Pozisyon kapanırken TÜM emirleri sil"""
     try:
         open_orders = exchange.fetch_open_orders(sym)
         silinen = 0
@@ -176,9 +184,7 @@ def pozisyon_emirlerini_temizle(sym):
         print(f"⚠️ Emir temizleme hatası {sym}: {e}", flush=True)
 
 def yeni_sl_koy(sym, miktar, yeni_sl, yon):
-    """Yeni SL koy → eski SL'leri sil (TP'ye dokunma)"""
     ky = 'sell' if yon == 'LONG' else 'buy'
-    
     try:
         yeni_sl_order = exchange.create_order(
             sym, 'stop', ky, miktar, yeni_sl,
@@ -188,18 +194,29 @@ def yeni_sl_koy(sym, miktar, yeni_sl, yon):
     except Exception as e:
         print(f"⚠️ Yeni SL koyulamadı {sym}: {e}", flush=True)
         return False
-    
     time.sleep(0.3)
     eski_sl_sil(sym, yeni_sl_id)
     return True
 
-def pozisyon_kapat(sym, miktar, yon):
-    """Pozisyonu kapat ve tüm emirleri sil"""
+def pozisyon_kapat(sym, miktar, yon, oran=1.0):
+    """Pozisyonun belirli bir oranını kapat."""
     ky = 'sell' if yon == 'LONG' else 'buy'
+    kapatilacak = miktar * oran
+    
     try:
-        exchange.create_order(sym, 'market', ky, miktar, None, {'reduceOnly': True})
+        market = exchange.market(sym)
+        kapatilacak = float(exchange.amount_to_precision(sym, kapatilacak))
+        
+        if kapatilacak <= 0:
+            return False
+        
+        exchange.create_order(sym, 'market', ky, kapatilacak, None, {'reduceOnly': True})
         time.sleep(0.3)
-        pozisyon_emirlerini_temizle(sym)
+        
+        # Tamamen kapatıldıysa tüm emirleri temizle
+        if oran >= 1.0:
+            pozisyon_emirlerini_temizle(sym)
+        
         return True
     except Exception as e:
         print(f"⚠️ Pozisyon kapatma hatası {sym}: {e}", flush=True)
@@ -267,7 +284,6 @@ def piyasa_modu_bul(df):
         low = df['low']
         
         adx = ta.trend.ADXIndicator(high=high, low=low, close=close, window=14).adx().iloc[-1]
-        
         atr_serisi = ta.volatility.AverageTrueRange(high=high, low=low, close=close, window=14).average_true_range()
         atr = atr_serisi.iloc[-1]
         atr_ort = atr_serisi.tail(50).mean()
@@ -280,7 +296,6 @@ def piyasa_modu_bul(df):
         ema20 = ta.trend.EMAIndicator(close=close, window=20).ema_indicator().iloc[-1]
         ema50 = ta.trend.EMAIndicator(close=close, window=50).ema_indicator().iloc[-1]
         rsi = ta.momentum.RSIIndicator(close=close, window=14).rsi().iloc[-1]
-        
         anlik = close.iloc[-1]
         
         if atr_ort > 0 and atr > atr_ort * ATR_VOLATIL_CARPAN:
@@ -322,8 +337,7 @@ def grid_sinyal(df, anlik, bb_ust, bb_alt, bb_orta, atr):
             net = brut - TOPLAM_MALIYET_ORANI
             if net < MIN_NET_KAR:
                 return None, None, None, None, None
-            sebep = f"GRID LONG | BB Alt"
-            return "LONG", tp, sl, sebep, atr
+            return "LONG", tp, sl, "GRID LONG | BB Alt", atr
         
         if anlik >= bb_ust * 0.995:
             sl_mesafe = atr * ATR_SL_GRID
@@ -336,12 +350,10 @@ def grid_sinyal(df, anlik, bb_ust, bb_alt, bb_orta, atr):
             net = brut - TOPLAM_MALIYET_ORANI
             if net < MIN_NET_KAR:
                 return None, None, None, None, None
-            sebep = f"GRID SHORT | BB Üst"
-            return "SHORT", tp, sl, sebep, atr
+            return "SHORT", tp, sl, "GRID SHORT | BB Üst", atr
         
         return None, None, None, None, None
-    except Exception as e:
-        print(f"⚠️ Grid hatası: {e}", flush=True)
+    except:
         return None, None, None, None, None
 
 # ==================== SWING ====================
@@ -393,8 +405,7 @@ def breakout_retest_sinyal(df, anlik, yon_trend, atr):
                         brut = (tp - anlik) / anlik
                         net = brut - TOPLAM_MALIYET_ORANI
                         if net < MIN_NET_KAR: continue
-                        sebep = f"BREAKOUT↑ RETEST | R/R: {rr:.1f}"
-                        return "LONG", tp, sl, sebep, atr
+                        return "LONG", tp, sl, f"BREAKOUT↑ RETEST | R/R: {rr:.1f}", atr
         
         if yon_trend == 'TREND_ASAGI':
             for destek in sorted(low_levels, reverse=True):
@@ -410,15 +421,13 @@ def breakout_retest_sinyal(df, anlik, yon_trend, atr):
                         brut = (anlik - tp) / anlik
                         net = brut - TOPLAM_MALIYET_ORANI
                         if net < MIN_NET_KAR: continue
-                        sebep = f"BREAKOUT↓ RETEST | R/R: {rr:.1f}"
-                        return "SHORT", tp, sl, sebep, atr
+                        return "SHORT", tp, sl, f"BREAKOUT↓ RETEST | R/R: {rr:.1f}", atr
         
         return None, None, None, None, None
-    except Exception as e:
-        print(f"⚠️ Breakout hatası: {e}", flush=True)
+    except:
         return None, None, None, None, None
 
-# ==================== TREND TAKİP + DÖNÜŞ ====================
+# ==================== TREND TAKİP ====================
 def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
     try:
         if len(df) < TREND_TAKIP_MUM_ONAY + 1:
@@ -436,12 +445,7 @@ def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
         alt_fitil = min(son_mum['open'], son_mum['close']) - son_mum['low']
         
         if mod == 'GUCLU_TREND_UP':
-            tepe_donusu = (
-                rsi > RSI_TEPE_ESIGI and
-                son_mum['close'] < son_mum['open'] and
-                ust_fitil > govde * FITIL_CARPAN
-            )
-            
+            tepe_donusu = (rsi > RSI_TEPE_ESIGI and son_mum['close'] < son_mum['open'] and ust_fitil > govde * FITIL_CARPAN)
             if tepe_donusu:
                 sl = anlik + (atr * 1.5)
                 tp = anlik - (atr * 4.0)
@@ -449,8 +453,7 @@ def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
                 net = brut - TOPLAM_MALIYET_ORANI
                 if net < MIN_NET_KAR:
                     return None, None, None, None, None
-                sebep = f"TEPE DÖNÜŞÜ SHORT | RSI: {rsi:.0f}"
-                return "SHORT", tp, sl, sebep, atr
+                return "SHORT", tp, sl, f"TEPE DÖNÜŞÜ SHORT | RSI: {rsi:.0f}", atr
             
             hepsi_ustunde = all(son_mumlar['close'] > ema20)
             if not hepsi_ustunde:
@@ -475,16 +478,10 @@ def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
             net = brut - TOPLAM_MALIYET_ORANI
             if net < MIN_NET_KAR:
                 return None, None, None, None, None
-            sebep = f"TREND↑ TAKİP | EMA20: {ema20:.4f} | RSI: {rsi:.0f}"
-            return "LONG", tp, sl, sebep, atr
+            return "LONG", tp, sl, f"TREND↑ TAKİP | EMA20: {ema20:.4f} | RSI: {rsi:.0f}", atr
         
         if mod == 'GUCLU_TREND_DOWN':
-            dip_donusu = (
-                rsi < RSI_DIP_ESIGI and
-                son_mum['close'] > son_mum['open'] and
-                alt_fitil > govde * FITIL_CARPAN
-            )
-            
+            dip_donusu = (rsi < RSI_DIP_ESIGI and son_mum['close'] > son_mum['open'] and alt_fitil > govde * FITIL_CARPAN)
             if dip_donusu:
                 sl = anlik - (atr * 1.5)
                 tp = anlik + (atr * 4.0)
@@ -492,8 +489,7 @@ def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
                 net = brut - TOPLAM_MALIYET_ORANI
                 if net < MIN_NET_KAR:
                     return None, None, None, None, None
-                sebep = f"DİP DÖNÜŞÜ LONG | RSI: {rsi:.0f}"
-                return "LONG", tp, sl, sebep, atr
+                return "LONG", tp, sl, f"DİP DÖNÜŞÜ LONG | RSI: {rsi:.0f}", atr
             
             hepsi_altinda = all(son_mumlar['close'] < ema20)
             if not hepsi_altinda:
@@ -518,15 +514,100 @@ def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi):
             net = brut - TOPLAM_MALIYET_ORANI
             if net < MIN_NET_KAR:
                 return None, None, None, None, None
-            sebep = f"TREND↓ TAKİP | EMA20: {ema20:.4f} | RSI: {rsi:.0f}"
-            return "SHORT", tp, sl, sebep, atr
+            return "SHORT", tp, sl, f"TREND↓ TAKİP | EMA20: {ema20:.4f} | RSI: {rsi:.0f}", atr
         
         return None, None, None, None, None
-    except Exception as e:
-        print(f"⚠️ Trend takip hatası: {e}", flush=True)
+    except:
         return None, None, None, None, None
 
-# ==================== TREND KAYIP KONTROLÜ ====================
+# ==================== ERKEN ZARAR + KADEMELİ KÂR ALMA ====================
+def kar_zarar_yonetimi():
+    """
+    1. Erken zarar kes (ROE -%3)
+    2. Kademeli kâr alma (%3, %5, %8, %12)
+    3. Zaman limiti (4 saat)
+    """
+    with state_lock:
+        aktif_kopya = list(AKTIF_POZISYONLAR.items())
+    
+    for sym, bilgi in aktif_kopya:
+        if sym not in AKTIF_POZISYONLAR:
+            continue
+        if not isinstance(bilgi, dict):
+            continue
+        
+        yon = bilgi.get("yon", "LONG")
+        g = float(bilgi.get("giris_fiyati", 0))
+        kaldirac_v = int(bilgi.get("kaldirac", KALDIRAC))
+        giris_zaman = float(bilgi.get("giris_zamani", 0))
+        alinan_kademeler = bilgi.get("alinan_kademeler", [])
+        
+        if time.time() - giris_zaman < 120:
+            continue
+        
+        try:
+            t = exchange.fetch_ticker(sym)
+            anlik = float(t['last'])
+        except:
+            continue
+        
+        # ROE
+        if yon == "LONG":
+            roe = (anlik - g) / g * 100 * kaldirac_v
+        else:
+            roe = (g - anlik) / g * 100 * kaldirac_v
+        
+        # Mevcut miktar
+        miktar = None
+        for p in exchange.fetch_positions():
+            if p['symbol'] == sym:
+                miktar = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+                break
+        
+        if not miktar or miktar <= 0:
+            continue
+        
+        # ============ 1. ERKEN ZARAR KES ============
+        if roe <= ERKEN_ZARAR_ROE:
+            if pozisyon_kapat(sym, miktar, yon, oran=1.0):
+                print(f"🛑 [ERKEN ZARAR KES] {sym} | ROE:%{roe:.1f}", flush=True)
+                tg_gonder(f"🛑 ERKEN ZARAR KES\n📌 {sym}\n💰 ROE: %{roe:+.2f}\n❌ Pozisyon tamamen kapatıldı")
+            continue
+        
+        # ============ 2. ZAMAN LİMİTİ ============
+        gecen_sure = time.time() - giris_zaman
+        if gecen_sure > MAKS_ACIK_KALMA_SURESI:
+            if pozisyon_kapat(sym, miktar, yon, oran=1.0):
+                dakika = int(gecen_sure / 60)
+                print(f"⏰ [ZAMAN DOLDU] {sym} | {dakika} dk | ROE:%{roe:.1f}", flush=True)
+                tg_gonder(f"⏰ ZAMAN DOLDU\n📌 {sym}\n🕐 {dakika} dk\n💰 ROE: %{roe:+.2f}")
+            continue
+        
+        # ============ 3. KADEMELİ KÂR ALMA ============
+        for i, (esik_roe, kapat_orani) in enumerate(KADEMELI_KAR_ALMA):
+            if i in alinan_kademeler:
+                continue
+            
+            if roe >= esik_roe:
+                # Bu kademeyi al
+                if pozisyon_kapat(sym, miktar, yon, oran=kapat_orani):
+                    with state_lock:
+                        if sym in AKTIF_POZISYONLAR:
+                            yeni_kademeler = AKTIF_POZISYONLAR[sym].get("alinan_kademeler", [])
+                            yeni_kademeler.append(i)
+                            AKTIF_POZISYONLAR[sym]["alinan_kademeler"] = yeni_kademeler
+                    
+                    yuzde = int(kapat_orani * 100)
+                    print(f"💰 [KADEMELİ KÂR] {sym} | ROE:%{roe:.1f} → %{yuzde} kapatıldı", flush=True)
+                    tg_gonder(
+                        f"💰 KADEMELİ KÂR ALINDI\n"
+                        f"📌 {sym} | {yon}\n"
+                        f"📊 ROE: %{roe:+.2f} → %{yuzde} kapatıldı\n"
+                        f"🎯 Kademe: {i+1}/4"
+                    )
+                break  # Bir kademe alındı, sonraki döngüde diğerine bakılır
+
+# ==================== TREND KAYIP ====================
 def trend_kayip_kontrol():
     with state_lock:
         aktif_kopya = list(AKTIF_POZISYONLAR.items())
@@ -563,35 +644,16 @@ def trend_kayip_kontrol():
         
         if yon == "LONG" and mod_guncel == 'GUCLU_TREND_DOWN':
             kapat = True
-            sebep = f"Trend ters döndü: LONG → {mod_guncel}"
+            sebep = f"Trend ters döndü"
         
         if yon == "SHORT" and mod_guncel == 'GUCLU_TREND_UP':
             kapat = True
-            sebep = f"Trend ters döndü: SHORT → {mod_guncel}"
+            sebep = f"Trend ters döndü"
         
         if not kapat and roe > TREND_KAYIP_MIN_ROE:
             if eski_mod in ['GUCLU_TREND_UP', 'GUCLU_TREND_DOWN'] and mod_guncel in ['YATAY', 'BELIRSIZ', 'VOLATIL']:
                 kapat = True
-                sebep = f"Kâr %{roe:.1f} + trend bitti: {eski_mod} → {mod_guncel}"
-        
-        if not kapat and roe > TREND_KAYIP_MIN_ROE and acilis_adx > 30 and adx_g < ADX_DUSUS_ESIGI:
-            kapat = True
-            sebep = f"Kâr %{roe:.1f} + ADX düştü: {acilis_adx:.0f} → {adx_g:.0f}"
-        
-        if not kapat and roe > TREND_KAYIP_MIN_ROE:
-            son_mumlar = df.tail(MUM_DONUS_ONAY)
-            
-            if yon == "LONG":
-                hepsi_kirmizi = all(m['close'] < m['open'] for _, m in son_mumlar.iterrows())
-                if hepsi_kirmizi and rsi_g < 50:
-                    kapat = True
-                    sebep = f"Kâr %{roe:.1f} + 3 mum kırmızı + RSI {rsi_g:.0f}"
-            
-            if yon == "SHORT":
-                hepsi_yesil = all(m['close'] > m['open'] for _, m in son_mumlar.iterrows())
-                if hepsi_yesil and rsi_g > 50:
-                    kapat = True
-                    sebep = f"Kâr %{roe:.1f} + 3 mum yeşil + RSI {rsi_g:.0f}"
+                sebep = f"Kâr %{roe:.1f} + trend bitti"
         
         if kapat:
             miktar = None
@@ -601,11 +663,11 @@ def trend_kayip_kontrol():
                     break
             
             if miktar and miktar > 0:
-                if pozisyon_kapat(sym, miktar, yon):
-                    print(f"🚪 [TREND KAYIP] {sym} | {sebep} | ROE:%{roe:.1f}", flush=True)
-                    tg_gonder(f"🚪 TREND KAYIP - KAPATILDI\n📌 {sym}\n📊 {sebep}\n💰 ROE: %{roe:+.2f}")
+                if pozisyon_kapat(sym, miktar, yon, oran=1.0):
+                    print(f"🚪 [TREND KAYIP] {sym} | {sebep}", flush=True)
+                    tg_gonder(f"🚪 TREND KAYIP\n📌 {sym}\n📊 {sebep}")
 
-# ==================== TRAILING ====================
+# ==================== TRAILING (Kalan kısım için) ====================
 def trailing_stop_kontrol():
     with state_lock:
         aktif_kopya = list(AKTIF_POZISYONLAR.items())
@@ -642,7 +704,6 @@ def trailing_stop_kontrol():
         
         yeni_sl = None
         
-        # ✅ TREND TAKİP: %1.5 → %3 (ilk kilit geç)
         if mod in ['GUCLU_TREND_UP', 'GUCLU_TREND_DOWN']:
             try:
                 ohlcv = exchange.fetch_ohlcv(sym, timeframe='15m', limit=50)
@@ -657,8 +718,8 @@ def trailing_stop_kontrol():
                     hedef_sl = ema20_guncel + (atr_b * TREND_TAKIP_SL_CARPAN)
                     min_kar_sl = g * (1 - (TOPLAM_MALIYET_ORANI + 0.01) / kaldirac_v)
                     yeni_sl = min(hedef_sl, min_kar_sl) if roe > 3.0 else hedef_sl
-            except Exception as e:
-                print(f"⚠️ Trend EMA hatası: {e}", flush=True)
+            except:
+                pass
         
         else:
             for esik_roe, kilit in TRAILING_SEVIYELER:
@@ -689,13 +750,9 @@ def trailing_stop_kontrol():
             with state_lock:
                 if sym in AKTIF_POZISYONLAR:
                     AKTIF_POZISYONLAR[sym]["sl_fiyat"] = yeni_sl
-            
-            print(f"🔒 [TRAILING] {sym} | {mod} | ROE:%{roe:.1f} → SL:{yeni_sl:.6f}", flush=True)
-            
-            if roe > 3.0:
-                tg_gonder(f"🔒 KÂR KİLİTLENDİ\n📌 {sym} | {mod}\n📊 ROE: %{roe:+.2f}\n🛑 SL: {yeni_sl:.6f}")
+            print(f"🔒 [TRAILING] {sym} | ROE:%{roe:.1f} → SL:{yeni_sl:.6f}", flush=True)
 
-# ==================== MOD GÜNCELLEME ====================
+# ==================== MOD GÜNCELLE ====================
 def modlari_guncelle():
     with state_lock:
         aktif_kopya = list(AKTIF_POZISYONLAR.items())
@@ -709,7 +766,6 @@ def modlari_guncelle():
         try:
             ohlcv = exchange.fetch_ohlcv(sym, timeframe='15m', limit=100)
             df_g = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            
             mod_guncel, adx_g, atr_g, _, _, _, _, ema20_g, ema50_g, rsi_g, anlik_g = piyasa_modu_bul(df_g)
             
             eski_mod = bilgi.get("mod", "")
@@ -718,8 +774,7 @@ def modlari_guncelle():
                     if sym in AKTIF_POZISYONLAR:
                         AKTIF_POZISYONLAR[sym]["mod"] = mod_guncel
                         AKTIF_POZISYONLAR[sym]["atr_degeri"] = atr_g
-                print(f"🔄 [MOD DEĞİŞİMİ] {sym} | {eski_mod} → {mod_guncel}", flush=True)
-        except Exception as e:
+        except:
             continue
 
 # ==================== TELEGRAM ====================
@@ -760,15 +815,16 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             roe = f * 100 * k
             mod_bilgi = AKTIF_POZISYONLAR.get(sym, {}).get("mod", "?")
             margin = float(p.get('initialMargin', 0) or 0)
+            kademe = len(AKTIF_POZISYONLAR.get(sym, {}).get("alinan_kademeler", []))
             
             nokta = "🟢" if unrealized >= 0 else "🔴"
             
-            pos_detay += f"\n{nokta} {sym} | {y} ({k}x) | {mod_bilgi}\n  K/Z: {unrealized:+.2f} USDT | ROE: %{roe:+.2f}\n  Marj: {margin:.2f}"
+            pos_detay += f"\n{nokta} {sym} | {y} ({k}x) | {mod_bilgi}\n  K/Z: {unrealized:+.2f} USDT | ROE: %{roe:+.2f}\n  Marj: {margin:.2f} | Kademe: {kademe}/4"
         
         pnl_nokta = "🟢" if pnl >= 0 else "🔴"
         
         mesaj = (
-            f"📊 DURUM [ADAPTİF v4.6]\n\n"
+            f"📊 DURUM [ADAPTİF v4.7]\n\n"
             f"💰 Kasa: {total:.2f} USDT\n"
             f"{pnl_nokta} Toplam PnL: {pnl:+.2f} USDT\n"
             f"📌 Açık: {len(pos)} / {MAKSIMUM_TOPLAM_POZISYON}"
@@ -789,7 +845,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     BOT_CALISIYOR_MU = True
     KILL_SWITCH_AKTIF = False
     ARDISIK_ZARAR_SAYACI = 0
-    await update.message.reply_text("🟢 Bot aktif! (v4.6: İlk Kilit %3)")
+    await update.message.reply_text("🟢 Bot aktif! (v4.7: Kademeli Kâr Alma + Erken Zarar Kes)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID):
@@ -807,7 +863,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             k = float(p.get('contracts', 0) or p.get('size', 0) or 0)
             if k > 0:
                 y = str(p.get('side', '')).upper() or "LONG"
-                pozisyon_kapat(p['symbol'], k, y)
+                pozisyon_kapat(p['symbol'], k, y, oran=1.0)
         await update.message.reply_text("✅ Kapatıldı.")
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
@@ -816,7 +872,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def tarayici():
     global ARDISIK_ZARAR_SAYACI, SON_ARDISIK_ZARAR_ZAMANI, KILL_SWITCH_AKTIF
     
-    print("🚀 [BAŞLANGIÇ] ADAPTİF v4.6 (İlk Kilit %3)", flush=True)
+    print("🚀 [BAŞLANGIÇ] ADAPTİF v4.7 (Kademeli Kâr Alma)", flush=True)
     try:
         exchange.load_markets()
     except:
@@ -863,6 +919,7 @@ def tarayici():
                 aktif_map = {}
                 aktif_list = []
             
+            # KAPANIŞ KONTROLÜ
             try:
                 anlik_aktif = [p['symbol'] for p in raw if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
                 for eski in list(AKTIF_POZISYONLAR.keys()):
@@ -885,13 +942,9 @@ def tarayici():
                             brut = (g - cikis) / g
                         net = brut - TOPLAM_MALIYET_ORANI
                         
-                        if tp_k > 0 and abs(cikis - tp_k) / tp_k < 0.002:
-                            kategori = "gercek_tp"
-                            tip = "✅ GERÇEK TP"
-                            karli = True
-                        elif net > 0:
+                        if net > 0:
                             kategori = "kar_kilidi"
-                            tip = "🔒 KÂR KİLİDİYLE KAPANDI"
+                            tip = "✅ KÂRLA KAPANDI"
                             karli = True
                         else:
                             kategori = "zarar"
@@ -912,25 +965,29 @@ def tarayici():
                                 del AKTIF_POZISYONLAR[eski]
                         
                         pozisyon_emirlerini_temizle(eski)
-                        
                         hafizayi_kaydet()
-                        print(f"💰 [KAPANIŞ] {eski} | Çıkış: {cikis} | Net: %{net*100:.2f} | {kategori}", flush=True)
-                        tg_gonder(
-                            f"{tip}\n📌 {eski} | Çıkış: {cikis}\n"
-                            f"📊 Net: %{net*100:+.2f}\n"
-                            f"🔻 Ardışık Zarar: {ARDISIK_ZARAR_SAYACI}"
-                        )
+                        print(f"💰 [KAPANIŞ] {eski} | Çıkış: {cikis} | Net: %{net*100:.2f}", flush=True)
+                        tg_gonder(f"{tip}\n📌 {eski} | Çıkış: {cikis}\n📊 Net: %{net*100:+.2f}\n🔻 Ardışık: {ARDISIK_ZARAR_SAYACI}")
                         
                         if ARDISIK_ZARAR_SAYACI >= ARDISIK_ZARAR_LIMIT:
                             KILL_SWITCH_AKTIF = True
-                            tg_gonder(f"🚨 KILL-SWITCH AKTİF!\n{ARDISIK_ZARAR_LIMIT} ardışık zarar.\n1 saat bekle.")
+                            tg_gonder(f"🚨 KILL-SWITCH AKTİF!")
             except Exception as e:
                 print(f"⚠️ Kapanış: {e}", flush=True)
             
+            # ✅ ERKEN ZARAR + KADEMELİ KÂR ALMA
+            kar_zarar_yonetimi()
+            
+            # TREND KAYIP
             trend_kayip_kontrol()
+            
+            # MOD GÜNCELLE
             modlari_guncelle()
+            
+            # TRAILING
             trailing_stop_kontrol()
             
+            # SİNYAL TARAMA
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU:
                     break
@@ -972,7 +1029,7 @@ def tarayici():
                     elif mod in ['GUCLU_TREND_UP', 'GUCLU_TREND_DOWN']:
                         yon, tp, sl, sebep, atr_b = trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi)
                         if yon is None:
-                            print(f"      ⏭️ TREND TAKİP/DÖNÜŞ sinyal yok", flush=True)
+                            print(f"      ⏭️ TREND TAKİP sinyal yok", flush=True)
                     
                     elif mod == 'VOLATIL':
                         print(f"      ⏸️ VOLATIL", flush=True)
@@ -1021,7 +1078,7 @@ def tarayici():
                     
                     if not sl_ok:
                         try:
-                            pozisyon_kapat(symbol, miktar, yon)
+                            pozisyon_kapat(symbol, miktar, yon, oran=1.0)
                         except:
                             pass
                         continue
@@ -1034,7 +1091,8 @@ def tarayici():
                             "kaldirac": KALDIRAC,
                             "mod": mod,
                             "atr_degeri": atr_b,
-                            "acilis_adx": float(adx)
+                            "acilis_adx": float(adx),
+                            "alinan_kademeler": []
                         }
                         aktif_list.append(symbol)
                         aktif_map[symbol] = {"dummy": True}
@@ -1042,16 +1100,15 @@ def tarayici():
                     hafizayi_kaydet()
                     print(f"      ✅ [AÇILDI] {symbol} {yon} | {mod} | @ {anlik} | Marj: {kullan:.2f}", flush=True)
                     
-                    emoji = "🟦" if mod == 'YATAY' else ("🟩" if mod in ['TREND_YUKARI', 'TREND_ASAGI'] else "🟨")
-                    
                     tg_gonder(
-                        f"{emoji} SİNYAL! [{mod}]\n"
+                        f"🎯 SİNYAL! [{mod}]\n"
                         f"📌 {symbol} | {yon}\n"
                         f"📊 {sebep}\n"
                         f"🎯 Giriş: {anlik}\n"
                         f"💰 TP: {tp}\n"
                         f"🛑 SL: {sl}\n"
-                        f"💵 Marj: {kullan:.2f} USDT"
+                        f"💵 Marj: {kullan:.2f} USDT\n"
+                        f"📊 Kademeli: %3/%5/%8/%12"
                     )
                 except Exception as e:
                     print(f"   ⚠️ {symbol}: {e}", flush=True)
