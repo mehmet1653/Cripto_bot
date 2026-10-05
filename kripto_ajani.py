@@ -56,52 +56,62 @@ exchange = ccxt.gate({
 })
 exchange.set_sandbox_mode(True)
 
-TAKIP_EDILENLER = ['SOL/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'LTC/USDT:USDT', 'LINK/USDT:USDT']
+# ✅ SABİT TAKİP LİSTESİ (her zaman takipte)
+SABIT_LISTE = ['SOL/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'LTC/USDT:USDT', 'LINK/USDT:USDT']
+
+# ✅ DİNAMİK LİSTE (her saat güncellenir)
+DINAMIK_LISTE = []
+SON_DINAMIK_GUNCELLEME = 0
+DINAMIK_GUNCELLEME_SURESI = 3600  # 1 saat
+DINAMIK_LISTE_BOYUT = 15           # En çok hareket eden 15 coin
+
+# Kara liste (çok riskli / stablecoin)
+KARA_LISTE = [
+    'BTC/USDT:USDT', 'ETH/USDT:USDT',
+    'USDC/USDT:USDT', 'USDT/USDT:USDT', 'DAI/USDT:USDT', 'FDUSD/USDT:USDT',
+    'TUSD/USDT:USDT', 'BUSD/USDT:USDT',
+]
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
 tarayici_kilidi = threading.Lock()
 
-# ==================== AYARLAR (KALİBRE EDİLDİ) ====================
+# ==================== AYARLAR (HAFİF GEVŞETİLDİ) ====================
 KALDIRAC = 5
 MAKSIMUM_TOPLAM_POZISYON = 3
-COOLDOWN_SURESI_SANIYE = 30 * 60     # ✅ 20 dk → 30 dk
+COOLDOWN_SURESI_SANIYE = 30 * 60
 
-POZISYON_ORANI = 0.20                 # ✅ %30 → %20 (risk azaltıldı)
-MIN_NET_KAR = 0.006                   # ✅ %0.5 → %0.6
+POZISYON_ORANI = 0.20
+MIN_NET_KAR = 0.006
 
 KOMISYON_ORANI = 0.001
 SPREAD_MALIYETI = 0.0005
 TOPLAM_MALIYET_ORANI = (KOMISYON_ORANI * 2) + SPREAD_MALIYETI
 
-# ✅ Filtreler sıkılaştırıldı
-ADX_GUCLU_TREND = 35                  # ✅ 30 → 35 (daha güçlü trend)
-ADX_TREND_ESIGI = 27                  # ✅ 25 → 27
-ADX_YATAY_ESIGI = 18                  # ✅ 20 → 18 (daha sıkı yatay)
+# ✅ HAFİF GEVŞETİLDİ
+ADX_GUCLU_TREND = 32         # 35 → 32
+ADX_TREND_ESIGI = 25         # 27 → 25
+ADX_YATAY_ESIGI = 20         # 18 → 20
 ATR_VOLATIL_CARPAN = 2.0
 
-# ✅ SL'ler genişletildi
-ATR_SL_GRID = 3.0                     # ✅ 2.0 → 3.0
-BREAKOUT_SL_TOLERANS = 0.015          # ✅ 0.008 → 0.015
+ATR_SL_GRID = 3.0
+BREAKOUT_SL_TOLERANS = 0.015
 BREAKOUT_LOOKBACK = 50
 BREAKOUT_MIN_RR = 2.5
 
 TREND_TAKIP_MUM_ONAY = 5
-TREND_TAKIP_SL_CARPAN = 3.0           # ✅ 2.0 → 3.0
+TREND_TAKIP_SL_CARPAN = 3.0
 
-# ✅ Trend filtreleri sıkılaştırıldı
-MAKS_YUKSEKLIK_TREND = 0.015          # ✅ 0.02 → 0.015
-RSI_TREND_UST_LIMIT = 60              # ✅ 68 → 60
-RSI_TREND_ALT_LIMIT = 40              # ✅ 32 → 40
+MAKS_YUKSEKLIK_TREND = 0.015
+RSI_TREND_UST_LIMIT = 65      # 60 → 65 (hafif gevşetildi)
+RSI_TREND_ALT_LIMIT = 35      # 40 → 35
 
-RSI_TEPE_ESIGI = 75                   # ✅ 70 → 75
-RSI_DIP_ESIGI = 25                    # ✅ 30 → 25
-FITIL_CARPAN = 1.8                    # ✅ 1.5 → 1.8
+RSI_TEPE_ESIGI = 75
+RSI_DIP_ESIGI = 25
+FITIL_CARPAN = 1.8
 
-# ✅ Hacim onayı
-HACIM_ONAY_CARPAN = 1.5               # Hacim ortalamanın 1.5x üstünde olmalı
+HACIM_ONAY_CARPAN = 1.2       # 1.5 → 1.2 (hafif gevşetildi)
 
-# ✅ KADEMELİ KÂR ALMA
 KADEMELI_KAR_ALMA = [
     (3.0, 0.25),
     (5.0, 0.25),
@@ -109,18 +119,13 @@ KADEMELI_KAR_ALMA = [
     (12.0, 1.00),
 ]
 
-# ✅ ERKEN ZARAR KES
 ERKEN_ZARAR_ROE = -3.0
-
-# ✅ ZAMAN LİMİTİ
 MAKS_ACIK_KALMA_SURESI = 4 * 3600
 
-# ✅ TEKRAR DALMA KORUMASI
 TEKRAR_DALMA_ONAY_MESAFE = 0.005
 GUNLUK_MAX_ISLEM = 2
 MOD_DEGISIM_ZORUNLU = True
 
-# Klasik Trailing (SL'ler genişletildi)
 TRAILING_SEVIYELER = [
     (3.0, 0.0),
     (5.0, 0.015),
@@ -131,7 +136,7 @@ TRAILING_SEVIYELER = [
     (50.0, 0.35),
 ]
 
-TREND_KAYIP_MIN_ROE = 4.0             # ✅ 5.0 → 4.0 (erken kâr koru)
+TREND_KAYIP_MIN_ROE = 4.0
 ADX_DUSUS_ESIGI = 20.0
 MUM_DONUS_ONAY = 3
 
@@ -140,6 +145,61 @@ ARDISIK_ZARAR_BEKLEME = 3600
 ARDISIK_ZARAR_SAYACI = 0
 SON_ARDISIK_ZARAR_ZAMANI = 0
 KILL_SWITCH_AKTIF = False
+
+# ==================== DİNAMİK LİSTE ====================
+def dinamik_liste_guncelle():
+    """Hacme + değişime göre en çok hareket eden coinleri seç"""
+    global DINAMIK_LISTE, SON_DINAMIK_GUNCELLEME
+    
+    if time.time() - SON_DINAMIK_GUNCELLEME < DINAMIK_GUNCELLEME_SURESI:
+        return
+    
+    print(f"\n🔄 [DİNAMİK LİSTE] Güncelleniyor...", flush=True)
+    SON_DINAMIK_GUNCELLEME = time.time()
+    
+    try:
+        tickers = exchange.fetch_tickers()
+        
+        adaylar = []
+        for sym, t in tickers.items():
+            if ':USDT' not in sym: continue
+            if sym in KARA_LISTE: continue
+            if sym in SABIT_LISTE: continue
+            
+            try:
+                hacim = float(t.get('quoteVolume', 0) or 0)
+                degisim = abs(float(t.get('percentage', 0) or 0))
+                
+                # Filtre: hacim > 5M, değişim > %1
+                if hacim < 5_000_000: continue
+                if degisim < 1.0: continue
+                
+                # Skor: hacim × değişim
+                skor = (hacim / 1_000_000) * degisim
+                adaylar.append((sym, skor, degisim))
+            except:
+                continue
+        
+        # Skora göre sırala
+        adaylar.sort(key=lambda x: x[1], reverse=True)
+        yeni_liste = [a[0] for a in adaylar[:DINAMIK_LISTE_BOYUT]]
+        
+        DINAMIK_LISTE = yeni_liste
+        
+        print(f"✅ [DİNAMİK] {len(DINAMIK_LISTE)} coin seçildi:", flush=True)
+        for s, skor, deg in adaylar[:DINAMIK_LISTE_BOYUT]:
+            print(f"   • {s} | Değişim: %{deg:.1f} | Skor: {skor:.1f}", flush=True)
+        
+        # Telegram bildirim
+        liste_str = "\n".join([f"• {s.replace('/USDT:USDT','')} (%{d:.1f})" for s, _, d in adaylar[:8]])
+        tg_gonder(f"🔄 DİNAMİK LİSTE GÜNCELLENDİ\n\n{liste_str}")
+        
+    except Exception as e:
+        print(f"⚠️ Dinamik liste hatası: {e}", flush=True)
+
+def takip_listesi():
+    """Sabit + dinamik liste"""
+    return SABIT_LISTE + DINAMIK_LISTE
 
 # ==================== YARDIMCI: EMİR YÖNETİMİ ====================
 def emir_sl_mi(order):
@@ -286,7 +346,6 @@ def piyasa_modu_bul(df):
         rsi = ta.momentum.RSIIndicator(close=close, window=14).rsi().iloc[-1]
         anlik = close.iloc[-1]
         
-        # ✅ Hacim onayı
         hacim_ort = volume.tail(20).mean()
         hacim_oran = volume.iloc[-1] / hacim_ort if hacim_ort > 0 else 0
         
@@ -307,21 +366,20 @@ def piyasa_modu_bul(df):
         
         if adx < ADX_YATAY_ESIGI:
             bb_genislik = (bb_ust - bb_alt) / bb_orta
-            if bb_genislik < 0.03:
+            if bb_genislik < 0.035:
                 return 'YATAY', adx, atr, atr_ort, bb_ust, bb_alt, bb_orta, ema20, ema50, rsi, anlik, hacim_oran
         
         return 'BELIRSIZ', adx, atr, atr_ort, bb_ust, bb_alt, bb_orta, ema20, ema50, rsi, anlik, hacim_oran
     except:
         return 'BELIRSIZ', 0, 0, 0, 0, 0, 0, 0, 0, 50, 0, 0
 
-# ==================== GRID (SL GENİŞLETİLDİ) ====================
+# ==================== GRID ====================
 def grid_sinyal(df, anlik, bb_ust, bb_alt, bb_orta, atr, hacim_oran):
     try:
-        # ✅ Hacim onayı
         if hacim_oran < HACIM_ONAY_CARPAN:
             return None, None, None, None, None
         
-        if anlik <= bb_alt * 1.008:  # ✅ 1.005 → 1.008 (daha esnek)
+        if anlik <= bb_alt * 1.008:
             sl = anlik - (atr * ATR_SL_GRID)
             tp = bb_orta
             if tp <= anlik: return None, None, None, None, None
@@ -329,7 +387,7 @@ def grid_sinyal(df, anlik, bb_ust, bb_alt, bb_orta, atr, hacim_oran):
             if net < MIN_NET_KAR: return None, None, None, None, None
             return "LONG", tp, sl, "GRID LONG", atr
         
-        if anlik >= bb_ust * 0.992:  # ✅ 0.995 → 0.992
+        if anlik >= bb_ust * 0.992:
             sl = anlik + (atr * ATR_SL_GRID)
             tp = bb_orta
             if tp >= anlik: return None, None, None, None, None
@@ -404,7 +462,7 @@ def breakout_retest_sinyal(df, anlik, yon_trend, atr, hacim_oran):
     except:
         return None, None, None, None, None
 
-# ==================== TREND TAKİP (Sıkılaştırıldı) ====================
+# ==================== TREND TAKİP ====================
 def trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi, hacim_oran):
     try:
         if len(df) < TREND_TAKIP_MUM_ONAY + 1: return None, None, None, None, None
@@ -758,7 +816,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             mod_bilgi = AKTIF_POZISYONLAR.get(sym, {}).get("mod", "?")
             kademe = len(AKTIF_POZISYONLAR.get(sym, {}).get("alinan_kademeler", []))
             nokta = "🟢" if unrealized >= 0 else "🔴"
-            pos_detay += f"\n{nokta} {sym} | {y} ({k}x) | {mod_bilgi}\n  K/Z: {unrealized:+.2f} USDT | ROE: %{roe:+.2f}\n  Kademe: {kademe}/4"
+            pos_detay += f"\n{nokta} {sym} | {y} ({k}x) | {mod_bilgi}\n  K/Z: {unrealized:+.2f} | ROE: %{roe:+.2f} | Kademe: {kademe}/4"
         
         pnl_nokta = "🟢" if pnl >= 0 else "🔴"
         
@@ -770,7 +828,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 sayac_str += f"\n   • {kisa}: {v.get('sayi',0)}/{GUNLUK_MAX_ISLEM}"
         
         mesaj = (
-            f"📊 DURUM [ADAPTİF v4.9]\n\n"
+            f"📊 DURUM [ADAPTİF v5.0]\n\n"
             f"💰 Kasa: {total:.2f} USDT\n"
             f"{pnl_nokta} Toplam PnL: {pnl:+.2f} USDT\n"
             f"📌 Açık: {len(pos)} / {MAKSIMUM_TOPLAM_POZISYON}"
@@ -779,9 +837,26 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📈 Başarı: %{oran:.1f} ({toplam_islem} işlem)\n"
             f"⚡ Kill-Switch: {'AKTİF' if KILL_SWITCH_AKTIF else 'Pasif'}\n"
             f"🔻 Ardışık Zarar: {ARDISIK_ZARAR_SAYACI}\n\n"
+            f"📋 Takip: {len(SABIT_LISTE)} sabit + {len(DINAMIK_LISTE)} dinamik = {len(takip_listesi())}\n"
             f"📅 *Bugünkü İşlem Sayısı:*{sayac_str if sayac_str else ' Yok'}"
         )
         await update.message.reply_text(mesaj)
+    except Exception as e:
+        await update.message.reply_text(f"Hata: {e}")
+
+async def liste_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != int(CHAT_ID): return
+    try:
+        liste_str = "📋 *TAKİP LİSTESİ*\n\n*Sabit:*\n"
+        for s in SABIT_LISTE:
+            liste_str += f"• {s.replace('/USDT:USDT','')}\n"
+        liste_str += "\n*Dinamik:*\n"
+        if DINAMIK_LISTE:
+            for s in DINAMIK_LISTE:
+                liste_str += f"• {s.replace('/USDT:USDT','')}\n"
+        else:
+            liste_str += "_Henüz güncellenmedi_"
+        await update.message.reply_text(liste_str)
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
 
@@ -791,7 +866,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     BOT_CALISIYOR_MU = True
     KILL_SWITCH_AKTIF = False
     ARDISIK_ZARAR_SAYACI = 0
-    await update.message.reply_text("🟢 Bot aktif! (v4.9: Kalibre Edildi)")
+    await update.message.reply_text("🟢 Bot aktif! (v5.0: Dinamik Liste + Gevşek Eşikler)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -812,14 +887,26 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
 
+async def liste_guncelle_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != int(CHAT_ID): return
+    global SON_DINAMIK_GUNCELLEME
+    SON_DINAMIK_GUNCELLEME = 0
+    await update.message.reply_text("🔄 Dinamik liste zorla güncelleniyor...")
+    await asyncio.to_thread(dinamik_liste_guncelle)
+    liste_str = "\n".join([f"• {s.replace('/USDT:USDT','')}" for s in DINAMIK_LISTE[:10]])
+    await update.message.reply_text(f"✅ Güncellendi:\n\n{liste_str}")
+
 # ==================== ANA TARAYICI ====================
 def tarayici():
     global ARDISIK_ZARAR_SAYACI, SON_ARDISIK_ZARAR_ZAMANI, KILL_SWITCH_AKTIF
     
-    print("🚀 [BAŞLANGIÇ] ADAPTİF v4.9 (Kalibre)", flush=True)
+    print("🚀 [BAŞLANGIÇ] ADAPTİF v5.0 (Dinamik Liste)", flush=True)
     try:
         exchange.load_markets()
     except: pass
+    
+    # İlk dinamik listeyi oluştur
+    dinamik_liste_guncelle()
     
     dongu = 0
     while True:
@@ -832,7 +919,7 @@ def tarayici():
             
             dongu += 1
             print(f"\n{'='*55}", flush=True)
-            print(f"🔄 [DÖNGÜ #{dongu}] {time.strftime('%H:%M:%S')}", flush=True)
+            print(f"🔄 [DÖNGÜ #{dongu}] {time.strftime('%H:%M:%S')} | Liste: {len(takip_listesi())}", flush=True)
             
             if KILL_SWITCH_AKTIF:
                 if time.time() - SON_ARDISIK_ZARAR_ZAMANI > ARDISIK_ZARAR_BEKLEME:
@@ -843,6 +930,9 @@ def tarayici():
                     kalan = int((ARDISIK_ZARAR_BEKLEME - (time.time() - SON_ARDISIK_ZARAR_ZAMANI))/60)
                     print(f"⏸️ [KILL-SWITCH] {kalan} dk", flush=True)
                     time.sleep(30); continue
+            
+            # Dinamik listeyi güncelle (1 saatte bir)
+            dinamik_liste_guncelle()
             
             try:
                 raw = exchange.fetch_positions()
@@ -915,13 +1005,14 @@ def tarayici():
             modlari_guncelle()
             trailing_stop_kontrol()
             
-            for symbol in TAKIP_EDILENLER:
+            for symbol in takip_listesi():
                 if not BOT_CALISIYOR_MU: break
                 if len(aktif_map) >= MAKSIMUM_TOPLAM_POZISYON: break
                 if symbol in aktif_list: continue
                 
                 try:
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=100)
+                    if len(ohlcv) < 100: continue
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     
                     ticker = exchange.fetch_ticker(symbol)
@@ -930,26 +1021,16 @@ def tarayici():
                     sonuc = piyasa_modu_bul(df)
                     mod, adx, atr, atr_ort, bb_ust, bb_alt, bb_orta, ema20, ema50, rsi, _, hacim_oran = sonuc
                     
-                    print(f"   🔎 [{symbol}] {anlik:.4f} | Mod: {mod} | ADX: {adx:.1f} | RSI: {rsi:.0f} | Hacim: {hacim_oran:.1f}x", flush=True)
+                    print(f"   🔎 [{symbol}] {anlik:.4f} | {mod} | ADX:{adx:.1f} | RSI:{rsi:.0f} | H:{hacim_oran:.1f}x", flush=True)
                     
                     yon, tp, sl, sebep, atr_b = None, None, None, None, None
                     
                     if mod == 'YATAY':
                         yon, tp, sl, sebep, atr_b = grid_sinyal(df, anlik, bb_ust, bb_alt, bb_orta, atr, hacim_oran)
-                        if yon is None:
-                            print(f"      ⏭️ GRID sinyal yok", flush=True)
                     elif mod in ['TREND_YUKARI', 'TREND_ASAGI']:
                         yon, tp, sl, sebep, atr_b = breakout_retest_sinyal(df, anlik, mod, atr, hacim_oran)
-                        if yon is None:
-                            print(f"      ⏭️ BREAKOUT sinyal yok", flush=True)
                     elif mod in ['GUCLU_TREND_UP', 'GUCLU_TREND_DOWN']:
                         yon, tp, sl, sebep, atr_b = trend_takip_sinyal(df, anlik, mod, atr, ema20, ema50, rsi, hacim_oran)
-                        if yon is None:
-                            print(f"      ⏭️ TREND TAKİP sinyal yok", flush=True)
-                    elif mod == 'VOLATIL':
-                        print(f"      ⏸️ VOLATIL", flush=True); continue
-                    else:
-                        print(f"      ⏸️ BELIRSIZ", flush=True); continue
                     
                     if yon is None: continue
                     
@@ -1018,8 +1099,7 @@ def tarayici():
                         f"🎯 Giriş: {anlik}\n"
                         f"💰 TP: {tp}\n"
                         f"🛑 SL: {sl}\n"
-                        f"💵 Marj: {kullan:.2f} USDT\n"
-                        f"📊 Kademeli: %3/%5/%8/%12"
+                        f"💵 Marj: {kullan:.2f} USDT"
                     )
                 except Exception as e:
                     print(f"   ⚠️ {symbol}: {e}", flush=True)
@@ -1047,6 +1127,8 @@ async def main():
         print(f"⚠️ Webhook: {e}", flush=True)
     
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
+    app_tg.add_handler(CommandHandler("liste", liste_komutu))
+    app_tg.add_handler(CommandHandler("listeguncelle", liste_guncelle_komutu))
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
