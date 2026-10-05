@@ -15,22 +15,50 @@ import ccxt
 import pandas as pd
 import ta
 import numpy as np
+from datetime import date
+from dotenv import load_dotenv
+from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from sklearn.ensemble import RandomForestClassifier
 from supabase import create_client, Client
 
-# ==================== AYARLAR VE ANAHTARLAR ====================
-TELEGRAM_TOKEN = "8870934003:AAGOzmO_VwYnj0Wz2hehI176rKiOkEaV0b0"
-CHAT_ID = "6929517567"
+# ==================== .ENV ====================
+if os.path.exists('/etc/secrets/.env'):
+    load_dotenv('/etc/secrets/.env', override=True)
+    print("✅ .env (secrets) yüklendi", flush=True)
+else:
+    load_dotenv(override=True)
+    print("✅ .env yüklendi", flush=True)
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://rllpcylzhptqwzmzehnv.supabase.co")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "Sb_secret_ln9y67Ep_zCtOQ9Q2NE8KQ_nf0gKkmO")
+# ==================== RENDER WEB ====================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot aktif!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+# ==================== AYARLAR VE ANAHTARLAR ====================
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
+CHAT_ID = os.environ.get("CHAT_ID", "").strip()
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
+GATE_API_KEY = os.environ.get("GATE_API_KEY", "").strip()
+GATE_SECRET = os.environ.get("GATE_SECRET", "").strip()
+
+if not TELEGRAM_TOKEN or not CHAT_ID: sys.exit(1)
+if not SUPABASE_URL or not SUPABASE_KEY: sys.exit(1)
+if not GATE_API_KEY or not GATE_SECRET: sys.exit(1)
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 exchange = ccxt.gate({
-    'apiKey': '82cca880898a88d1a31e86d8eb474c57',
-    'secret': '1ac479b9df5e6f2e89560b0d238a250694719b6fcae20da00ebc54ad6aeb8898',
+    'apiKey': GATE_API_KEY,
+    'secret': GATE_SECRET,
     'enableRateLimit': True,
     'timeout': 30000,
     'options': {
@@ -462,6 +490,9 @@ def otomatik_arkaplan_tarayici():
         time.sleep(5)
 
 async def main():
+    web_thread = threading.Thread(target=run_web, daemon=True)
+    web_thread.start()
+    
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     try:
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
