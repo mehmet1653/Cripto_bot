@@ -76,22 +76,24 @@ KOMISYON_ORANI = 0.001
 SPREAD_MALIYETI = 0.0005
 TOPLAM_MALIYET_ORANI = (KOMISYON_ORANI * 2) + SPREAD_MALIYETI
 
+# ✅ KADEMELİ KÂR (HIZLI)
 KADEMELI_KAR = [
-    (2.0, 0.40),
-    (4.0, 0.30),
-    (6.0, 0.30),
+    (1.5, 0.40),
+    (3.0, 0.30),
+    (5.0, 0.30),
 ]
 
-ERKEN_ZARAR_ROE = -2.0
-MAKS_ACIK_KALMA = 60 * 60
+# ✅ ZAMAN LİMİTİ (ESNETİLDİ)
+MAKS_ACIK_KALMA = 6 * 60 * 60   # 60 dk → 6 saat
 
+# ✅ TRAILING KÂR GARANTİ
 TRAILING_KAR = [
-    (2.0, 0.005),
-    (4.0, 0.015),
-    (6.0, 0.03),
+    (1.5, 0.005),
+    (3.0, 0.015),
+    (5.0, 0.03),
 ]
 
-ARDISIK_ZARAR_LIMIT = 4
+ARDISIK_ZARAR_LIMIT = 5
 ARDISIK_ZARAR_SAYACI = 0
 SON_ARDISIK_ZARAR_ZAMANI = 0
 KILL_SWITCH_AKTIF = False
@@ -102,7 +104,6 @@ SON_DINAMIK_GUNCELLEME = 0
 DINAMIK_GUNCELLEME_SURESI = 3600
 DINAMIK_LISTE_BOYUT = 10
 
-# Hariç tutulacaklar (Kara Liste)
 KARA_LISTE = [
     'BTC/USDT:USDT', 'ETH/USDT:USDT', 'AVAX/USDT:USDT',
     'USDC/USDT:USDT', 'USDT/USDT:USDT', 'DAI/USDT:USDT',
@@ -111,10 +112,6 @@ KARA_LISTE = [
 ]
 
 def dinamik_liste_guncelle():
-    """
-    En hacimli + en hareketli 10 coini seçer.
-    Skor: (hacim / 1M) × |değişim|
-    """
     global DINAMIK_LISTE, SON_DINAMIK_GUNCELLEME
     
     if time.time() - SON_DINAMIK_GUNCELLEME < DINAMIK_GUNCELLEME_SURESI:
@@ -135,30 +132,27 @@ def dinamik_liste_guncelle():
                 hacim = float(t.get('quoteVolume', 0) or 0)
                 degisim = abs(float(t.get('percentage', 0) or 0))
                 
-                # Filtreler: hacim > 5M, değişim > %1
                 if hacim < 5_000_000: continue
                 if degisim < 1.0: continue
                 
-                # Skor: hacim × değişim (her ikisi de yüksek olan kazanır)
                 skor = (hacim / 1_000_000) * degisim
                 adaylar.append((sym, skor, degisim, hacim))
             except:
                 continue
         
-        # Skora göre sırala
         adaylar.sort(key=lambda x: x[1], reverse=True)
         DINAMIK_LISTE = [a[0] for a in adaylar[:DINAMIK_LISTE_BOYUT]]
         
-        print(f"✅ [DİNAMİK] {len(DINAMIK_LISTE)} coin seçildi:", flush=True)
+        print(f"✅ [DİNAMİK] {len(DINAMIK_LISTE)} coin:", flush=True)
         for s, skor, deg, hac in adaylar[:DINAMIK_LISTE_BOYUT]:
-            print(f"   • {s} | Değişim: %{deg:.1f} | Hacim: {hac/1_000_000:.0f}M | Skor: {skor:.0f}", flush=True)
+            print(f"   • {s} | %{deg:.1f} | {hac/1_000_000:.0f}M | Skor: {skor:.0f}", flush=True)
         
         if DINAMIK_LISTE:
             liste_str = "\n".join([f"• {s.replace('/USDT:USDT','')} (%{d:.1f})" for s, _, d, _ in adaylar[:DINAMIK_LISTE_BOYUT]])
             tg_gonder(f"🔄 DİNAMİK LİSTE\n\n{liste_str}")
         
     except Exception as e:
-        print(f"⚠️ Dinamik liste hatası: {e}", flush=True)
+        print(f"⚠️ Liste hatası: {e}", flush=True)
 
 def takip_listesi():
     return DINAMIK_LISTE
@@ -253,7 +247,7 @@ def yeni_sl_koy(symbol, miktar, yeni_sl, yon):
         eski_sl_sil(symbol, order['id'])
         return True
     except Exception as e:
-        print(f"⚠️ SL koyulamadı {symbol}: {e}", flush=True)
+        print(f"⚠️ SL {symbol}: {e}", flush=True)
         return False
 
 def pozisyon_kapat(symbol, miktar, yon, oran=1.0):
@@ -308,15 +302,17 @@ def emir_defteri_analizi(symbol):
         return (t_alis / t_toplam * 100) if t_toplam > 0 else 50
     except: return 50
 
-# ==================== AKILLI SL/TP ====================
+# ==================== AKILLI SL/TP (GENİŞ) ====================
 def akilli_seviye(anlik, yon, df):
     atr = ta.volatility.AverageTrueRange(df['h'], df['l'], df['c'], window=14).average_true_range().iloc[-1]
+    
     if yon == 'LONG':
         tp = anlik + (atr * 2.5)
-        sl = anlik - (atr * 1.5)
+        sl = anlik - (atr * 2.5)
     else:
         tp = anlik - (atr * 2.5)
-        sl = anlik + (atr * 1.5)
+        sl = anlik + (atr * 2.5)
+    
     return float(tp), float(sl)
 
 # ==================== TELEGRAM ====================
@@ -352,16 +348,19 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f = (gf - g) / g if y == "LONG" else (g - gf) / g
             roe = f * 100 * KALDIRAC
             u = float(p.get('unrealizedPnl', 0) or 0)
-            kademe = len(AKTIF_SISTEMLER.get(sym, {}).get("alinan_kademeler", []))
+            bilgi = AKTIF_SISTEMLER.get(sym, {})
+            kademe = len(bilgi.get("alinan_kademeler", []))
+            acilis_rejim = bilgi.get("acilis_rejim", "?")
+            sure_dk = int((time.time() - bilgi.get("giris_zamani", time.time())) / 60)
             nokta = "🟢" if u >= 0 else "🔴"
-            pos_detay += f"\n{nokta} {sym} | {y} ({KALDIRAC}x)\n  Giriş: `{g:.4f}` | ROE: `%{roe:+.2f}` | Kademe: {kademe}/3"
+            pos_detay += f"\n{nokta} {sym} | {y} ({KALDIRAC}x)\n  Giriş: `{g:.4f}` | ROE: `%{roe:+.2f}`\n  Kademe: {kademe}/3 | Rejim: {acilis_rejim} | {sure_dk} dk"
         
         pnl_nokta = "🟢" if pnl >= 0 else "🔴"
         
         liste_str = "\n".join([f"• {s.replace('/USDT:USDT','')}" for s in DINAMIK_LISTE[:5]])
         
         mesaj = (
-            f"📊 DURUM [v8.0]\n\n"
+            f"📊 DURUM [v8.2]\n\n"
             f"🌐 BTC Rejim: `{rejim}` ({yon_btc})\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"{pnl_nokta} Toplam PnL: `{pnl:+.2f} USDT`\n"
@@ -382,7 +381,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     BOT_CALISIYOR_MU = True
     KILL_SWITCH_AKTIF = False
     ARDISIK_ZARAR_SAYACI = 0
-    await update.message.reply_text("🟢 Bot aktif! (v8.0 Dinamik Liste)")
+    await update.message.reply_text("🟢 Bot aktif! (v8.2 - Rejim kontrolü + esnek süre)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -417,15 +416,21 @@ async def liste_guncelle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global SON_DINAMIK_GUNCELLEME
     SON_DINAMIK_GUNCELLEME = 0
-    await update.message.reply_text("🔄 Liste zorla güncelleniyor...")
+    await update.message.reply_text("🔄 Liste güncelleniyor...")
     await asyncio.to_thread(dinamik_liste_guncelle)
     liste_str = "\n".join([f"• {s.replace('/USDT:USDT','')}" for s in DINAMIK_LISTE])
     await update.message.reply_text(f"✅ Güncellendi:\n\n{liste_str}")
 
-# ==================== KADEMELİ KÂR + ERKEN ZARAR ====================
+# ==================== KADEMELİ KÂR + REJİM KONTROLÜ ====================
 def kar_zarar_yonetimi():
     with state_lock:
         kopya = list(AKTIF_SISTEMLER.items())
+    
+    # Güncel rejim ve BTC yönü (bir kere hesapla)
+    try:
+        guncel_rejim, guncel_btc_yon = piyasa_rejimini_tespit_et()
+    except:
+        guncel_rejim, guncel_btc_yon = "YATAY", "TESTERE"
     
     for sym, bilgi in kopya:
         if sym not in AKTIF_SISTEMLER: continue
@@ -435,6 +440,8 @@ def kar_zarar_yonetimi():
         g = float(bilgi.get("giris_fiyati", 0))
         giris_zaman = float(bilgi.get("giris_zamani", 0))
         alinan = bilgi.get("alinan_kademeler", [])
+        acilis_rejim = bilgi.get("acilis_rejim", "")
+        acilis_btc_yon = bilgi.get("acilis_btc_yon", "")
         
         if time.time() - giris_zaman < 60: continue
         
@@ -453,19 +460,29 @@ def kar_zarar_yonetimi():
         
         if not miktar or miktar <= 0: continue
         
-        if roe <= ERKEN_ZARAR_ROE:
+        # ✅ 1. REJİM DEĞİŞİM KONTROLÜ
+        if acilis_rejim != guncel_rejim:
             if pozisyon_kapat(sym, miktar, yon, oran=1.0):
-                print(f"🛑 [ERKEN ZARAR] {sym} | ROE:%{roe:.1f}", flush=True)
-                tg_gonder(f"🛑 ERKEN ZARAR KES\n📌 {sym}\n💰 ROE: %{roe:+.2f}")
+                print(f"🔄 [REJİM DEĞİŞTİ] {sym} | {acilis_rejim} → {guncel_rejim} | ROE:%{roe:.1f}", flush=True)
+                tg_gonder(f"🔄 REJİM DEĞİŞTİ - KAPATILDI\n📌 {sym}\n📊 {acilis_rejim} → {guncel_rejim}\n💰 ROE: %{roe:+.2f}")
             continue
         
+        # ✅ 2. BTC YÖN DEĞİŞİKLİĞİ (sadece TREND modunda)
+        if acilis_rejim == "TREND" and acilis_btc_yon != guncel_btc_yon:
+            if pozisyon_kapat(sym, miktar, yon, oran=1.0):
+                print(f"🔄 [BTC YÖN] {sym} | {acilis_btc_yon} → {guncel_btc_yon} | ROE:%{roe:.1f}", flush=True)
+                tg_gonder(f"🔄 BTC YÖN DEĞİŞTİ - KAPATILDI\n📌 {sym}\n📊 {acilis_btc_yon} → {guncel_btc_yon}\n💰 ROE: %{roe:+.2f}")
+            continue
+        
+        # ✅ 3. ZAMAN LİMİTİ (6 saat)
         gecen = time.time() - giris_zaman
         if gecen > MAKS_ACIK_KALMA:
             if pozisyon_kapat(sym, miktar, yon, oran=1.0):
-                print(f"⏰ [ZAMAN] {sym} | {int(gecen/60)}dk", flush=True)
+                print(f"⏰ [ZAMAN] {sym} | {int(gecen/60)}dk | ROE:%{roe:.1f}", flush=True)
                 tg_gonder(f"⏰ ZAMAN DOLDU\n📌 {sym}\n🕐 {int(gecen/60)} dk\n💰 ROE: %{roe:+.2f}")
             continue
         
+        # ✅ 4. KADEMELİ KÂR
         for i, (esik, oran) in enumerate(KADEMELI_KAR):
             if i in alinan: continue
             if roe >= esik:
@@ -534,12 +551,11 @@ def trailing_kontrol():
 def ana_dongu():
     global ARDISIK_ZARAR_SAYACI, SON_ARDISIK_ZARAR_ZAMANI, KILL_SWITCH_AKTIF
     
-    print("🚀 [BAŞLANGIÇ] v8.0 Aktif - Dinamik Liste", flush=True)
+    print("🚀 [BAŞLANGIÇ] v8.2 - Rejim kontrolü aktif", flush=True)
     try:
         exchange.load_markets()
     except: pass
     
-    # İlk listeyi hemen oluştur
     dinamik_liste_guncelle()
     
     while True:
@@ -547,7 +563,6 @@ def ana_dongu():
             if not BOT_CALISIYOR_MU:
                 time.sleep(5); continue
             
-            # Kill-switch
             if KILL_SWITCH_AKTIF:
                 if time.time() - SON_ARDISIK_ZARAR_ZAMANI > 3600:
                     KILL_SWITCH_AKTIF = False
@@ -556,9 +571,7 @@ def ana_dongu():
                 else:
                     time.sleep(30); continue
             
-            # Dinamik liste güncelle (1 saatte bir)
             dinamik_liste_guncelle()
-            
             rejim, btc_yonu = piyasa_rejimini_tespit_et()
             
             # KAPANIŞ KONTROLÜ
@@ -621,7 +634,7 @@ def ana_dongu():
             except Exception as e:
                 print(f"⚠️ Kapanış: {e}", flush=True)
             
-            # KÂR/ZARAR YÖNETİMİ
+            # KÂR/ZARAR YÖNETİMİ + TRAILING
             kar_zarar_yonetimi()
             trailing_kontrol()
             
@@ -653,15 +666,13 @@ def ana_dongu():
                     sebep = ""
                     
                     if rejim == "YATAY":
-                        # Testere: RSI aşırı uçlarda DÖNÜŞ
-                        if rsi < 32:
+                        if rsi < 28:
                             yon = "LONG"
                             sebep = f"TESTERE LONG (RSI:{rsi:.0f})"
-                        elif rsi > 68:
+                        elif rsi > 72:
                             yon = "SHORT"
                             sebep = f"TESTERE SHORT (RSI:{rsi:.0f})"
                     else:
-                        # TREND: BTC yönünde
                         if btc_yonu == "LONG" and 40 < rsi < 55 and emir_orani > 55:
                             yon = "LONG"
                             sebep = f"TREND LONG (RSI:{rsi:.0f}, Emir:{emir_orani:.0f}%)"
@@ -686,7 +697,6 @@ def ana_dongu():
                     })
                 except: continue
             
-            # KAPASİTE
             kapasite = MAKSIMUM_TOPLAM_POZISYON - len(aktif_map)
             
             for aday in adaylar[:kapasite]:
@@ -740,12 +750,14 @@ def ana_dongu():
                             "giris_zamani": time.time(),
                             "kaldirac": KALDIRAC,
                             "giris_rsi": float(aday["rsi"]),
-                            "alinan_kademeler": []
+                            "alinan_kademeler": [],
+                            "acilis_rejim": rejim,
+                            "acilis_btc_yon": btc_yonu
                         }
                         aktif_map[aday["symbol"]] = {"dummy": True}
                     
                     hafizayi_kaydet()
-                    print(f"   ✅ [AÇILDI] {aday['symbol']} {aday['yon']} @ {giris}", flush=True)
+                    print(f"   ✅ [AÇILDI] {aday['symbol']} {aday['yon']} @ {giris} | {rejim}", flush=True)
                     
                     tg_gonder(
                         f"🎯 SİNYAL! [{rejim}]\n"
