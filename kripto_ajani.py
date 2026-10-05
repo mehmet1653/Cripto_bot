@@ -143,22 +143,18 @@ def piyasa_rejimini_tespit_et():
         ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=40)
         df_btc = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
-        # 1. ADX Filtresini Sertleştiriyoruz (35'in altı kesinlikle yatay)
         adx_1h = ta.trend.ADXIndicator(df_btc['high'], df_btc['low'], df_btc['close'], window=14).adx().iloc[-1]
         
-        # 2. Bollinger Bantları Genişliği Sıkışma Eşiği
         indicator_bb = ta.volatility.BollingerBands(close=df_btc['close'], window=20, window_dev=2)
         bb_high = indicator_bb.bollinger_hband().iloc[-1]
         bb_low = indicator_bb.bollinger_lband().iloc[-1]
         bb_mid = indicator_bb.bollinger_mavg().iloc[-1]
         bb_bandwidth = (bb_high - bb_low) / bb_mid
         
-        # 3. EMA Farkı
         ema9 = ta.trend.ema_indicator(df_btc['close'], window=9).iloc[-1]
         ema21 = ta.trend.ema_indicator(df_btc['close'], window=21).iloc[-1]
         fark_yuzdesi = (abs(ema9 - ema21) / ema21) * 100
         
-        # SERT KURAL: Trend sayılması için ADX > 35 VE Bant Genişliği > %4 VE EMA Farkı > %0.3 olmalı!
         if adx_1h < 35.0 or bb_bandwidth < 0.04 or fark_yuzdesi < 0.3:
             rejim = "YATAY"
             trend_yonu = "YATAY (Testere)"
@@ -321,7 +317,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Hata: {e}")
 
 def otomatik_arkaplan_tarayici():
-    print("🚀 [BAŞLANGIÇ] Hibrit Bot Aktif (Sertleştirilmiş Yatay/Testere Algılama)...", flush=True)
+    print("🚀 [BAŞLANGIÇ] Hibrit Bot Aktif (Ters Mod Kaldırıldı)...", flush=True)
     try:
         exchange.load_markets()
     except Exception: pass
@@ -405,13 +401,15 @@ def otomatik_arkaplan_tarayici():
 
                     emir_analizi = emir_defteri_ve_seviye_analizi(symbol, anlik_fiyat, ticker)
 
+                    # ✅ TERS MOD KALDIRILDI - Artık ne görürse onu basıyor
                     if piyasa_rejimi == "YATAY":
-                        if rsi < 35: ham_yon = "LONG"
-                        elif rsi > 65: ham_yon = "SHORT"
-                        else: continue
-                        
-                        islem_yonu = "SHORT" if ham_yon == "LONG" else "LONG"
-                        mod_adi = "TERS MOD (Testere)"
+                        if rsi < 35: 
+                            islem_yonu = "LONG"
+                        elif rsi > 65: 
+                            islem_yonu = "SHORT"
+                        else: 
+                            continue
+                        mod_adi = "NORMAL TESTERE MODU"
                     else:
                         if btc_yonu == "LONG" and rsi < 55:
                             islem_yonu = "LONG"
