@@ -72,13 +72,13 @@ BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
 tarayici_kilidi = threading.Lock()
 
-# ==================== AYARLAR ====================
-KALDIRAC = 5
+# ==================== AYARLAR (VUR-KAÇ) ====================
+KALDIRAC = 5                           # ✅ 5x sabit (risk artmadı)
 MAKSIMUM_TOPLAM_POZISYON = 3
-COOLDOWN_SURESI_SANIYE = 30 * 60
+COOLDOWN_SURESI_SANIYE = 15 * 60       # ✅ 30 dk → 15 dk (vur-kaç hızlı)
 
-POZISYON_ORANI = 0.20
-MIN_NET_KAR = 0.006
+POZISYON_ORANI = 0.15                  # ✅ %20 → %15 (daha çok işlem için)
+MIN_NET_KAR = 0.004                    # ✅ %0.6 → %0.4 (küçük kâr kabul)
 
 KOMISYON_ORANI = 0.001
 SPREAD_MALIYETI = 0.0005
@@ -89,13 +89,13 @@ ADX_TREND_ESIGI = 22
 ADX_YATAY_ESIGI = 20
 ATR_VOLATIL_CARPAN = 2.5
 
-ATR_SL_GRID = 3.0
-BREAKOUT_SL_TOLERANS = 0.015
+ATR_SL_GRID = 2.5                      # ✅ Biraz dar (vur-kaç)
+BREAKOUT_SL_TOLERANS = 0.012
 BREAKOUT_LOOKBACK = 50
-BREAKOUT_MIN_RR = 2.0
+BREAKOUT_MIN_RR = 1.8                  # ✅ R/R biraz düşük (hızlı)
 
 TREND_TAKIP_MUM_ONAY = 5
-TREND_TAKIP_SL_CARPAN = 3.0
+TREND_TAKIP_SL_CARPAN = 2.5
 
 MAKS_YUKSEKLIK_TREND = 0.04
 RSI_TREND_UST_LIMIT = 72
@@ -107,38 +107,36 @@ FITIL_CARPAN = 2.0
 
 HACIM_ONAY_CARPAN = 0.8
 
-# ✅ SİNYAL KALİTE SKORU
-MIN_SKOR_ESIGI = 60          # Minimum skor (bu altındakiler elenir)
-
-KADEMELI_KAR_ALMA = [
-    (3.0, 0.25),
-    (5.0, 0.25),
-    (8.0, 0.25),
-    (12.0, 1.00),
+# ✅ VUR-KAÇ KADEMELİ ÇIKIŞ (HIZLI)
+VUR_KAC_KADEMELERI = [
+    (1.5, 0.40),   # ROE +%1.5 → %40 kapat (hızlı kâr)
+    (3.0, 0.30),   # ROE +%3 → %30 kapat
+    (5.0, 0.30),   # ROE +%5 → kalan %30 kapat
 ]
 
-ERKEN_ZARAR_ROE = -3.0
-MAKS_ACIK_KALMA_SURESI = 4 * 3600
+# ✅ ERKEN ZARAR KES (VUR-KAÇ)
+ERKEN_ZARAR_ROE = -1.5                 # ✅ -%3 → -%1.5 (daha hızlı kes)
 
-TEKRAR_DALMA_ONAY_MESAFE = 0.003
-GUNLUK_MAX_ISLEM = 3
-MOD_DEGISIM_ZORUNLU = True
+# ✅ ZAMAN LİMİTİ (VUR-KAÇ)
+MAKS_ACIK_KALMA_SURESI = 30 * 60       # ✅ 4 saat → 30 dakika
 
-TRAILING_SEVIYELER = [
-    (3.0, 0.0),
-    (5.0, 0.015),
-    (8.0, 0.03),
-    (12.0, 0.06),
-    (20.0, 0.12),
-    (30.0, 0.20),
-    (50.0, 0.35),
+# ✅ TRAILING SL (KÂR GARANTİ)
+TRAILING_KAR_GARANTI = [
+    (1.5, 0.0),      # ROE +%1.5 → SL başabaş + komisyon
+    (3.0, 0.01),     # ROE +%3 → SL +%1 kâr
+    (5.0, 0.02),     # ROE +%5 → SL +%2 kâr
+    (8.0, 0.04),     # ROE +%8 → SL +%4 kâr
 ]
 
-TREND_KAYIP_MIN_ROE = 4.0
+TEKRAR_DALMA_ONAY_MESAFE = 0.002
+GUNLUK_MAX_ISLEM = 10                  # ✅ 3 → 10 (vur-kaç sık)
+MOD_DEGISIM_ZORUNLU = False            # ✅ Aynı moddan tekrar girilebilir (vur-kaç)
+
+TREND_KAYIP_MIN_ROE = 2.0
 ADX_DUSUS_ESIGI = 20.0
 MUM_DONUS_ONAY = 3
 
-ARDISIK_ZARAR_LIMIT = 3
+ARDISIK_ZARAR_LIMIT = 5                # ✅ 3 → 5 (vur-kaç daha çok zarar kabul)
 ARDISIK_ZARAR_BEKLEME = 3600
 ARDISIK_ZARAR_SAYACI = 0
 SON_ARDISIK_ZARAR_ZAMANI = 0
@@ -146,13 +144,8 @@ KILL_SWITCH_AKTIF = False
 
 # ==================== SİNYAL KALİTE SKORU ====================
 def sinyal_kalite_skoru(mod, adx, rsi, hacim_oran, yon):
-    """
-    Her sinyale 0-100 arası kalite skoru verir.
-    Yüksek skor = daha iyi sinyal.
-    """
     skor = 0
     
-    # ✅ 1. ADX gücü (0-40 puan)
     if adx >= 40: skor += 40
     elif adx >= 35: skor += 35
     elif adx >= 30: skor += 30
@@ -160,7 +153,6 @@ def sinyal_kalite_skoru(mod, adx, rsi, hacim_oran, yon):
     elif adx >= 22: skor += 20
     else: skor += 10
     
-    # ✅ 2. RSI uygunluğu (0-20 puan)
     if yon == "LONG":
         if 50 <= rsi <= 60: skor += 20
         elif 60 < rsi <= 70: skor += 15
@@ -168,7 +160,7 @@ def sinyal_kalite_skoru(mod, adx, rsi, hacim_oran, yon):
         elif 70 < rsi <= 75: skor += 10
         elif 40 <= rsi < 45: skor += 10
         else: skor += 5
-    else:  # SHORT
+    else:
         if 40 <= rsi <= 50: skor += 20
         elif 30 <= rsi < 40: skor += 15
         elif 50 < rsi <= 55: skor += 15
@@ -176,7 +168,6 @@ def sinyal_kalite_skoru(mod, adx, rsi, hacim_oran, yon):
         elif 55 < rsi <= 60: skor += 10
         else: skor += 5
     
-    # ✅ 3. Hacim (0-20 puan)
     if hacim_oran >= 2.0: skor += 20
     elif hacim_oran >= 1.5: skor += 15
     elif hacim_oran >= 1.2: skor += 12
@@ -184,25 +175,20 @@ def sinyal_kalite_skoru(mod, adx, rsi, hacim_oran, yon):
     elif hacim_oran >= 0.8: skor += 7
     else: skor += 3
     
-    # ✅ 4. Mod tipi (0-10 puan)
-    if mod in ['GUCLU_TREND_UP', 'GUCLU_TREND_DOWN']:
-        skor += 10  # En güçlü
-    elif mod in ['TREND_YUKARI', 'TREND_ASAGI']:
-        skor += 7
-    elif mod == 'YATAY':
-        skor += 5
-    else:
-        skor += 3
+    if mod in ['GUCLU_TREND_UP', 'GUCLU_TREND_DOWN']: skor += 10
+    elif mod in ['TREND_YUKARI', 'TREND_ASAGI']: skor += 7
+    elif mod == 'YATAY': skor += 5
+    else: skor += 3
     
-    # ✅ 5. Mod-yön uyumu (0-10 puan)
     if (mod == 'GUCLU_TREND_UP' and yon == 'LONG') or (mod == 'GUCLU_TREND_DOWN' and yon == 'SHORT'):
         skor += 10
     elif (mod == 'TREND_YUKARI' and yon == 'LONG') or (mod == 'TREND_ASAGI' and yon == 'SHORT'):
         skor += 7
-    else:
-        skor += 3
+    else: skor += 3
     
     return min(100, skor)
+
+MIN_SKOR_ESIGI = 55
 
 # ==================== DİNAMİK LİSTE ====================
 def dinamik_liste_guncelle():
@@ -418,7 +404,7 @@ def piyasa_modu_bul(df):
 # ==================== GRID ====================
 def grid_sinyal(df, anlik, bb_ust, bb_alt, bb_orta, atr, hacim_oran):
     try:
-        if anlik <= bb_alt * 1.01:
+        if anlik <= bb_alt * 1.008:
             sl = anlik - (atr * ATR_SL_GRID)
             tp = bb_orta
             if tp <= anlik: return None, None, None, None, None
@@ -426,7 +412,7 @@ def grid_sinyal(df, anlik, bb_ust, bb_alt, bb_orta, atr, hacim_oran):
             if net < MIN_NET_KAR: return None, None, None, None, None
             return "LONG", tp, sl, "GRID LONG", atr
         
-        if anlik >= bb_ust * 0.99:
+        if anlik >= bb_ust * 0.992:
             sl = anlik + (atr * ATR_SL_GRID)
             tp = bb_orta
             if tp >= anlik: return None, None, None, None, None
@@ -581,20 +567,17 @@ def tekrar_dalma_kontrolu(symbol, yon_s, anlik, mod_guncel):
         
         son_yon = cd.get("son_yon", "")
         son_cikis_fiyat = float(cd.get("son_cikis_fiyat", 0))
-        son_mod = cd.get("son_mod", "")
         
+        # ✅ Vur-kaç: sadece fiyat kontrolü (mod kontrolü yok)
         if son_cikis_fiyat > 0:
             if son_yon == "LONG" and yon_s == "LONG":
                 if anlik > son_cikis_fiyat * (1 - TEKRAR_DALMA_ONAY_MESAFE): return False
             if son_yon == "SHORT" and yon_s == "SHORT":
                 if anlik < son_cikis_fiyat * (1 + TEKRAR_DALMA_ONAY_MESAFE): return False
-        
-        if MOD_DEGISIM_ZORUNLU and son_mod and mod_guncel:
-            if son_mod == mod_guncel: return False
     
     return True
 
-# ==================== KADEMELİ KÂR + ERKEN ZARAR ====================
+# ==================== KADEMELİ KÂR + ERKEN ZARAR (VUR-KAÇ) ====================
 def kar_zarar_yonetimi():
     with state_lock:
         aktif_kopya = list(AKTIF_POZISYONLAR.items())
@@ -609,7 +592,7 @@ def kar_zarar_yonetimi():
         giris_zaman = float(bilgi.get("giris_zamani", 0))
         alinan_kademeler = bilgi.get("alinan_kademeler", [])
         
-        if time.time() - giris_zaman < 120: continue
+        if time.time() - giris_zaman < 60: continue  # 1 dakika bekle
         
         try:
             t = exchange.fetch_ticker(sym)
@@ -629,21 +612,24 @@ def kar_zarar_yonetimi():
         
         if not miktar or miktar <= 0: continue
         
+        # ✅ ERKEN ZARAR KES (VUR-KAÇ)
         if roe <= ERKEN_ZARAR_ROE:
             if pozisyon_kapat(sym, miktar, yon, oran=1.0):
                 print(f"🛑 [ERKEN ZARAR] {sym} | ROE:%{roe:.1f}", flush=True)
                 tg_gonder(f"🛑 ERKEN ZARAR KES\n📌 {sym}\n💰 ROE: %{roe:+.2f}")
             continue
         
+        # ✅ ZAMAN LİMİTİ (VUR-KAÇ 30 DK)
         gecen_sure = time.time() - giris_zaman
         if gecen_sure > MAKS_ACIK_KALMA_SURESI:
             if pozisyon_kapat(sym, miktar, yon, oran=1.0):
                 dakika = int(gecen_sure / 60)
-                print(f"⏰ [ZAMAN] {sym} | {dakika}dk", flush=True)
+                print(f"⏰ [ZAMAN] {sym} | {dakika}dk | ROE:%{roe:.1f}", flush=True)
                 tg_gonder(f"⏰ ZAMAN DOLDU\n📌 {sym}\n🕐 {dakika} dk\n💰 ROE: %{roe:+.2f}")
             continue
         
-        for i, (esik_roe, kapat_orani) in enumerate(KADEMELI_KAR_ALMA):
+        # ✅ VUR-KAÇ KADEMELİ KÂR ALMA
+        for i, (esik_roe, kapat_orani) in enumerate(VUR_KAC_KADEMELERI):
             if i in alinan_kademeler: continue
             if roe >= esik_roe:
                 if pozisyon_kapat(sym, miktar, yon, oran=kapat_orani):
@@ -654,7 +640,7 @@ def kar_zarar_yonetimi():
                             AKTIF_POZISYONLAR[sym]["alinan_kademeler"] = yeni_kademeler
                     yuzde = int(kapat_orani * 100)
                     print(f"💰 [KADEME] {sym} | ROE:%{roe:.1f} → %{yuzde}", flush=True)
-                    tg_gonder(f"💰 KADEMELİ KÂR\n📌 {sym}\n📊 ROE: %{roe:+.2f}\n🎯 %{yuzde}")
+                    tg_gonder(f"💰 KADEMELİ KÂR\n📌 {sym}\n📊 ROE: %{roe:+.2f}\n🎯 %{yuzde} kapatıldı")
                 break
 
 # ==================== TREND KAYIP ====================
@@ -723,11 +709,8 @@ def trailing_stop_kontrol():
         sl_kayitli = float(bilgi.get("sl_fiyat", 0))
         kaldirac_v = int(bilgi.get("kaldirac", KALDIRAC))
         giris_zaman = float(bilgi.get("giris_zamani", 0))
-        mod = bilgi.get("mod", "TREND")
-        atr_b = float(bilgi.get("atr_degeri", 0))
         
-        if time.time() - giris_zaman < 120: continue
-        if atr_b <= 0: continue
+        if time.time() - giris_zaman < 60: continue
         
         try:
             t = exchange.fetch_ticker(sym)
@@ -739,31 +722,15 @@ def trailing_stop_kontrol():
         else:
             roe = (g - anlik) / g * 100 * kaldirac_v
         
+        # ✅ VUR-KAÇ TRAILING (KÂR GARANTİ)
         yeni_sl = None
-        
-        if mod in ['GUCLU_TREND_UP', 'GUCLU_TREND_DOWN']:
-            try:
-                ohlcv = exchange.fetch_ohlcv(sym, timeframe='15m', limit=50)
-                df_t = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                ema20_guncel = ta.trend.EMAIndicator(close=df_t['close'], window=20).ema_indicator().iloc[-1]
-                
+        for esik_roe, kilit in TRAILING_KAR_GARANTI:
+            if roe >= esik_roe:
                 if yon == "LONG":
-                    hedef_sl = ema20_guncel - (atr_b * TREND_TAKIP_SL_CARPAN)
-                    min_kar_sl = g * (1 + (TOPLAM_MALIYET_ORANI + 0.01) / kaldirac_v)
-                    yeni_sl = max(hedef_sl, min_kar_sl) if roe > 3.0 else hedef_sl
+                    yeni_sl = g * (1 + (TOPLAM_MALIYET_ORANI + kilit) / kaldirac_v)
                 else:
-                    hedef_sl = ema20_guncel + (atr_b * TREND_TAKIP_SL_CARPAN)
-                    min_kar_sl = g * (1 - (TOPLAM_MALIYET_ORANI + 0.01) / kaldirac_v)
-                    yeni_sl = min(hedef_sl, min_kar_sl) if roe > 3.0 else hedef_sl
-            except: pass
-        else:
-            for esik_roe, kilit in TRAILING_SEVIYELER:
-                if roe >= esik_roe:
-                    if yon == "LONG":
-                        yeni_sl = g * (1 + kilit / kaldirac_v)
-                    else:
-                        yeni_sl = g * (1 - kilit / kaldirac_v)
-                    break
+                    yeni_sl = g * (1 - (TOPLAM_MALIYET_ORANI + kilit) / kaldirac_v)
+                break
         
         if yeni_sl is None: continue
         
@@ -798,14 +765,12 @@ def modlari_guncelle():
             df_g = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             sonuc = piyasa_modu_bul(df_g)
             mod_guncel = sonuc[0]
-            atr_g = sonuc[2]
             
             eski_mod = bilgi.get("mod", "")
             if eski_mod != mod_guncel:
                 with state_lock:
                     if sym in AKTIF_POZISYONLAR:
                         AKTIF_POZISYONLAR[sym]["mod"] = mod_guncel
-                        AKTIF_POZISYONLAR[sym]["atr_degeri"] = atr_g
         except: continue
 
 # ==================== TELEGRAM ====================
@@ -841,11 +806,10 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             unrealized = float(p.get('unrealizedPnl', 0) or 0)
             f = (gf - g) / g if y == "LONG" else (g - gf) / g
             roe = f * 100 * k
-            mod_bilgi = AKTIF_POZISYONLAR.get(sym, {}).get("mod", "?")
             kademe = len(AKTIF_POZISYONLAR.get(sym, {}).get("alinan_kademeler", []))
             skor = AKTIF_POZISYONLAR.get(sym, {}).get("skor", 0)
             nokta = "🟢" if unrealized >= 0 else "🔴"
-            pos_detay += f"\n{nokta} {sym} | {y} ({k}x) | Skor:{skor}\n  K/Z: {unrealized:+.2f} | ROE: %{roe:+.2f} | Kademe:{kademe}/4"
+            pos_detay += f"\n{nokta} {sym} | {y} ({k}x) | Skor:{skor}\n  K/Z: {unrealized:+.2f} | ROE: %{roe:+.2f} | Kademe:{kademe}/3"
         
         pnl_nokta = "🟢" if pnl >= 0 else "🔴"
         
@@ -857,7 +821,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 sayac_str += f"\n   • {kisa}: {v.get('sayi',0)}/{GUNLUK_MAX_ISLEM}"
         
         mesaj = (
-            f"📊 DURUM [ADAPTİF v5.2]\n\n"
+            f"📊 DURUM [VUR-KAÇ v6.0]\n\n"
             f"💰 Kasa: {total:.2f} USDT\n"
             f"{pnl_nokta} Toplam PnL: {pnl:+.2f} USDT\n"
             f"📌 Açık: {len(pos)} / {MAKSIMUM_TOPLAM_POZISYON}"
@@ -895,7 +859,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     BOT_CALISIYOR_MU = True
     KILL_SWITCH_AKTIF = False
     ARDISIK_ZARAR_SAYACI = 0
-    await update.message.reply_text("🟢 Bot aktif! (v5.2: En İyi Sinyal Öncelikli)")
+    await update.message.reply_text("🟢 Bot aktif! (v6.0: VUR-KAÇ)")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -929,7 +893,7 @@ async def liste_guncelle_komutu(update: Update, context: ContextTypes.DEFAULT_TY
 def tarayici():
     global ARDISIK_ZARAR_SAYACI, SON_ARDISIK_ZARAR_ZAMANI, KILL_SWITCH_AKTIF
     
-    print("🚀 [BAŞLANGIÇ] ADAPTİF v5.2 (En İyi Sinyal Öncelikli)", flush=True)
+    print("🚀 [BAŞLANGIÇ] VUR-KAÇ v6.0", flush=True)
     try:
         exchange.load_markets()
     except: pass
@@ -1038,7 +1002,7 @@ def tarayici():
             for symbol in takip_listesi():
                 if not BOT_CALISIYOR_MU: break
                 if symbol in aktif_list: continue
-                if len(aktif_list) + len(adaylar) >= MAKSIMUM_TOPLAM_POZISYON + 5: break  # Biraz fazla tara
+                if len(aktif_list) + len(adaylar) >= MAKSIMUM_TOPLAM_POZISYON + 5: break
                 
                 try:
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=100)
@@ -1062,10 +1026,8 @@ def tarayici():
                     
                     if yon is None: continue
                     
-                    # Tekrar dalma kontrolü
                     if not tekrar_dalma_kontrolu(symbol, yon, anlik, mod): continue
                     
-                    # ✅ SKOR HESAPLA
                     skor = sinyal_kalite_skoru(mod, adx, rsi, hacim_oran, yon)
                     
                     adaylar.append({
@@ -1078,26 +1040,22 @@ def tarayici():
                 except Exception as e:
                     continue
             
-            # ✅ SKORA GÖRE SIRALA
             adaylar.sort(key=lambda x: x['skor'], reverse=True)
             
-            # ✅ EN İYİLERİ SEÇ
             secilen = []
             for aday in adaylar:
                 if len(secilen) >= (MAKSIMUM_TOPLAM_POZISYON - len(aktif_list)):
                     break
                 if aday['skor'] < MIN_SKOR_ESIGI:
-                    print(f"   ⏭️ [{aday['symbol']}] Skor düşük: {aday['skor']} < {MIN_SKOR_ESIGI}", flush=True)
                     continue
                 secilen.append(aday)
             
             if len(adaylar) > 0:
-                print(f"\n   📊 {len(adaylar)} sinyal bulundu, {len(secilen)} tanesi seçildi", flush=True)
+                print(f"\n   📊 {len(adaylar)} sinyal, {len(secilen)} seçildi", flush=True)
                 for a in adaylar[:5]:
                     secildi = "✅" if a in secilen else "⏭️"
                     print(f"      {secildi} {a['symbol']} | Skor:{a['skor']} | {a['mod']} | ADX:{a['adx']:.1f}", flush=True)
             
-            # ✅ SEÇİLENLERİ AÇ
             for aday in secilen:
                 try:
                     symbol = aday['symbol']
@@ -1165,19 +1123,19 @@ def tarayici():
                         gunluk_sayac_artir(symbol)
                     
                     hafizayi_kaydet()
-                    print(f"      ✅ [AÇILDI] {symbol} {yon} | {mod} | Skor:{skor} | @ {anlik}", flush=True)
+                    print(f"      ✅ [AÇILDI] {symbol} {yon} | {mod} | Skor:{skor}", flush=True)
                     
                     tg_gonder(
-                        f"🎯 SİNYAL! [{mod}] Skor: {skor}\n"
+                        f"🎯 VUR-KAÇ! [{mod}] Skor: {skor}\n"
                         f"📌 {symbol} | {yon}\n"
                         f"📊 {aday['sebep']}\n"
                         f"🎯 Giriş: {anlik}\n"
                         f"💰 TP: {tp}\n"
                         f"🛑 SL: {sl}\n"
-                        f"💵 Marj: {kullan:.2f} USDT"
+                        f"⚡ Kademeli: %1.5/%3/%5"
                     )
                 except Exception as e:
-                    print(f"   ⚠️ Açma hatası {aday['symbol']}: {e}", flush=True)
+                    print(f"   ⚠️ {aday['symbol']}: {e}", flush=True)
                     continue
         
         except Exception as e:
@@ -1186,7 +1144,7 @@ def tarayici():
             try: tarayici_kilidi.release()
             except: pass
         
-        time.sleep(15)
+        time.sleep(10)
 
 async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)
