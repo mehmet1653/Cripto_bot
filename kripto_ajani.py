@@ -78,12 +78,12 @@ state_lock = threading.Lock()
 GLOBAL_COOLDOWN_BITIS = 0.0
 SON_BTC_YONU = "YATAY (Testere)"
 
-# Trend modu ayarları
+# Trend modu
 KALDIRAC_TREND = 5
 MAKS_POZISYON_TREND = 2
 COOLDOWN_TREND_SANIYE = 30 * 60
 
-# Grid modu ayarları
+# Grid modu
 KALDIRAC_GRID = 3
 MAKS_COIN_GRID = 3
 GRID_SEVIYE_SAYISI = 5
@@ -91,7 +91,7 @@ GRID_MARJ_ORANI = 0.03
 GRID_ATR_CARPAN = 3.0
 GRID_ACIL_SL = 0.005
 
-# Risk yönetimi
+# Risk
 GUNLUK_BASLANGIC_BAKIYE = None
 GUNLUK_ZARAR_LIMIT = 0.05
 AKTIF_MOD = "YATAY"
@@ -181,7 +181,7 @@ def piyasa_rejimini_tespit_et():
     except Exception as e:
         return "YATAY", "YATAY (Testere)"
 
-# ==================== YARDIMCI FONKSİYONLAR ====================
+# ==================== YARDIMCI ====================
 def telegram_gonder(mesaj):
     if not TELEGRAM_TOKEN or not CHAT_ID: return
     try:
@@ -207,13 +207,78 @@ def tum_emirleri_iptal(symbol):
     except: pass
 
 def sayaci_artir(basarili_mi):
-    """✅ YENİ: TP/SL sayaçlarını artır (Grid ve Trend için ortak)"""
     with state_lock:
         if basarili_mi:
             ANALITIK["basarili_islem_sayisi"] = int(ANALITIK.get("basarili_islem_sayisi", 0)) + 1
         else:
             ANALITIK["basarisiz_islem_sayisi"] = int(ANALITIK.get("basarisiz_islem_sayisi", 0)) + 1
     hafizayi_kaydet()
+
+# ✅ Trend pozisyonlarını kapat (mod geçişi için)
+def trend_pozisyonlarini_kapat(aktif_semboller_seti):
+    global AKTIF_SISTEMLER
+    kapatilan = []
+    for symbol in list(AKTIF_SISTEMLER.keys()):
+        try:
+            positions = exchange.fetch_positions([symbol])
+            for p in positions:
+                k = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+                if k > 0:
+                    yon = str(p.get('side', '')).upper() or "LONG"
+                    tum_emirleri_iptal(symbol)
+                    if market_kapat(symbol, k, yon):
+                        kapatilan.append(symbol)
+                        print(f"  🧹 [MOD GEÇİŞ] {symbol} {yon} kapatıldı", flush=True)
+                        telegram_gonder(f"🧹 *MOD GEÇİŞ*\n`{symbol}` {yon} kapatıldı")
+            
+            with state_lock:
+                if symbol in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[symbol]
+            aktif_semboller_seti.discard(symbol)
+        except Exception as e:
+            print(f"  ⚠️ Kapatma {symbol}: {e}", flush=True)
+    
+    if kapatilan:
+        hafizayi_kaydet()
+    return kapatilan
+
+# ✅ Başlangıç temizliği: Tüm eski pozisyonları kapat
+def baslangic_temizligi():
+    print("\n🧹 [BAŞLANGIÇ TEMİZLİĞİ] Eski pozisyonlar kontrol ediliyor...", flush=True)
+    try:
+        raw_pos = exchange.fetch_positions()
+        eski_pozisyonlar = []
+        for p in raw_pos:
+            k = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+            if k > 0:
+                eski_pozisyonlar.append(p['symbol'])
+        
+        if eski_pozisyonlar:
+            print(f"⚠️ Eski pozisyonlar bulundu: {eski_pozisyonlar}", flush=True)
+            telegram_gonder(f"⚠️ *BAŞLANGIÇ TEMİZLİĞİ*\nEski pozisyonlar: `{eski_pozisyonlar}`\nKapatılıyor...")
+            
+            kapatilan = 0
+            for p in raw_pos:
+                k = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+                if k > 0:
+                    sym = p['symbol']
+                    yon = str(p.get('side', '')).upper() or "LONG"
+                    try: exchange.cancel_all_orders(sym)
+                    except: pass
+                    if market_kapat(sym, k, yon):
+                        print(f"  ✅ {sym} {yon} kapatıldı", flush=True)
+                        kapatilan += 1
+            
+            # Hafızayı temizle
+            with state_lock:
+                AKTIF_SISTEMLER.clear()
+                GRID_HARITALARI.clear()
+            hafizayi_kaydet()
+            telegram_gonder(f"✅ *TEMİZ BAŞLANGIÇ*\n{kapatilan} pozisyon kapatıldı.")
+            print(f"✅ {kapatilan} pozisyon kapatıldı, temiz başlangıç.", flush=True)
+        else:
+            print("✅ Eski pozisyon yok, temiz başlangıç.", flush=True)
+    except Exception as e:
+        print(f"⚠️ Başlangıç temizliği hatası: {e}", flush=True)
 
 # ==================== GRID MODU ====================
 def grid_haritasi_olustur(symbol, anlik_fiyat, atr):
@@ -230,11 +295,8 @@ def grid_haritasi_olustur(symbol, anlik_fiyat, atr):
         satis_seviyeleri.append(round(anlik_fiyat + (adim * i), 6))
     
     return {
-        "symbol": symbol,
-        "merkez": anlik_fiyat,
-        "alt_sinir": alt_sinir,
-        "ust_sinir": ust_sinir,
-        "adim": adim,
+        "symbol": symbol, "merkez": anlik_fiyat,
+        "alt_sinir": alt_sinir, "ust_sinir": ust_sinir, "adim": adim,
         "alis_seviyeleri": alis_seviyeleri,
         "satis_seviyeleri": satis_seviyeleri,
         "aktif_pozisyonlar": {},
@@ -245,10 +307,11 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
     global AKTIF_MOD
     
     if AKTIF_MOD != "YATAY":
-        print(f"🔄 [MOD GEÇİŞ] {AKTIF_MOD} → YATAY. Grid temizleniyor...", flush=True)
+        print(f"🔄 [MOD GEÇİŞ] {AKTIF_MOD} → YATAY. Trend pozisyonları kapatılıyor...", flush=True)
+        trend_pozisyonlarini_kapat(aktif_semboller_seti)
         grid_temizle()
         AKTIF_MOD = "YATAY"
-        telegram_gonder("🔄 *MOD: YATAY (Grid)*")
+        telegram_gonder("🔄 *MOD: YATAY (Grid)*\n✅ Trend pozisyonları kapatıldı.")
     
     print(f"\n🟦 [GRID MODU] Aktif coin: {list(GRID_HARITALARI.keys())}", flush=True)
     
@@ -288,8 +351,7 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
         if anlik < grid['alt_sinir'] * (1 - GRID_ACIL_SL) or anlik > grid['ust_sinir'] * (1 + GRID_ACIL_SL):
             print(f"  🚨 [GRID SL] {symbol} sınır dışı! Anlık: {anlik}", flush=True)
             grid_pozisyonlari_kapat(symbol, "GRID SINIRI KIRILDI", basarili=False)
-            if symbol in GRID_HARITALARI:
-                del GRID_HARITALARI[symbol]
+            if symbol in GRID_HARITALARI: del GRID_HARITALARI[symbol]
             hafizayi_kaydet()
             continue
         
@@ -372,7 +434,6 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
                     print(f"  💰 [GRID KÂR] {symbol} #{i+1} | +{kar:.4f} USDT", flush=True)
                     telegram_gonder(f"💰 *GRID KÂR*\n📌 `{symbol}` #{i+1}\n💵 +{kar:.4f} USDT")
                     del grid['aktif_pozisyonlar'][i]
-                    # ✅ Grid kârını sayaca ekle
                     sayaci_artir(True)
                 except Exception as e:
                     print(f"  ⚠️ Grid kâr {symbol}: {e}", flush=True)
@@ -385,7 +446,6 @@ def grid_pozisyonlari_kapat(symbol, sebep, basarili=True):
         try:
             market_kapat(symbol, pozisyon['miktar'], pozisyon['yon'])
             print(f"  ❌ [GRID KAPAT] {symbol} #{i+1} | {sebep}", flush=True)
-            # ✅ Kapanış sayacı
             sayaci_artir(basarili)
         except: pass
     
@@ -450,7 +510,6 @@ def trend_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
                     karli = (cikis > g) if y == "LONG" else (cikis < g)
                 except: karli = True
                 
-                # ✅ Trend kapanış sayacı
                 sayaci_artir(karli)
                 
                 with state_lock:
@@ -494,10 +553,12 @@ def trend_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
                 islem_yonu = "LONG"
             elif btc_yonu == "SHORT" and rsi > 50:
                 islem_yonu = "SHORT"
-            else: continue
+            else:
+                print(f"  ⚪ {symbol}: RSI={rsi:.1f} (sinyal yok)", flush=True)
+                continue
             
             if hacim < 0.6: 
-                print(f"  ⚠️ {symbol}: Hacim düşük", flush=True)
+                print(f"  ⚠️ {symbol}: Hacim düşük ({hacim:.2f}x)", flush=True)
                 continue
             
             print(f"  🟢 {symbol}: SİNYAL {islem_yonu} | RSI: {rsi:.1f}", flush=True)
@@ -558,13 +619,16 @@ def trend_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print("🚀 [BAŞLANGIÇ] v10.1 - Tam Detaylı Hibrit Sistem", flush=True)
+    print("🚀 [BAŞLANGIÇ] v10.3 - Tam Temiz Hibrit Sistem", flush=True)
     try:
         exchange.load_markets()
         b = exchange.fetch_balance()
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
         print(f"💰 Başlangıç kasası: {GUNLUK_BASLANGIC_BAKIYE:.2f} USDT", flush=True)
     except: pass
+    
+    # ✅ BAŞLANGIÇ TEMİZLİĞİ
+    baslangic_temizligi()
     
     dongu = 0
     while True:
@@ -577,7 +641,7 @@ def ana_dongu():
             print(f"🔄 [DÖNGÜ #{dongu}] {datetime.now().strftime('%H:%M:%S')}", flush=True)
             print(f"{'='*60}", flush=True)
             
-            # Günlük zarar kontrolü
+            # Günlük zarar
             try:
                 b = exchange.fetch_balance()
                 su_an = float(b['total'].get('USDT', 0))
@@ -696,7 +760,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
         
         mesaj = (
-            f"📊 *BOT DURUM (v10.1 - HİBRİT)*\n\n"
+            f"📊 *BOT DURUM (v10.3 - HİBRİT)*\n\n"
             f"🎯 Aktif Mod: `{AKTIF_MOD}`\n"
             f"🌐 Rejim: `{rejim}` (BTC: `{btc_yon}`)\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
@@ -724,7 +788,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Bot (v10.1) aktif!")
+    await update.message.reply_text("🟢 Bot (v10.3) aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -736,14 +800,22 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     try:
         positions = await asyncio.to_thread(exchange.fetch_positions)
+        kapatilan = 0
         for p in positions:
             k = float(p.get('contracts', 0) or p.get('size', 0) or 0)
             if k > 0:
                 y = str(p.get('side', '')).upper() or "LONG"
                 try: exchange.cancel_all_orders(p['symbol'])
                 except: pass
-                market_kapat(p['symbol'], k, y)
-        await update.message.reply_text("✅ Kapatıldı.")
+                if market_kapat(p['symbol'], k, y):
+                    kapatilan += 1
+        
+        with state_lock:
+            AKTIF_SISTEMLER.clear()
+            GRID_HARITALARI.clear()
+        hafizayi_kaydet()
+        
+        await update.message.reply_text(f"✅ {kapatilan} pozisyon kapatıldı, hafıza temizlendi.")
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
 
