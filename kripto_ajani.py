@@ -78,26 +78,30 @@ state_lock = threading.Lock()
 GLOBAL_COOLDOWN_BITIS = 0.0
 SON_BTC_YONU = "YATAY (Testere)"
 
+# ✅ HISTERESIS için global değişkenler
+SON_REJIM = "YATAY"
+SON_REJIM_ZAMANI = time.time()
+REJIM_MIN_SURE = 300  # ✅ 5 dakika: Rejim değişimi için minimum süre
+
 # Trend modu
 KALDIRAC_TREND = 5
 MAKS_POZISYON_TREND = 2
 COOLDOWN_TREND_SANIYE = 30 * 60
 
-# Grid modu (v10.6)
+# Grid modu (v10.7)
 KALDIRAC_GRID = 3
 MAKS_COIN_GRID = 3
 GRID_SEVIYE_SAYISI = 5
-GRID_MARJ_ORANI = 0.06          # ✅ Senin yaptığın değişiklik
+GRID_MARJ_ORANI = 0.06
 GRID_ATR_CARPAN = 4.0
 GRID_ACIL_SL = 0.005
-GRID_MAKS_MARJ_ORANI = 0.09     # ✅ Uyumlu hale getirildi (0.06 + güvenlik payı)
+GRID_MAKS_MARJ_ORANI = 0.09
 
 # Risk
 GUNLUK_BASLANGIC_BAKIYE = None
 GUNLUK_ZARAR_LIMIT = 0.05
 AKTIF_MOD = "YATAY"
 
-# ✅ SPAM ÖNLEYİCİ: Aynı coini tekrar tekrar uyarı göndermesin
 SKIP_UYARI_ZAMANLARI = {}
 
 def hafizayi_yukle():
@@ -154,9 +158,11 @@ ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_
 COIN_COOLDOWNLAR = kalici.get("cooldownlar", {})
 GRID_HARITALARI = kalici.get("grid_haritalari", {})
 
-# ==================== PİYASA REJİMİ ====================
+# ==================== PİYASA REJİMİ (HİSTEREZİS) ====================
 def piyasa_rejimini_tespit_et():
-    global SON_BTC_YONU
+    """✅ v10.7: Histerezis eklendi. Flip-flop engellenir."""
+    global SON_BTC_YONU, AKTIF_MOD
+    
     try:
         ohlcv = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=40)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -173,17 +179,31 @@ def piyasa_rejimini_tespit_et():
         ema21 = ta.trend.ema_indicator(df['close'], window=21).iloc[-1]
         fark = (abs(ema9 - ema21) / ema21) * 100
         
-        if adx < 35.0 or bb_bw < 0.04 or fark < 0.3:
-            rejim = "YATAY"
-            yon = "YATAY (Testere)"
+        # ✅ HISTEREZIS: Mevcut moda göre farklı eşikler
+        if AKTIF_MOD == "YATAY":
+            # YATAY'dan TREND'e geçmek için DAHA SIKI koşul
+            if adx > 38.0 and bb_bw > 0.045 and fark > 0.4:
+                rejim = "TREND"
+                yon = "LONG" if ema9 > ema21 else "SHORT"
+                SON_BTC_YONU = yon
+            else:
+                rejim = "YATAY"
+                yon = "YATAY (Testere)"
         else:
-            rejim = "TREND"
-            yon = "LONG" if ema9 > ema21 else "SHORT"
-            SON_BTC_YONU = yon
-            
+            # TREND'den YATAY'a geçmek için DAHA GEVŞEK koşul
+            if adx < 30.0 or bb_bw < 0.035 or fark < 0.2:
+                rejim = "YATAY"
+                yon = "YATAY (Testere)"
+            else:
+                rejim = "TREND"
+                yon = "LONG" if ema9 > ema21 else "SHORT"
+                SON_BTC_YONU = yon
+        
+        print(f"🌐 [REJİM] {rejim} | ADX: {adx:.1f} | BB: {bb_bw:.4f} | Fark: %{fark:.2f}", flush=True)
         return rejim, yon
     except Exception as e:
-        return "YATAY", "YATAY (Testere)"
+        print(f"⚠️ Rejim: {e}", flush=True)
+        return AKTIF_MOD, "YATAY (Testere)"
 
 def piyasa_meyil_kontrol(symbol, df):
     try:
@@ -338,9 +358,7 @@ def grid_icin_uygun_mu(symbol, anlik_fiyat, toplam_bakiye):
         market = exchange.market(symbol)
         min_miktar = float(market['limits']['amount']['min'] or 0.001)
         contract_size = float(market.get('contractSize', 1.0))
-        
         min_marj = (min_miktar * anlik_fiyat * contract_size) / KALDIRAC_GRID
-        
         if min_marj > toplam_bakiye * GRID_MAKS_MARJ_ORANI:
             return False, min_marj
         return True, min_marj
@@ -365,7 +383,6 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
     except:
         toplam_b = 100
     
-    # Grid haritası oluştur
     for symbol in TAKIP_EDILENLER:
         if symbol in aktif_semboller_seti: continue
         if symbol in GRID_HARITALARI: continue
@@ -377,7 +394,7 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
             
             uygun, min_marj = grid_icin_uygun_mu(symbol, anlik, toplam_b)
             if not uygun:
-                print(f"  ⏭️ [GRID SKIP] {symbol}: Min miktar marjı çok yüksek ({min_marj:.2f} USDT)", flush=True)
+                print(f"  ⏭️ [GRID SKIP] {symbol}: Min miktar marjı yüksek ({min_marj:.2f} USDT)", flush=True)
                 continue
             
             ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
@@ -385,7 +402,6 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
             
             meyil, fark = piyasa_meyil_kontrol(symbol, df)
             
-            # ✅ SPAM ÖNLEYİCİ: Aynı skip mesajını tekrar tekrar atma
             if meyil == "GUCLU_YUKARI":
                 print(f"  ⏭️ [GRID SKIP] {symbol}: Güçlü YUKARI trend (%{fark:.2f})", flush=True)
                 continue
@@ -397,7 +413,6 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
             
             grid = grid_haritasi_olustur(symbol, anlik, atr)
             
-            # Meyile göre grid kaydırma
             if meyil == "HAFIF_YUKARI":
                 kaydirma = 1.002
                 grid['merkez'] = anlik * kaydirma
@@ -406,7 +421,7 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
                 grid['alt_sinir'] = grid['alt_sinir'] * kaydirma
                 grid['ust_sinir'] = grid['ust_sinir'] * kaydirma
                 grid['meyil'] = "HAFIF_YUKARI"
-                print(f"  📐 [GRID KURULDU-↗️] {symbol} | Merkez: {grid['merkez']:.4f} | Meyil: YUKARI", flush=True)
+                print(f"  📐 [GRID KURULDU-↗️] {symbol} | Merkez: {grid['merkez']:.4f}", flush=True)
             elif meyil == "HAFIF_ASAGI":
                 kaydirma = 0.998
                 grid['merkez'] = anlik * kaydirma
@@ -415,10 +430,10 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
                 grid['alt_sinir'] = grid['alt_sinir'] * kaydirma
                 grid['ust_sinir'] = grid['ust_sinir'] * kaydirma
                 grid['meyil'] = "HAFIF_ASAGI"
-                print(f"  📐 [GRID KURULDU-↘️] {symbol} | Merkez: {grid['merkez']:.4f} | Meyil: AŞAĞI", flush=True)
+                print(f"  📐 [GRID KURULDU-↘️] {symbol} | Merkez: {grid['merkez']:.4f}", flush=True)
             else:
                 grid['meyil'] = "YATAY"
-                print(f"  📐 [GRID KURULDU-➡️] {symbol} | Merkez: {anlik} | Meyil: YATAY", flush=True)
+                print(f"  📐 [GRID KURULDU-➡️] {symbol} | Merkez: {anlik}", flush=True)
             
             GRID_HARITALARI[symbol] = grid
             telegram_gonder(
@@ -432,7 +447,6 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
             print(f"  ⚠️ Grid oluşturma {symbol}: {e}", flush=True)
             continue
     
-    # Grid güncelle
     for symbol in list(GRID_HARITALARI.keys()):
         if not BOT_CALISIYOR_MU: break
         
@@ -444,7 +458,6 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
         
         print(f"  📊 {symbol.replace('/USDT:USDT','')} | Fiyat: {anlik:.6f} | Grid: {grid['alt_sinir']:.6f}-{grid['ust_sinir']:.6f} | Aktif: {len(grid['aktif_pozisyonlar'])}/10", flush=True)
         
-        # SL kontrolü
         if anlik < grid['alt_sinir'] * (1 - GRID_ACIL_SL) or anlik > grid['ust_sinir'] * (1 + GRID_ACIL_SL):
             print(f"  🚨 [GRID SL] {symbol} sınır dışı!", flush=True)
             grid_pozisyonlari_kapat(symbol, "GRID SINIRI KIRILDI", basarili=False)
@@ -452,7 +465,6 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
             hafizayi_kaydet()
             continue
         
-        # AL seviyeleri
         for i, seviye_fiyat in enumerate(grid['alis_seviyeleri']):
             if i in grid['aktif_pozisyonlar']: continue
             if anlik <= seviye_fiyat:
@@ -486,7 +498,7 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
                     if gercek_marj > toplam_b * GRID_MAKS_MARJ_ORANI:
                         continue
                     
-                    print(f"  📊 {symbol} #{i+1}: Marj={gercek_marj:.2f} USDT | Miktar={miktar}", flush=True)
+                    print(f"  📊 {symbol} #{i+1}: Marj={gercek_marj:.2f} USDT", flush=True)
                     
                     exchange.create_order(symbol, 'market', 'buy', miktar)
                     time.sleep(0.5)
@@ -500,7 +512,6 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
                 except Exception as e:
                     print(f"  ⚠️ Grid alış {symbol}: {e}", flush=True)
         
-        # SAT seviyeleri
         for i, seviye_fiyat in enumerate(grid['satis_seviyeleri']):
             if i in grid['aktif_pozisyonlar']: continue
             if anlik >= seviye_fiyat:
@@ -534,7 +545,7 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
                     if gercek_marj > toplam_b * GRID_MAKS_MARJ_ORANI:
                         continue
                     
-                    print(f"  📊 {symbol} #{i+1}: Marj={gercek_marj:.2f} USDT | Miktar={miktar} (SHORT)", flush=True)
+                    print(f"  📊 {symbol} #{i+1}: Marj={gercek_marj:.2f} USDT (SHORT)", flush=True)
                     
                     exchange.create_order(symbol, 'market', 'sell', miktar)
                     time.sleep(0.5)
@@ -548,7 +559,6 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
                 except Exception as e:
                     print(f"  ⚠️ Grid satış {symbol}: {e}", flush=True)
         
-        # Kâr alma
         for i in list(grid['aktif_pozisyonlar'].keys()):
             pozisyon = grid['aktif_pozisyonlar'][i]
             hedef = pozisyon['hedef_satis']
@@ -744,8 +754,8 @@ def trend_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
 
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
-    global GUNLUK_BASLANGIC_BAKIYE
-    print("🚀 [BAŞLANGIÇ] v10.6 - Meyil Kontrollü Hibrit (Spam Fix)", flush=True)
+    global GUNLUK_BASLANGIC_BAKIYE, AKTIF_MOD, SON_REJIM, SON_REJIM_ZAMANI
+    print("🚀 [BAŞLANGIÇ] v10.7 - Histerezis Fix (Flip-Flop Engellendi)", flush=True)
     try:
         exchange.load_markets()
         b = exchange.fetch_balance()
@@ -754,6 +764,10 @@ def ana_dongu():
     except: pass
     
     baslangic_temizligi()
+    
+    # ✅ Başlangıç rejimi
+    SON_REJIM = AKTIF_MOD
+    SON_REJIM_ZAMANI = time.time()
     
     dongu = 0
     while True:
@@ -794,7 +808,24 @@ def ana_dongu():
                 aktif_borsa_map = {}
                 aktif_semboller_seti = set()
             
-            rejim, btc_yonu = piyasa_rejimini_tespit_et()
+            # ✅ Rejim kontrolü (histerezis ile)
+            yeni_rejim, btc_yonu = piyasa_rejimini_tespit_et()
+            
+            simdi = time.time()
+            if yeni_rejim != SON_REJIM:
+                gecen = simdi - SON_REJIM_ZAMANI
+                if gecen < REJIM_MIN_SURE:
+                    print(f"⏳ [REJİM FİLTRE] {yeni_rejim} sinyali ama {int(gecen)}sn < {REJIM_MIN_SURE}sn, eski modda kalınıyor", flush=True)
+                    rejim = SON_REJIM
+                else:
+                    print(f"🔄 [REJİM DEĞİŞTİ] {SON_REJIM} → {yeni_rejim} ({int(gecen)}sn sonra)", flush=True)
+                    SON_REJIM = yeni_rejim
+                    SON_REJIM_ZAMANI = simdi
+                    rejim = yeni_rejim
+            else:
+                rejim = yeni_rejim
+                SON_REJIM_ZAMANI = simdi
+            
             print(f"🌐 Rejim: {rejim} | BTC: {btc_yonu} | Aktif Mod: {AKTIF_MOD}", flush=True)
             
             if rejim == "YATAY":
@@ -879,7 +910,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 grid_detay += f"\n• `{sym_k}` | Aktif: `{aktif_say}`/10 | {meyil_emoji} `{meyil}`"
         
         mesaj = (
-            f"📊 *BOT DURUM (v10.6)*\n\n"
+            f"📊 *BOT DURUM (v10.7)*\n\n"
             f"🎯 Aktif Mod: `{AKTIF_MOD}`\n"
             f"🌐 Rejim: `{rejim}` (BTC: `{btc_yon}`)\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
@@ -907,7 +938,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Bot (v10.6) aktif!")
+    await update.message.reply_text("🟢 Bot (v10.7) aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
