@@ -258,7 +258,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             gunluk_durum = f"📊 Günlük: `%{gunluk_kar:+.2f}` (limit: -%5)\n"
 
         mesaj = (
-            f"📊 **BOT DURUM (v9.4)**\n\n"
+            f"📊 **BOT DURUM (v9.5)**\n\n"
             f"🌐 Rejim: `{rejim}` (BTC: `{btc_yon}`)\n"
             f"💰 Kasa: `{total:.2f} USDT` | PnL: `{toplam_pnl:+.2f}`\n"
             f"{gunluk_durum}"
@@ -279,7 +279,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Bot (v9.4) aktif!")
+    await update.message.reply_text("🟢 Bot (v9.5) aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -305,7 +305,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def otomatik_arkaplan_tarayici():
     global GUNLUK_BASLANGIC_BAKIYE, SON_ISLEM_ZAMANI
-    print("🚀 [BAŞLANGIÇ] v9.4 - Detaylı Log Bot", flush=True)
+    print("🚀 [BAŞLANGIÇ] v9.5 - Denge Modu (RSI 32/68, Hacim 0.6x)", flush=True)
     try:
         exchange.load_markets()
         b = exchange.fetch_balance()
@@ -433,15 +433,16 @@ def otomatik_arkaplan_tarayici():
                     islem_yonu = None
                     sebep = ""
                     
+                    # ✅ v9.5: RSI eşikleri 28/72 -> 32/68
                     if piyasa_rejimi == "YATAY":
-                        if rsi < 28:
+                        if rsi < 32:
                             islem_yonu = "LONG"
-                            sebep = f"RSI {rsi:.1f} < 28"
-                        elif rsi > 72:
+                            sebep = f"RSI {rsi:.1f} < 32"
+                        elif rsi > 68:
                             islem_yonu = "SHORT"
-                            sebep = f"RSI {rsi:.1f} > 72"
+                            sebep = f"RSI {rsi:.1f} > 68"
                         else:
-                            print(f"  ⚪ {symbol}: RSI={rsi:.1f} (28-72 arası, sinyal yok) | Fiyat: {anlik_fiyat}", flush=True)
+                            print(f"  ⚪ {symbol}: RSI={rsi:.1f} (32-68 arası, sinyal yok) | Fiyat: {anlik_fiyat}", flush=True)
                             continue
                         mod_adi = "TESTERE"
                     else:
@@ -456,8 +457,9 @@ def otomatik_arkaplan_tarayici():
                             continue
                         mod_adi = "TREND"
 
-                    if hacim_oran < 0.8:
-                        print(f"  ⚠️  {symbol}: Hacim düşük ({hacim_oran:.2f}x < 0.8x), sinyal REDDEDİLDİ | RSI={rsi:.1f}", flush=True)
+                    # ✅ v9.5: Hacim onayı 0.8x -> 0.6x
+                    if hacim_oran < 0.6:
+                        print(f"  ⚠️  {symbol}: Hacim düşük ({hacim_oran:.2f}x < 0.6x), sinyal REDDEDİLDİ | RSI={rsi:.1f}", flush=True)
                         continue
 
                     print(f"  🟢 {symbol}: SİNYAL! {islem_yonu} | {sebep} | Hacim: {hacim_oran:.2f}x", flush=True)
