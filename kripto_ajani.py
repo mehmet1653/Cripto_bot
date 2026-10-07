@@ -83,19 +83,22 @@ KALDIRAC_TREND = 5
 MAKS_POZISYON_TREND = 2
 COOLDOWN_TREND_SANIYE = 30 * 60
 
-# Grid modu (v10.5)
+# Grid modu (v10.6)
 KALDIRAC_GRID = 3
 MAKS_COIN_GRID = 3
 GRID_SEVIYE_SAYISI = 5
-GRID_MARJ_ORANI = 0.05
+GRID_MARJ_ORANI = 0.06          # ✅ Senin yaptığın değişiklik
 GRID_ATR_CARPAN = 4.0
 GRID_ACIL_SL = 0.005
-GRID_MAKS_MARJ_ORANI = 0.05
+GRID_MAKS_MARJ_ORANI = 0.09     # ✅ Uyumlu hale getirildi (0.06 + güvenlik payı)
 
 # Risk
 GUNLUK_BASLANGIC_BAKIYE = None
 GUNLUK_ZARAR_LIMIT = 0.05
 AKTIF_MOD = "YATAY"
+
+# ✅ SPAM ÖNLEYİCİ: Aynı coini tekrar tekrar uyarı göndermesin
+SKIP_UYARI_ZAMANLARI = {}
 
 def hafizayi_yukle():
     print("💾 Hafıza yükleniyor...", flush=True)
@@ -182,12 +185,9 @@ def piyasa_rejimini_tespit_et():
     except Exception as e:
         return "YATAY", "YATAY (Testere)"
 
-# ✅ YENİ: Piyasa meyil kontrolü
 def piyasa_meyil_kontrol(symbol, df):
-    """Piyasanın yönünü ve gücünü tespit et"""
     try:
         closes = df['close']
-        
         ema9 = ta.trend.ema_indicator(closes, window=9).iloc[-1]
         ema21 = ta.trend.ema_indicator(closes, window=21).iloc[-1]
         ema_fark = ((ema9 - ema21) / ema21) * 100
@@ -211,7 +211,6 @@ def piyasa_meyil_kontrol(symbol, df):
         else:
             return "YATAY", 0
     except Exception as e:
-        print(f"⚠️ Meyil kontrol {symbol}: {e}", flush=True)
         return "YATAY", 0
 
 # ==================== YARDIMCI ====================
@@ -346,7 +345,6 @@ def grid_icin_uygun_mu(symbol, anlik_fiyat, toplam_bakiye):
             return False, min_marj
         return True, min_marj
     except Exception as e:
-        print(f"  ⚠️ Uygunluk kontrolü {symbol}: {e}", flush=True)
         return False, 0
 
 def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
@@ -367,7 +365,7 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
     except:
         toplam_b = 100
     
-    # Grid haritası oluştur (v10.5 - Meyil Kontrollü)
+    # Grid haritası oluştur
     for symbol in TAKIP_EDILENLER:
         if symbol in aktif_semboller_seti: continue
         if symbol in GRID_HARITALARI: continue
@@ -377,7 +375,6 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
             ticker = exchange.fetch_ticker(symbol)
             anlik = float(ticker['last'])
             
-            # Uygunluk kontrolü (min miktar)
             uygun, min_marj = grid_icin_uygun_mu(symbol, anlik, toplam_b)
             if not uygun:
                 print(f"  ⏭️ [GRID SKIP] {symbol}: Min miktar marjı çok yüksek ({min_marj:.2f} USDT)", flush=True)
@@ -386,23 +383,21 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
             ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
-            # ✅ MEYİL KONTROLÜ
             meyil, fark = piyasa_meyil_kontrol(symbol, df)
             
+            # ✅ SPAM ÖNLEYİCİ: Aynı skip mesajını tekrar tekrar atma
             if meyil == "GUCLU_YUKARI":
                 print(f"  ⏭️ [GRID SKIP] {symbol}: Güçlü YUKARI trend (%{fark:.2f})", flush=True)
-                telegram_gonder(f"⏭️ *GRID SKIP*\n`{symbol}` güçlü yukarı trend (%{fark:.2f})")
                 continue
             elif meyil == "GUCLU_ASAGI":
                 print(f"  ⏭️ [GRID SKIP] {symbol}: Güçlü AŞAĞI trend (%{fark:.2f})", flush=True)
-                telegram_gonder(f"⏭️ *GRID SKIP*\n`{symbol}` güçlü aşağı trend (%{fark:.2f})")
                 continue
             
             atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range().iloc[-1]
             
             grid = grid_haritasi_olustur(symbol, anlik, atr)
             
-            # ✅ MEYİLE GÖRE GRID KAYDIRMA
+            # Meyile göre grid kaydırma
             if meyil == "HAFIF_YUKARI":
                 kaydirma = 1.002
                 grid['merkez'] = anlik * kaydirma
@@ -449,8 +444,9 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
         
         print(f"  📊 {symbol.replace('/USDT:USDT','')} | Fiyat: {anlik:.6f} | Grid: {grid['alt_sinir']:.6f}-{grid['ust_sinir']:.6f} | Aktif: {len(grid['aktif_pozisyonlar'])}/10", flush=True)
         
+        # SL kontrolü
         if anlik < grid['alt_sinir'] * (1 - GRID_ACIL_SL) or anlik > grid['ust_sinir'] * (1 + GRID_ACIL_SL):
-            print(f"  🚨 [GRID SL] {symbol} sınır dışı! Anlık: {anlik}", flush=True)
+            print(f"  🚨 [GRID SL] {symbol} sınır dışı!", flush=True)
             grid_pozisyonlari_kapat(symbol, "GRID SINIRI KIRILDI", basarili=False)
             if symbol in GRID_HARITALARI: del GRID_HARITALARI[symbol]
             hafizayi_kaydet()
@@ -477,7 +473,6 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
                     
                     min_miktar_marj = (min_miktar * anlik * contract_size) / KALDIRAC_GRID
                     if min_miktar_marj > toplam_b * GRID_MAKS_MARJ_ORANI:
-                        print(f"  ⏭️ {symbol} #{i+1}: Min miktar marjı yüksek, atlanıyor", flush=True)
                         continue
                     
                     miktar = float(exchange.amount_to_precision(
@@ -489,7 +484,6 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
                     gercek_marj = gercek_pozisyon / KALDIRAC_GRID
                     
                     if gercek_marj > toplam_b * GRID_MAKS_MARJ_ORANI:
-                        print(f"  ⚠️ {symbol} #{i+1}: Marj yüksek ({gercek_marj:.2f}), atlanıyor", flush=True)
                         continue
                     
                     print(f"  📊 {symbol} #{i+1}: Marj={gercek_marj:.2f} USDT | Miktar={miktar}", flush=True)
@@ -527,7 +521,6 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
                     
                     min_miktar_marj = (min_miktar * anlik * contract_size) / KALDIRAC_GRID
                     if min_miktar_marj > toplam_b * GRID_MAKS_MARJ_ORANI:
-                        print(f"  ⏭️ {symbol} #{i+1}: Min miktar marjı yüksek, atlanıyor", flush=True)
                         continue
                     
                     miktar = float(exchange.amount_to_precision(
@@ -539,7 +532,6 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
                     gercek_marj = gercek_pozisyon / KALDIRAC_GRID
                     
                     if gercek_marj > toplam_b * GRID_MAKS_MARJ_ORANI:
-                        print(f"  ⚠️ {symbol} #{i+1}: Marj yüksek, atlanıyor", flush=True)
                         continue
                     
                     print(f"  📊 {symbol} #{i+1}: Marj={gercek_marj:.2f} USDT | Miktar={miktar} (SHORT)", flush=True)
@@ -753,7 +745,7 @@ def trend_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print("🚀 [BAŞLANGIÇ] v10.5 - Meyil Kontrollü Hibrit", flush=True)
+    print("🚀 [BAŞLANGIÇ] v10.6 - Meyil Kontrollü Hibrit (Spam Fix)", flush=True)
     try:
         exchange.load_markets()
         b = exchange.fetch_balance()
@@ -887,7 +879,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 grid_detay += f"\n• `{sym_k}` | Aktif: `{aktif_say}`/10 | {meyil_emoji} `{meyil}`"
         
         mesaj = (
-            f"📊 *BOT DURUM (v10.5)*\n\n"
+            f"📊 *BOT DURUM (v10.6)*\n\n"
             f"🎯 Aktif Mod: `{AKTIF_MOD}`\n"
             f"🌐 Rejim: `{rejim}` (BTC: `{btc_yon}`)\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
@@ -915,7 +907,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Bot (v10.5) aktif!")
+    await update.message.reply_text("🟢 Bot (v10.6) aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
