@@ -66,7 +66,6 @@ exchange.set_sandbox_mode(True)
 
 # ==================== AYARLAR ====================
 TAKIP_EDILENLER = [
-    'SOL/USDT:USDT', 
     'XRP/USDT:USDT', 
     'DOGE/USDT:USDT', 
     'LTC/USDT:USDT', 
@@ -76,9 +75,9 @@ TAKIP_EDILENLER = [
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
 
-# ✅ Risk yönetimi (v12.1 - 5x + Eşit Marj)
-KALDIRAC = 5                    # ✅ 5x
-POZISYON_MARJ = 0.10            # Kasanın %10'i
+# ✅ Risk yönetimi (v12.2)
+KALDIRAC = 5
+POZISYON_MARJ = 0.10            # ✅ 0.05 -> 0.10 (kâr 2x)
 MAKS_POZISYON = 2
 SL_ATR = 2.5
 TP_ATR = 4.0
@@ -91,6 +90,10 @@ MFI_ESIK_SAT = 45
 CMF_ESIK = 0.05
 HACIM_ESIK = 1.2
 EMA_TREND_ESIK = 0.1
+
+# ✅ v12.2: MFI AŞIRI UÇ FİLTRESİ
+MFI_ASIRI_SATIM = 25            # MFI < 25 → SHORT açma (dip)
+MFI_ASIRI_ALIM = 75             # MFI > 75 → LONG açma (tepe)
 
 # ✅ Kill-switch
 GUNLUK_BASLANGIC_BAKIYE = None
@@ -147,7 +150,7 @@ AKTIF_SISTEMLER = kalici.get("aktif_sistemler", {})
 ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []})
 COIN_COOLDOWNLAR = kalici.get("cooldownlar", {})
 
-# ==================== ORDER FLOW ANALİZİ ====================
+# ==================== ORDER FLOW ANALİZİ (v12.2) ====================
 def order_flow_analiz(symbol):
     try:
         ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
@@ -187,6 +190,14 @@ def order_flow_analiz(symbol):
             "ema50": round(ema50, 4)
         }
         
+        # ✅ v12.2: MFI AŞIRI UÇ FİLTRESİ
+        if mfi < MFI_ASIRI_SATIM:
+            return None, {**detay, "sebep": f"MFI AŞIRI SATIM ({mfi:.0f}<{MFI_ASIRI_SATIM}) - SHORT açılmıyor, dönüş riski"}
+        
+        if mfi > MFI_ASIRI_ALIM:
+            return None, {**detay, "sebep": f"MFI AŞIRI ALIM ({mfi:.0f}>{MFI_ASIRI_ALIM}) - LONG açılmıyor, düşüş riski"}
+        
+        # Hacim zayıfsa bekle
         if hacim_oran < HACIM_ESIK:
             return None, {**detay, "sebep": f"HACIM ZAYIF ({hacim_oran:.2f}x)"}
         
@@ -290,7 +301,7 @@ def baslangic_temizligi():
     except Exception as e:
         print(f"⚠️ Başlangıç temizliği: {e}", flush=True)
 
-# ==================== İŞLEM AÇMA (v12.1 - Eşit Marj) ====================
+# ==================== İŞLEM AÇMA ====================
 def pozisyon_ac(symbol, yon, anlik_fiyat, atr, sebep):
     global AKTIF_SISTEMLER
     
@@ -303,20 +314,18 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, atr, sebep):
         market = exchange.market(symbol)
         contract_size = float(market.get('contractSize', 1.0))
         
-        # Hedef marj = kasanın %5'i
         hedef_marj = toplam_bakiye * POZISYON_MARJ
         marj = min(hedef_marj, serbest_bakiye)
         if marj < 1.0:
             print(f"  ⚠️ {symbol}: Yetersiz bakiye ({marj:.2f})", flush=True)
             return False
         
-        # ✅ MİN MİKTAR KONTROLÜ
         hesaplanan_miktar = (marj * KALDIRAC) / anlik_fiyat / contract_size
         min_miktar = float(market['limits']['amount']['min'] or 1.0)
         
         if hesaplanan_miktar < min_miktar:
             zorlanan_marj = (min_miktar * anlik_fiyat * contract_size) / KALDIRAC
-            limit_marj = hedef_marj * 1.5  # Hedefin %50 fazlası tolerans
+            limit_marj = hedef_marj * 1.5
             
             if zorlanan_marj > limit_marj:
                 print(f"  ⏭️ {symbol}: Min miktar zorlaması çok büyük ({zorlanan_marj:.2f} > limit {limit_marj:.2f}), atlanıyor", flush=True)
@@ -327,7 +336,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, atr, sebep):
             max(hesaplanan_miktar, min_miktar)
         ))
         
-        # ✅ GERÇEK MARJ KONTROLÜ
         gercek_marj = (miktar * anlik_fiyat * contract_size) / KALDIRAC
         limit_marj = hedef_marj * 1.5
         
@@ -335,7 +343,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, atr, sebep):
             print(f"  ⏭️ {symbol}: Marj çok yüksek ({gercek_marj:.2f} > {limit_marj:.2f}), atlanıyor", flush=True)
             return False
         
-        # TP/SL
         if yon == "LONG":
             tp = anlik_fiyat + (atr * TP_ATR)
             sl = anlik_fiyat - (atr * SL_ATR)
@@ -351,7 +358,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, atr, sebep):
         exchange.create_order(symbol, 'market', islem_y, miktar)
         time.sleep(1.0)
         
-        # TP/SL koy
         sl_ok = False
         try:
             exchange.create_order(symbol, 'limit', kapat_yon, miktar, tp, {'reduceOnly': True})
@@ -437,8 +443,9 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF
     
-    print("🚀 [BAŞLANGIÇ] v12.1 - Order Flow + Eşit Marj", flush=True)
+    print("🚀 [BAŞLANGIÇ] v12.2 - MFI Filtreli Order Flow", flush=True)
     print(f"⚙️ Kaldıraç: {KALDIRAC}x | Marj: %{POZISYON_MARJ*100:.0f} | Max Poz: {MAKS_POZISYON}", flush=True)
+    print(f"⚙️ MFI Filtre: <{MFI_ASIRI_SATIM} SHORT açma, >{MFI_ASIRI_ALIM} LONG açma", flush=True)
     
     try:
         exchange.load_markets()
@@ -475,7 +482,6 @@ def ana_dongu():
                         continue
             except: pass
             
-            # Toplam zarar
             try:
                 raw_pos_check = exchange.fetch_positions()
                 toplam_acik_zarar = sum(float(p.get('unrealizedPnl', 0)) for p in raw_pos_check 
@@ -631,7 +637,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detay = "\n\n📌 Açık pozisyon yok."
         
         mesaj = (
-            f"📊 *ORDER FLOW BOT (v12.1)*\n\n"
+            f"📊 *ORDER FLOW BOT (v12.2)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -652,7 +658,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Order Flow Bot (v12.1) aktif!")
+    await update.message.reply_text("🟢 Order Flow Bot (v12.2) aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
