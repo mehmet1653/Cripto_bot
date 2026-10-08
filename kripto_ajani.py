@@ -78,7 +78,7 @@ state_lock = threading.Lock()
 
 # ✅ Risk yönetimi (v12.1 - 5x + Eşit Marj)
 KALDIRAC = 5                    # ✅ 5x
-POZISYON_MARJ = 0.05            # Kasanın %5'i
+POZISYON_MARJ = 0.10            # Kasanın %10'i
 MAKS_POZISYON = 2
 SL_ATR = 2.5
 TP_ATR = 4.0
