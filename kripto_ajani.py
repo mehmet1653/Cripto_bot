@@ -88,7 +88,7 @@ KALDIRAC_TREND = 5
 MAKS_POZISYON_TREND = 2
 COOLDOWN_TREND_SANIYE = 30 * 60
 
-# Grid modu (v10.12)
+# Grid modu (v10.13)
 KALDIRAC_GRID = 3
 MAKS_COIN_GRID = 3
 GRID_SEVIYE_SAYISI = 3
@@ -98,12 +98,20 @@ GRID_ACIL_SL = 0.005
 GRID_MAKS_MARJ_ORANI = 0.18
 GRID_SL_COOLDOWN = 15 * 60
 
+# ✅ YENİ: Trend kırılım koruması ayarları
+TREND_KIRILIM_BEKLEME = 3          # 3 döngü üst üste aynı trend olmalı (30 sn)
+TREND_KIRILIM_COOLDOWN = 5 * 60    # Trend kırılım sonrası 5 dk cooldown
+TREND_ESIK_MUM = 5                 # 5/5 mum aynı yönde olmalı
+
 # Risk
 GUNLUK_BASLANGIC_BAKIYE = None
 GUNLUK_ZARAR_LIMIT = 0.05
 AKTIF_MOD = "YATAY"
 
 SKIP_UYARI_ZAMANLARI = {}
+
+# ✅ YENİ: Trend bekleme sayacı
+TREND_SAYACI = {}  # {symbol: {"trend": "YUKARI/ASAGI/YATAY", "sayac": N}}
 
 def hafizayi_yukle():
     print("💾 Hafıza yükleniyor...", flush=True)
@@ -230,6 +238,7 @@ def piyasa_meyil_kontrol(symbol, df):
     except Exception as e:
         return "YATAY", 0
 
+# ✅ v10.13: Sıkılaştırılmış trend tespiti (5/5 mum)
 def kisa_vadeli_trend(df):
     try:
         closes = df['close'].values
@@ -242,14 +251,32 @@ def kisa_vadeli_trend(df):
         ema21 = ta.trend.ema_indicator(pd.Series(closes), window=21).iloc[-1]
         ema_fark = ((ema9 - ema21) / ema21) * 100
         
-        if artan >= 4 and ema_fark > 0.1:
+        # ✅ 5/5 mum aynı yönde + EMA farkı daha sıkı
+        if artan >= 5 and ema_fark > 0.2:
             return "YUKARI"
-        elif azalan >= 4 and ema_fark < -0.1:
+        elif azalan >= 5 and ema_fark < -0.2:
             return "ASAGI"
         else:
             return "YATAY"
     except:
         return "YATAY"
+
+# ✅ v10.13: Trend bekleme kontrolü
+def trend_kirilim_hesapla(symbol, yeni_trend):
+    """Trendin kaç döngüdür aynı olduğunu hesapla"""
+    global TREND_SAYACI
+    
+    onceki = TREND_SAYACI.get(symbol, {})
+    onceki_trend = onceki.get("trend", "")
+    sayac = onceki.get("sayac", 0)
+    
+    if onceki_trend == yeni_trend:
+        sayac += 1
+    else:
+        sayac = 1
+    
+    TREND_SAYACI[symbol] = {"trend": yeni_trend, "sayac": sayac}
+    return sayac
 
 # ==================== YARDIMCI ====================
 def telegram_gonder(mesaj):
@@ -493,9 +520,12 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
         except:
             trend = "YATAY"
         
-        print(f"  📊 {symbol.replace('/USDT:USDT','')} | Fiyat: {anlik:.6f} | Trend: {trend} | Aktif: {len(grid['aktif_pozisyonlar'])}/{GRID_SEVIYE_SAYISI*2}", flush=True)
+        # ✅ Trend bekleme sayacı
+        trend_sayac = trend_kirilim_hesapla(symbol, trend)
         
-        # ✅ v10.12: TREND KIRILIM KORUMASI
+        print(f"  📊 {symbol.replace('/USDT:USDT','')} | Fiyat: {anlik:.6f} | Trend: {trend} ({trend_sayac}/{TREND_KIRILIM_BEKLEME}) | Aktif: {len(grid['aktif_pozisyonlar'])}/{GRID_SEVIYE_SAYISI*2}", flush=True)
+        
+        # ✅ v10.13: TREND KIRILIM KORUMASI (bekleme + cooldown)
         for i in list(grid['aktif_pozisyonlar'].keys()):
             pozisyon = grid['aktif_pozisyonlar'][i]
             yon = pozisyon['yon']
@@ -507,6 +537,19 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
                 ters_dondu = True
             
             if ters_dondu:
+                # ✅ Bekleme sayacı kontrolü
+                if trend_sayac < TREND_KIRILIM_BEKLEME:
+                    print(f"  ⏳ [BEKLEME] {symbol} #{i+1}: Trend {trend} ({trend_sayac}/{TREND_KIRILIM_BEKLEME}), henüz kapatmıyor", flush=True)
+                    continue
+                
+                # ✅ Cooldown kontrolü (aynı coinde sık sık kapatma yapmasın)
+                with state_lock:
+                    cd = COIN_COOLDOWNLAR.get(symbol)
+                    if cd:
+                        z = cd.get("zaman", 0) if isinstance(cd, dict) else float(cd)
+                        if z > time.time():
+                            continue
+                
                 try:
                     if yon == "SHORT":
                         kar = (pozisyon['fiyat'] - anlik) * pozisyon['miktar']
@@ -514,16 +557,22 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
                         kar = (anlik - pozisyon['fiyat']) * pozisyon['miktar']
                     
                     market_kapat(symbol, pozisyon['miktar'], yon)
-                    print(f"  🚨 [TREND KIRILIM] {symbol} #{i+1} {yon} kapatıldı! Trend: {trend} | PnL: {kar:+.4f}", flush=True)
+                    print(f"  🚨 [TREND KIRILIM] {symbol} #{i+1} {yon} kapatıldı! Trend: {trend} ({trend_sayac}x) | PnL: {kar:+.4f}", flush=True)
                     telegram_gonder(
                         f"🚨 *TREND KIRILIM*\n"
                         f"📌 `{symbol}` #{i+1}\n"
                         f"Yön: `{yon}`\n"
-                        f"Trend: `{trend}`\n"
+                        f"Trend: `{trend}` ({trend_sayac}x onay)\n"
                         f"PnL: `{kar:+.4f}` USDT"
                     )
                     del grid['aktif_pozisyonlar'][i]
                     sayaci_artir(kar > 0)
+                    
+                    # ✅ Cooldown ekle
+                    with state_lock:
+                        COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + TREND_KIRILIM_COOLDOWN), "son_yon": "TREND_KIRILIM"}
+                    print(f"  ⏳ [COOLDOWN] {symbol}: {int(TREND_KIRILIM_COOLDOWN/60)} dk yeni pozisyon açılmayacak", flush=True)
+                    
                     hafizayi_kaydet()
                 except Exception as e:
                     print(f"  ⚠️ Trend kırılım kapatma {symbol}: {e}", flush=True)
@@ -867,7 +916,7 @@ def trend_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, AKTIF_MOD, SON_REJIM, SON_REJIM_ZAMANI
-    print("🚀 [BAŞLANGIÇ] v10.12 - Trend Kırılım Koruması", flush=True)
+    print("🚀 [BAŞLANGIÇ] v10.13 - Flip-Flop Korumalı Sistem", flush=True)
     try:
         exchange.load_markets()
         b = exchange.fetch_balance()
@@ -1020,7 +1069,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 grid_detay += f"\n• `{sym_k}` | Aktif: `{aktif_say}`/{GRID_SEVIYE_SAYISI*2} | {meyil_emoji} `{meyil}`"
         
         mesaj = (
-            f"📊 *BOT DURUM (v10.12)*\n\n"
+            f"📊 *BOT DURUM (v10.13)*\n\n"
             f"🎯 Aktif Mod: `{AKTIF_MOD}`\n"
             f"🌐 Rejim: `{rejim}` (BTC: `{btc_yon}`)\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
@@ -1048,7 +1097,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Bot (v10.12) aktif!")
+    await update.message.reply_text("🟢 Bot (v10.13) aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
