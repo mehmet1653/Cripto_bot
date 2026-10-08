@@ -76,21 +76,21 @@ TAKIP_EDILENLER = [
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
 
-# ✅ Risk yönetimi (BASİT ve GÜVENLİ)
-KALDIRAC = 3                    # 3x (5x yerine)
+# ✅ Risk yönetimi (v12.1 - 5x + Eşit Marj)
+KALDIRAC = 5                    # ✅ 5x
 POZISYON_MARJ = 0.05            # Kasanın %5'i
-MAKS_POZISYON = 2               # Aynı anda max 2 pozisyon
-SL_ATR = 2.5                    # Stop-loss 2.5 ATR
-TP_ATR = 4.0                    # Take-profit 4 ATR
-TOPLAM_ZARAR_LIMIT = 1.5        # Toplam açık zarar -1.5 USDT'yi geçerse kapat
-COOLDOWN_SANIYE = 30 * 60       # İşlem sonrası 30 dk cooldown
+MAKS_POZISYON = 2
+SL_ATR = 2.5
+TP_ATR = 4.0
+TOPLAM_ZARAR_LIMIT = 1.5
+COOLDOWN_SANIYE = 30 * 60
 
 # ✅ Order Flow eşikleri
-MFI_ESIK_AL = 55                # MFI > 55 → para giriyor
-MFI_ESIK_SAT = 45               # MFI < 45 → para çıkıyor
-CMF_ESIK = 0.05                 # CMF > 0.05 → alıcı güçlü
-HACIM_ESIK = 1.2                # Hacim > 1.2x → onay
-EMA_TREND_ESIK = 0.1            # EMA slope eşiği
+MFI_ESIK_AL = 55
+MFI_ESIK_SAT = 45
+CMF_ESIK = 0.05
+HACIM_ESIK = 1.2
+EMA_TREND_ESIK = 0.1
 
 # ✅ Kill-switch
 GUNLUK_BASLANGIC_BAKIYE = None
@@ -149,49 +149,34 @@ COIN_COOLDOWNLAR = kalici.get("cooldownlar", {})
 
 # ==================== ORDER FLOW ANALİZİ ====================
 def order_flow_analiz(symbol):
-    """
-    MFI + CMF + Volume + EMA Slope analizi
-    Dönüş: (karar, detay_dict)
-    karar: "LONG" / "SHORT" / None
-    """
     try:
-        # 1 saatlik mumlar (trend için)
         ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
         if len(ohlcv_1h) < 30:
             return None, {}
         
         df = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
-        # ========== MFI (Money Flow Index) ==========
-        # MFI: Fiyat × Hacim ile para akışı
         mfi = ta.volume.money_flow_index(
             high=df['high'], low=df['low'], close=df['close'], volume=df['volume'],
             window=14
         ).iloc[-1]
         
-        # ========== CMF (Chaikin Money Flow) ==========
-        # CMF: Alım/satım baskısı
         cmf = ta.volume.chaikin_money_flow(
             high=df['high'], low=df['low'], close=df['close'], volume=df['volume'],
             window=20
         ).iloc[-1]
         
-        # ========== Volume Ratio ==========
         son3_hacim = df['volume'].iloc[-3:].mean()
         ort20_hacim = df['volume'].iloc[-20:].mean()
         hacim_oran = son3_hacim / ort20_hacim if ort20_hacim > 0 else 0
         
-        # ========== EMA 20 Slope ==========
         ema20 = ta.trend.ema_indicator(df['close'], window=20).iloc[-1]
         ema20_onceki = ta.trend.ema_indicator(df['close'], window=20).iloc[-5]
         ema_slope = ((ema20 - ema20_onceki) / ema20_onceki) * 100
         
-        # ========== EMA 50 (Ana trend) ==========
         ema50 = ta.trend.ema_indicator(df['close'], window=50).iloc[-1]
-        
         anlik_fiyat = df['close'].iloc[-1]
         
-        # ========== KARAR ==========
         detay = {
             "mfi": round(mfi, 1),
             "cmf": round(cmf, 3),
@@ -202,26 +187,23 @@ def order_flow_analiz(symbol):
             "ema50": round(ema50, 4)
         }
         
-        # Hacim zayıfsa bekle
         if hacim_oran < HACIM_ESIK:
             return None, {**detay, "sebep": f"HACIM ZAYIF ({hacim_oran:.2f}x)"}
         
-        # LONG koşulları (4 sinyal aynı yönde)
         long_kosullar = [
-            mfi > MFI_ESIK_AL,           # Para giriyor
-            cmf > CMF_ESIK,              # Alıcı güçlü
-            hacim_oran > HACIM_ESIK,     # Hacim onayı
-            ema_slope > EMA_TREND_ESIK,  # EMA yukarı
-            anlik_fiyat > ema50           # Fiyat EMA50 üstünde
+            mfi > MFI_ESIK_AL,
+            cmf > CMF_ESIK,
+            hacim_oran > HACIM_ESIK,
+            ema_slope > EMA_TREND_ESIK,
+            anlik_fiyat > ema50
         ]
         
-        # SHORT koşulları
         short_kosullar = [
-            mfi < MFI_ESIK_SAT,          # Para çıkıyor
-            cmf < -CMF_ESIK,             # Satıcı güçlü
-            hacim_oran > HACIM_ESIK,     # Hacim onayı
-            ema_slope < -EMA_TREND_ESIK, # EMA aşağı
-            anlik_fiyat < ema50           # Fiyat EMA50 altında
+            mfi < MFI_ESIK_SAT,
+            cmf < -CMF_ESIK,
+            hacim_oran > HACIM_ESIK,
+            ema_slope < -EMA_TREND_ESIK,
+            anlik_fiyat < ema50
         ]
         
         if all(long_kosullar):
@@ -230,7 +212,6 @@ def order_flow_analiz(symbol):
         if all(short_kosullar):
             return "SHORT", {**detay, "sebep": f"MFI:{mfi:.0f} CMF:{cmf:.2f} Hacim:{hacim_oran:.2f}x EMA:{ema_slope:+.2f}%"}
         
-        # Kısmi sinyaller
         long_say = sum(long_kosullar)
         short_say = sum(short_kosullar)
         
@@ -309,9 +290,8 @@ def baslangic_temizligi():
     except Exception as e:
         print(f"⚠️ Başlangıç temizliği: {e}", flush=True)
 
-# ==================== İŞLEM AÇMA ====================
+# ==================== İŞLEM AÇMA (v12.1 - Eşit Marj) ====================
 def pozisyon_ac(symbol, yon, anlik_fiyat, atr, sebep):
-    """Order flow sinyali ile pozisyon açar"""
     global AKTIF_SISTEMLER
     
     try:
@@ -321,11 +301,38 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, atr, sebep):
         
         exchange.set_leverage(KALDIRAC, symbol)
         market = exchange.market(symbol)
+        contract_size = float(market.get('contractSize', 1.0))
         
-        # Marj = kasanın %5'i
-        marj = min(toplam_bakiye * POZISYON_MARJ, serbest_bakiye)
+        # Hedef marj = kasanın %5'i
+        hedef_marj = toplam_bakiye * POZISYON_MARJ
+        marj = min(hedef_marj, serbest_bakiye)
         if marj < 1.0:
             print(f"  ⚠️ {symbol}: Yetersiz bakiye ({marj:.2f})", flush=True)
+            return False
+        
+        # ✅ MİN MİKTAR KONTROLÜ
+        hesaplanan_miktar = (marj * KALDIRAC) / anlik_fiyat / contract_size
+        min_miktar = float(market['limits']['amount']['min'] or 1.0)
+        
+        if hesaplanan_miktar < min_miktar:
+            zorlanan_marj = (min_miktar * anlik_fiyat * contract_size) / KALDIRAC
+            limit_marj = hedef_marj * 1.5  # Hedefin %50 fazlası tolerans
+            
+            if zorlanan_marj > limit_marj:
+                print(f"  ⏭️ {symbol}: Min miktar zorlaması çok büyük ({zorlanan_marj:.2f} > limit {limit_marj:.2f}), atlanıyor", flush=True)
+                return False
+        
+        miktar = float(exchange.amount_to_precision(
+            symbol,
+            max(hesaplanan_miktar, min_miktar)
+        ))
+        
+        # ✅ GERÇEK MARJ KONTROLÜ
+        gercek_marj = (miktar * anlik_fiyat * contract_size) / KALDIRAC
+        limit_marj = hedef_marj * 1.5
+        
+        if gercek_marj > limit_marj:
+            print(f"  ⏭️ {symbol}: Marj çok yüksek ({gercek_marj:.2f} > {limit_marj:.2f}), atlanıyor", flush=True)
             return False
         
         # TP/SL
@@ -338,12 +345,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, atr, sebep):
             sl = anlik_fiyat + (atr * SL_ATR)
             kapat_yon = 'buy'
         
-        # Miktar
-        miktar = float(exchange.amount_to_precision(
-            symbol,
-            max((marj * KALDIRAC) / anlik_fiyat / float(market.get('contractSize', 1.0)),
-                float(market['limits']['amount']['min'] or 1.0))
-        ))
+        print(f"  📊 {symbol}: Marj={gercek_marj:.2f} | Miktar={miktar} | Pozisyon={gercek_marj*KALDIRAC:.2f}", flush=True)
         
         islem_y = 'buy' if yon == 'LONG' else 'sell'
         exchange.create_order(symbol, 'market', islem_y, miktar)
@@ -372,7 +374,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, atr, sebep):
                 "sebep": sebep,
                 "tp": tp,
                 "sl": sl,
-                "marj": marj
+                "marj": gercek_marj
             }
         
         hafizayi_kaydet()
@@ -383,7 +385,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, atr, sebep):
             f"📊 {sebep}\n"
             f"🎯 Giriş: `{anlik_fiyat}`\n"
             f"💰 TP: `{tp:.4f}` | 🛑 SL: `{sl:.4f}`\n"
-            f"💵 Marj: `{marj:.2f}` USDT | Kaldıraç: `{KALDIRAC}x`"
+            f"💵 Marj: `{gercek_marj:.2f}` USDT | Kaldıraç: `{KALDIRAC}x`"
         )
         return True
     except Exception as e:
@@ -392,7 +394,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, atr, sebep):
 
 # ==================== KAPANAN POZİSYON ====================
 def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
-    """Kapanan pozisyonları tespit et ve kaydet"""
     global AKTIF_SISTEMLER
     
     try:
@@ -409,7 +410,6 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
                 try:
                     t = exchange.fetch_ticker(eski)
                     cikis = float(t['last'])
-                    # TP'ye yakınsa kâr, SL'ye yakınsa zarar
                     if y == "LONG":
                         karli = abs(cikis - tp) < abs(cikis - sl)
                     else:
@@ -437,9 +437,8 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF
     
-    print("🚀 [BAŞLANGIÇ] v12.0 - Order Flow Sistemi", flush=True)
+    print("🚀 [BAŞLANGIÇ] v12.1 - Order Flow + Eşit Marj", flush=True)
     print(f"⚙️ Kaldıraç: {KALDIRAC}x | Marj: %{POZISYON_MARJ*100:.0f} | Max Poz: {MAKS_POZISYON}", flush=True)
-    print(f"⚙️ MFI: >{MFI_ESIK_AL} LONG, <{MFI_ESIK_SAT} SHORT | CMF: ±{CMF_ESIK} | Hacim: >{HACIM_ESIK}x", flush=True)
     
     try:
         exchange.load_markets()
@@ -462,7 +461,6 @@ def ana_dongu():
             print(f"🔄 [DÖNGÜ #{dongu}] {datetime.now().strftime('%H:%M:%S')}", flush=True)
             print(f"{'='*60}", flush=True)
             
-            # Kasa kontrolü
             try:
                 b = exchange.fetch_balance()
                 su_an = float(b['total'].get('USDT', 0))
@@ -470,22 +468,22 @@ def ana_dongu():
                     gk = (su_an - GUNLUK_BASLANGIC_BAKIYE) / GUNLUK_BASLANGIC_BAKIYE
                     print(f"💰 Kasa: {su_an:.2f} | Günlük: %{gk*100:+.2f}", flush=True)
                     if gk <= -GUNLUK_ZARAR_LIMIT:
-                        print(f"🛑 KILL-SWITCH! Günlük zarar %{gk*100:.2f}", flush=True)
-                        telegram_gonder(f"🛑 *KILL-SWITCH*\nGünlük: %{gk*100:.2f}\n1 saat durduruluyor.")
+                        print(f"🛑 KILL-SWITCH!", flush=True)
+                        telegram_gonder(f"🛑 *KILL-SWITCH*\nGünlük: %{gk*100:.2f}")
                         time.sleep(3600)
                         GUNLUK_BASLANGIC_BAKIYE = su_an
                         continue
             except: pass
             
-            # Toplam zarar limiti
+            # Toplam zarar
             try:
                 raw_pos_check = exchange.fetch_positions()
                 toplam_acik_zarar = sum(float(p.get('unrealizedPnl', 0)) for p in raw_pos_check 
                                        if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0)
                 
                 if toplam_acik_zarar < -TOPLAM_ZARAR_LIMIT:
-                    print(f"🛑 [TOPLAM ZARAR LİMİTİ] {toplam_acik_zarar:.2f} USDT!", flush=True)
-                    telegram_gonder(f"🛑 *TOPLAM ZARAR LİMİTİ*\n💵 {toplam_acik_zarar:.2f} USDT\nKapatılıyor.")
+                    print(f"🛑 [TOPLAM ZARAR] {toplam_acik_zarar:.2f} USDT!", flush=True)
+                    telegram_gonder(f"🛑 *TOPLAM ZARAR LİMİTİ*\n💵 {toplam_acik_zarar:.2f}")
                     
                     for p in raw_pos_check:
                         k = float(p.get('contracts', 0) or p.get('size', 0) or 0)
@@ -500,7 +498,6 @@ def ana_dongu():
                     continue
             except: pass
             
-            # Aktif pozisyonlar
             try:
                 raw_pos = exchange.fetch_positions()
                 aktif_borsa_map = {}
@@ -515,23 +512,19 @@ def ana_dongu():
                 aktif_borsa_map = {}
                 aktif_semboller_seti = set()
             
-            # Kapanan pozisyonları tespit et
             kapanan_pozisyonlari_kontrol(aktif_semboller_seti)
             
-            # Limit kontrolü
             if len(aktif_semboller_seti) >= MAKS_POZISYON:
                 print(f"  ⛔ Limit dolu ({len(aktif_semboller_seti)}/{MAKS_POZISYON})", flush=True)
                 time.sleep(10)
                 continue
             
-            # Her coini analiz et
             print(f"\n🔍 ORDER FLOW ANALİZİ:", flush=True)
             for symbol in TAKIP_EDILENLER:
                 if not BOT_CALISIYOR_MU: break
                 if symbol in aktif_semboller_seti: continue
                 if len(aktif_semboller_seti) >= MAKS_POZISYON: break
                 
-                # Cooldown kontrolü
                 with state_lock:
                     cd = COIN_COOLDOWNLAR.get(symbol)
                     if cd:
@@ -541,14 +534,12 @@ def ana_dongu():
                             print(f"  ⏳ {symbol.replace('/USDT:USDT','')}: Cooldown ({kalan} dk)", flush=True)
                             continue
                 
-                # Analiz
                 karar, detay = order_flow_analiz(symbol)
                 
                 if "hata" in detay:
                     print(f"  ⚠️ {symbol.replace('/USDT:USDT','')}: Hata - {detay['hata']}", flush=True)
                     continue
                 
-                # Detaylı log
                 sym_kisa = symbol.replace('/USDT:USDT', '')
                 mfi = detay.get('mfi', 0)
                 cmf = detay.get('cmf', 0)
@@ -565,10 +556,8 @@ def ana_dongu():
                 if karar is None:
                     continue
                 
-                # Sinyal var! İşlem aç
                 print(f"  🎯 [SİNYAL] {sym_kisa}: {karar}", flush=True)
                 
-                # ATR hesapla
                 try:
                     ohlcv_atr = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=30)
                     df_atr = pd.DataFrame(ohlcv_atr, columns=['t', 'o', 'h', 'l', 'c', 'v'])
@@ -582,7 +571,7 @@ def ana_dongu():
                 sonuc = pozisyon_ac(symbol, karar, anlik_fiyat, atr, detay.get('sebep', ''))
                 if sonuc:
                     aktif_semboller_seti.add(symbol)
-                    break  # Bir işlem açıldı, diğer döngüye geç
+                    break
             
         except Exception as e:
             print(f"⚠️ Ana döngü: {e}", flush=True)
@@ -642,7 +631,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pos_detay = "\n\n📌 Açık pozisyon yok."
         
         mesaj = (
-            f"📊 *ORDER FLOW BOT (v12.0)*\n\n"
+            f"📊 *ORDER FLOW BOT (v12.1)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -663,7 +652,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Order Flow Bot (v12.0) aktif!")
+    await update.message.reply_text("🟢 Order Flow Bot (v12.1) aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
