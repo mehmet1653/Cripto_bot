@@ -88,7 +88,7 @@ KALDIRAC_TREND = 5
 MAKS_POZISYON_TREND = 2
 COOLDOWN_TREND_SANIYE = 30 * 60
 
-# Grid modu (v10.11 - Trend Yönlü)
+# Grid modu (v10.12)
 KALDIRAC_GRID = 3
 MAKS_COIN_GRID = 3
 GRID_SEVIYE_SAYISI = 3
@@ -230,23 +230,18 @@ def piyasa_meyil_kontrol(symbol, df):
     except Exception as e:
         return "YATAY", 0
 
-# ✅ YENİ: Kısa vadeli trend tespiti
 def kisa_vadeli_trend(df):
-    """Kısa vadeli trend tespiti (5 dakikalık mumlar, son 5 mum)"""
     try:
         closes = df['close'].values
         son5 = closes[-5:]
         
-        # Son 5 mumun yönü
         artan = sum(1 for i in range(1, len(son5)) if son5[i] > son5[i-1])
         azalan = sum(1 for i in range(1, len(son5)) if son5[i] < son5[i-1])
         
-        # EMA 9 vs EMA 21 (5 dk grafik)
         ema9 = ta.trend.ema_indicator(pd.Series(closes), window=9).iloc[-1]
         ema21 = ta.trend.ema_indicator(pd.Series(closes), window=21).iloc[-1]
         ema_fark = ((ema9 - ema21) / ema21) * 100
         
-        # Karar
         if artan >= 4 and ema_fark > 0.1:
             return "YUKARI"
         elif azalan >= 4 and ema_fark < -0.1:
@@ -490,7 +485,7 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
             anlik = float(ticker['last'])
         except: continue
         
-        # ✅ KISA VADELİ TREND TESPİTİ
+        # Kısa vadeli trend tespiti
         try:
             ohlcv_t = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=30)
             df_t = pd.DataFrame(ohlcv_t, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -500,6 +495,40 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
         
         print(f"  📊 {symbol.replace('/USDT:USDT','')} | Fiyat: {anlik:.6f} | Trend: {trend} | Aktif: {len(grid['aktif_pozisyonlar'])}/{GRID_SEVIYE_SAYISI*2}", flush=True)
         
+        # ✅ v10.12: TREND KIRILIM KORUMASI
+        for i in list(grid['aktif_pozisyonlar'].keys()):
+            pozisyon = grid['aktif_pozisyonlar'][i]
+            yon = pozisyon['yon']
+            
+            ters_dondu = False
+            if yon == "SHORT" and trend == "YUKARI":
+                ters_dondu = True
+            elif yon == "LONG" and trend == "ASAGI":
+                ters_dondu = True
+            
+            if ters_dondu:
+                try:
+                    if yon == "SHORT":
+                        kar = (pozisyon['fiyat'] - anlik) * pozisyon['miktar']
+                    else:
+                        kar = (anlik - pozisyon['fiyat']) * pozisyon['miktar']
+                    
+                    market_kapat(symbol, pozisyon['miktar'], yon)
+                    print(f"  🚨 [TREND KIRILIM] {symbol} #{i+1} {yon} kapatıldı! Trend: {trend} | PnL: {kar:+.4f}", flush=True)
+                    telegram_gonder(
+                        f"🚨 *TREND KIRILIM*\n"
+                        f"📌 `{symbol}` #{i+1}\n"
+                        f"Yön: `{yon}`\n"
+                        f"Trend: `{trend}`\n"
+                        f"PnL: `{kar:+.4f}` USDT"
+                    )
+                    del grid['aktif_pozisyonlar'][i]
+                    sayaci_artir(kar > 0)
+                    hafizayi_kaydet()
+                except Exception as e:
+                    print(f"  ⚠️ Trend kırılım kapatma {symbol}: {e}", flush=True)
+        
+        # Grid SL kontrolü
         if anlik < grid['alt_sinir'] * (1 - GRID_ACIL_SL) or anlik > grid['ust_sinir'] * (1 + GRID_ACIL_SL):
             print(f"  🚨 [GRID SL] {symbol} sınır dışı!", flush=True)
             grid_pozisyonlari_kapat(symbol, "GRID SINIRI KIRILDI", basarili=False)
@@ -511,7 +540,6 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
         for i, seviye_fiyat in enumerate(grid['alis_seviyeleri']):
             if i in grid['aktif_pozisyonlar']: continue
             if anlik <= seviye_fiyat:
-                # ✅ Trend AŞAĞI ise LONG açma
                 if trend == "ASAGI":
                     print(f"  ⏭️ {symbol} #{i+1}: Trend AŞAĞI, LONG açılmıyor", flush=True)
                     continue
@@ -566,7 +594,6 @@ def grid_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
         for i, seviye_fiyat in enumerate(grid['satis_seviyeleri']):
             if i in grid['aktif_pozisyonlar']: continue
             if anlik >= seviye_fiyat:
-                # ✅ Trend YUKARI ise SHORT açma
                 if trend == "YUKARI":
                     print(f"  ⏭️ {symbol} #{i+1}: Trend YUKARI, SHORT açılmıyor", flush=True)
                     continue
@@ -840,7 +867,7 @@ def trend_modu_calistir(aktif_borsa_map, aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, AKTIF_MOD, SON_REJIM, SON_REJIM_ZAMANI
-    print("🚀 [BAŞLANGIÇ] v10.11 - Trend Yönlü Sistem", flush=True)
+    print("🚀 [BAŞLANGIÇ] v10.12 - Trend Kırılım Koruması", flush=True)
     try:
         exchange.load_markets()
         b = exchange.fetch_balance()
@@ -993,7 +1020,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 grid_detay += f"\n• `{sym_k}` | Aktif: `{aktif_say}`/{GRID_SEVIYE_SAYISI*2} | {meyil_emoji} `{meyil}`"
         
         mesaj = (
-            f"📊 *BOT DURUM (v10.11)*\n\n"
+            f"📊 *BOT DURUM (v10.12)*\n\n"
             f"🎯 Aktif Mod: `{AKTIF_MOD}`\n"
             f"🌐 Rejim: `{rejim}` (BTC: `{btc_yon}`)\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
@@ -1021,7 +1048,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Bot (v10.11) aktif!")
+    await update.message.reply_text("🟢 Bot (v10.12) aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
