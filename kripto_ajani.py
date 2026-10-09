@@ -65,12 +65,26 @@ exchange = ccxt.gate({
 exchange.set_sandbox_mode(True)
 
 # ==================== AYARLAR ====================
-TAKIP_EDILENLER = [
-    'XRP/USDT:USDT', 
-    'DOGE/USDT:USDT', 
-    'LTC/USDT:USDT', 
-    'LINK/USDT:USDT'
+# ✅ v12.5: Sabit liste yerine dinamik liste
+DINAMIK_LISTE = []              # Runtime'da güncellenir
+SON_LISTE_GUNCELLEME = 0
+LISTE_GUNCELLEME_SURESI = 30 * 60   # 30 dk'da bir güncelle
+LISTE_BOYUT = 8                     # 8 coin takip et
+
+# ✅ Kara liste (BTC, ETH, AVAX + stable + wrapped)
+KARA_LISTE = [
+    'BTC/USDT:USDT', 'ETH/USDT:USDT', 'AVAX/USDT:USDT',     # Kullanıcı isteği
+    'WBTC/USDT:USDT', 'WETH/USDT:USDT',                     # Wrapped
+    'USDC/USDT:USDT', 'USDT/USDT:USDT', 'DAI/USDT:USDT',    # Stable
+    'FDUSD/USDT:USDT', 'TUSD/USDT:USDT', 'BUSD/USDT:USDT',
+    'USDE/USDT:USDT', 'PYUSD/USDT:USDT', 'USDD/USDT:USDT'
 ]
+
+# ✅ Coin havuzu filtreleri
+MIN_HACIM_24S = 10_000_000      # Min 10M USDT 24s hacim
+MIN_DEGISIM_YUZDE = 1.0         # Min %1 değişim
+MIN_FIYAT = 1.0                 # Min 1 USDT (min miktar sorunu)
+MAX_FIYAT = 300.0               # Max 300 USDT (min miktar kontrolü)
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
@@ -91,11 +105,9 @@ CMF_ESIK = 0.05
 HACIM_ESIK = 1.2
 EMA_TREND_ESIK = 0.1
 
-# MFI aşırı uç filtreleri (esnek)
 MFI_ASIRI_SATIM = 20
 MFI_ASIRI_ALIM = 80
 
-# ✅ v12.4: Orta düzey filtre (8/12)
 GEREKLI_SINYAL = 8
 
 # Kill-switch
@@ -153,9 +165,83 @@ AKTIF_SISTEMLER = kalici.get("aktif_sistemler", {})
 ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []})
 COIN_COOLDOWNLAR = kalici.get("cooldownlar", {})
 
+# ==================== DİNAMİK COIN HAVUZU ====================
+def dinamik_liste_guncelle(zorla=False):
+    """✅ v12.5: Coin havuzunu otomatik güncelle"""
+    global DINAMIK_LISTE, SON_LISTE_GUNCELLEME
+    
+    if not zorla and (time.time() - SON_LISTE_GUNCELLEME < LISTE_GUNCELLEME_SURESI):
+        return
+    
+    print(f"\n🔄 [DİNAMİK LİSTE] Coin havuzu güncelleniyor...", flush=True)
+    SON_LISTE_GUNCELLEME = time.time()
+    
+    try:
+        tickers = exchange.fetch_tickers()
+        adaylar = []
+        
+        for sym, t in tickers.items():
+            # Sadece USDT perpetual
+            if ':USDT' not in sym: continue
+            if sym in KARA_LISTE: continue
+            
+            try:
+                hacim = float(t.get('quoteVolume', 0) or 0)
+                degisim = abs(float(t.get('percentage', 0) or 0))
+                fiyat = float(t.get('last', 0) or 0)
+                
+                # Filtreler
+                if hacim < MIN_HACIM_24S: continue
+                if degisim < MIN_DEGISIM_YUZDE: continue
+                if fiyat < MIN_FIYAT: continue
+                if fiyat > MAX_FIYAT: continue
+                
+                # Min miktar kontrolü (grid açılabilir mi?)
+                try:
+                    market = exchange.market(sym)
+                    min_miktar = float(market['limits']['amount']['min'] or 1.0)
+                    contract_size = float(market.get('contractSize', 1.0))
+                    min_marj = (min_miktar * fiyat * contract_size) / KALDIRAC
+                    
+                    # Min marj çok yüksekse atla (hedef marj 10 USDT, limit 15)
+                    if min_marj > 15.0:
+                        continue
+                except:
+                    continue
+                
+                # Skor hesapla: hacim × değişim
+                skor = (hacim / 1_000_000) * degisim
+                adaylar.append({
+                    "symbol": sym,
+                    "skor": skor,
+                    "degisim": degisim,
+                    "hacim": hacim,
+                    "fiyat": fiyat
+                })
+            except:
+                continue
+        
+        # En yüksek skorlu LISTE_BOYUT coini seç
+        adaylar.sort(key=lambda x: x['skor'], reverse=True)
+        yeni_liste = [a['symbol'] for a in adaylar[:LISTE_BOYUT]]
+        
+        if yeni_liste:
+            DINAMIK_LISTE = yeni_liste
+            print(f"✅ [DİNAMİK] {len(DINAMIK_LISTE)} coin seçildi:", flush=True)
+            for a in adaylar[:LISTE_BOYUT]:
+                sym_kisa = a['symbol'].replace('/USDT:USDT', '')
+                print(f"   • {sym_kisa} | %{a['degisim']:.1f} | {a['hacim']/1_000_000:.0f}M | Fiyat: {a['fiyat']:.4f}", flush=True)
+            
+            # Telegram'a bildir
+            liste_str = "\n".join([f"• `{a['symbol'].replace('/USDT:USDT','')}` (%{a['degisim']:.1f})" for a in adaylar[:LISTE_BOYUT]])
+            telegram_gonder(f"🔄 *DİNAMİK LİSTE GÜNCELLENDİ*\n\n{liste_str}")
+        else:
+            print(f"⚠️ [DİNAMİK] Uygun coin bulunamadı, eski liste kullanılıyor", flush=True)
+    except Exception as e:
+        print(f"⚠️ [DİNAMİK] Hata: {e}", flush=True)
+
 # ==================== DERİN YÖN ANALİZİ ====================
 def coklu_tf_trend(symbol):
-    """✅ 15m + 1h + 4h trend kontrolü"""
     try:
         sonuclar = {}
         for tf, limit, key in [('15m', 30, 'tf15'), ('1h', 50, 'tf60'), ('4h', 40, 'tf240')]:
@@ -178,7 +264,6 @@ def coklu_tf_trend(symbol):
         return {'tf15': "YATAY", 'tf60': "YATAY", 'tf240': "YATAY"}
 
 def btc_bias():
-    """✅ BTC trend yönü"""
     try:
         ohlcv = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=50)
         df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
@@ -196,7 +281,6 @@ def btc_bias():
         return "KARISIK"
 
 def momentum_ivmesi(symbol):
-    """✅ Momentum hızlanıyor mu, yavaşlıyor mu?"""
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=20)
         df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
@@ -220,7 +304,6 @@ def momentum_ivmesi(symbol):
         return "SABIT"
 
 def swing_analizi(symbol):
-    """✅ Higher High / Lower Low analizi"""
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=30)
         df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
@@ -250,7 +333,6 @@ def swing_analizi(symbol):
         return "KARISIK"
 
 def destek_direnc_yakinlik(symbol, anlik):
-    """✅ Destek/Direnç yakınlık kontrolü"""
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=48)
         df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
@@ -276,7 +358,6 @@ def destek_direnc_yakinlik(symbol, anlik):
         return {"destek": 0, "direnc": 0, "destek_mesafe": 999, "direnc_mesafe": 999, "destege_yakin": False, "direnge_yakin": False}
 
 def order_flow_analiz(symbol):
-    """✅ v12.4: 12 katmanlı orta düzey analiz"""
     try:
         ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
         if len(ohlcv_1h) < 30:
@@ -285,7 +366,6 @@ def order_flow_analiz(symbol):
         df = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         anlik_fiyat = df['close'].iloc[-1]
         
-        # Klasik göstergeler
         mfi = ta.volume.money_flow_index(
             high=df['high'], low=df['low'], close=df['close'], volume=df['volume'],
             window=14
@@ -306,7 +386,6 @@ def order_flow_analiz(symbol):
         
         ema50 = ta.trend.ema_indicator(df['close'], window=50).iloc[-1]
         
-        # Yeni katmanlar
         tf_trendler = coklu_tf_trend(symbol)
         tf15 = tf_trendler['tf15']
         tf60 = tf_trendler['tf60']
@@ -334,7 +413,6 @@ def order_flow_analiz(symbol):
             "direnge_yakin": dd['direnge_yakin']
         }
         
-        # Aşırı uç filtreleri (esnek)
         if mfi < MFI_ASIRI_SATIM:
             return None, {**detay, "sebep": f"MFI DİP ({mfi:.0f})"}
         if mfi > MFI_ASIRI_ALIM:
@@ -343,7 +421,6 @@ def order_flow_analiz(symbol):
         if hacim_oran < HACIM_ESIK:
             return None, {**detay, "sebep": f"HACIM ZAYIF ({hacim_oran:.2f}x)"}
         
-        # 12 SİNYAL
         long_kosullar = [
             mfi > MFI_ESIK_AL,
             cmf > CMF_ESIK,
@@ -377,7 +454,7 @@ def order_flow_analiz(symbol):
         long_say = sum(long_kosullar)
         short_say = sum(short_kosullar)
         
-        sebep = f"L:{long_say}/12 S:{short_say}/12 TF[{tf15}/{tf60}/{tf240}] BTC:{btc_yon} Swing:{swing} Mom:{momentum}"
+        sebep = f"L:{long_say}/12 S:{short_say}/12 TF[{tf15}/{tf60}/{tf240}] BTC:{btc_yon} Swing:{swing}"
         
         if long_say >= GEREKLI_SINYAL:
             return "LONG", {**detay, "sebep": sebep}
@@ -497,7 +574,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep):
             print(f"  ⏭️ {symbol}: Marj çok yüksek ({gercek_marj:.2f})", flush=True)
             return False
         
-        # SABİT SL/TP (manuel kontrol)
         if yon == "LONG":
             tp = anlik_fiyat * (1 + TP_YUZDE / 100)
             sl = anlik_fiyat * (1 - SL_YUZDE / 100)
@@ -511,7 +587,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep):
         exchange.create_order(symbol, 'market', islem_y, miktar)
         time.sleep(1.0)
         
-        # Sadece TP koy (SL'yi bot kontrol edecek)
         try:
             exchange.create_order(symbol, 'limit', 'sell' if yon == 'LONG' else 'buy', miktar, tp, {'reduceOnly': True})
             print(f"  ✅ TP koyuldu: {tp:.4f}", flush=True)
@@ -568,7 +643,6 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
         miktar = float(bilgi.get("miktar", 0))
         giris = float(bilgi.get("giris_fiyati", 0))
         
-        # SL kontrolü
         sl_tetiklendi = False
         if yon == "LONG" and anlik <= sl:
             sl_tetiklendi = True
@@ -602,7 +676,6 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
                 )
             continue
         
-        # TP kontrolü
         tp_tetiklendi = False
         if yon == "LONG" and anlik >= tp:
             tp_tetiklendi = True
@@ -663,9 +736,9 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF
     
-    print("🚀 [BAŞLANGIÇ] v12.4 - Derin Yön + Manuel SL", flush=True)
+    print("🚀 [BAŞLANGIÇ] v12.5 - Dinamik Coin Havuzu", flush=True)
     print(f"⚙️ Kaldıraç: {KALDIRAC}x | Marj: %{POZISYON_MARJ*100:.0f} | Max Poz: {MAKS_POZISYON}", flush=True)
-    print(f"⚙️ SL: %{SL_YUZDE} | TP: %{TP_YUZDE} | Gerekli Sinyal: {GEREKLI_SINYAL}/12", flush=True)
+    print(f"⚙️ Liste Boyutu: {LISTE_BOYUT} | Güncelleme: {LISTE_GUNCELLEME_SURESI//60} dk", flush=True)
     
     try:
         exchange.load_markets()
@@ -675,6 +748,9 @@ def ana_dongu():
     except: pass
     
     baslangic_temizligi()
+    
+    # İlk listeyi oluştur
+    dinamik_liste_guncelle(zorla=True)
     
     dongu = 0
     while True:
@@ -687,6 +763,9 @@ def ana_dongu():
             print(f"\n{'='*60}", flush=True)
             print(f"🔄 [DÖNGÜ #{dongu}] {datetime.now().strftime('%H:%M:%S')}", flush=True)
             print(f"{'='*60}", flush=True)
+            
+            # ✅ Dinamik liste güncelle (30 dk'da bir)
+            dinamik_liste_guncelle()
             
             # Kasa kontrolü
             try:
@@ -718,7 +797,6 @@ def ana_dongu():
                 aktif_borsa_map = {}
                 aktif_semboller_seti = set()
             
-            # Manuel SL/TP kontrolü
             if aktif_semboller_seti:
                 manuel_sl_tp_kontrol(aktif_borsa_map)
             
@@ -747,15 +825,19 @@ def ana_dongu():
                     continue
             except: pass
             
-            # Limit kontrolü
             if len(aktif_semboller_seti) >= MAKS_POZISYON:
                 print(f"  ⛔ Limit dolu ({len(aktif_semboller_seti)}/{MAKS_POZISYON})", flush=True)
                 time.sleep(10)
                 continue
             
-            # Analiz
-            print(f"\n🔍 DERİN YÖN ANALİZİ:", flush=True)
-            for symbol in TAKIP_EDILENLER:
+            # ✅ Dinamik listeyi kullan
+            if not DINAMIK_LISTE:
+                print(f"  ⚠️ Dinamik liste boş, bekleniyor...", flush=True)
+                time.sleep(30)
+                continue
+            
+            print(f"\n🔍 DERİN YÖN ANALİZİ ({len(DINAMIK_LISTE)} coin):", flush=True)
+            for symbol in DINAMIK_LISTE:
                 if not BOT_CALISIYOR_MU: break
                 if symbol in aktif_semboller_seti: continue
                 if len(aktif_semboller_seti) >= MAKS_POZISYON: break
@@ -772,7 +854,6 @@ def ana_dongu():
                 karar, detay = order_flow_analiz(symbol)
                 
                 if "hata" in detay:
-                    print(f"  ⚠️ {symbol.replace('/USDT:USDT','')}: Hata", flush=True)
                     continue
                 
                 sym_kisa = symbol.replace('/USDT:USDT', '')
@@ -860,12 +941,16 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             pos_detay = "\n\n📌 Açık pozisyon yok."
         
+        # Dinamik liste
+        liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:8]]) if DINAMIK_LISTE else "Liste boş"
+        
         mesaj = (
-            f"📊 *ORDER FLOW BOT (v12.4)*\n\n"
+            f"📊 *ORDER FLOW BOT (v12.5)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
             f"{pos_detay}\n\n"
+            f"📋 *DİNAMİK LİSTE ({len(DINAMIK_LISTE)}):*\n{liste_str}\n\n"
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
             f"📈 Başarı: `%{oran:.1f}`"
         )
@@ -882,7 +967,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Order Flow Bot (v12.4) aktif!")
+    await update.message.reply_text("🟢 Order Flow Bot (v12.5) aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -912,6 +997,27 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
 
+async def liste_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != int(CHAT_ID): return
+    try:
+        if not DINAMIK_LISTE:
+            await update.message.reply_text("⚠️ Liste boş")
+            return
+        liste_str = "📋 *DİNAMİK COIN LİSTESİ*\n\n"
+        for i, s in enumerate(DINAMIK_LISTE, 1):
+            liste_str += f"{i}. `{s.replace('/USDT:USDT','')}`\n"
+        await update.message.reply_text(liste_str, parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f"Hata: {e}")
+
+async def liste_guncelle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != int(CHAT_ID): return
+    await update.message.reply_text("🔄 Liste güncelleniyor...")
+    await asyncio.to_thread(dinamik_liste_guncelle, True)
+    if DINAMIK_LISTE:
+        liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE])
+        await update.message.reply_text(f"✅ *Güncellendi ({len(DINAMIK_LISTE)}):*\n\n{liste_str}", parse_mode='Markdown')
+
 # ==================== MAIN ====================
 async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)
@@ -926,6 +1032,8 @@ async def main():
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
+    app_tg.add_handler(CommandHandler("liste", liste_komutu))
+    app_tg.add_handler(CommandHandler("listeguncelle", liste_guncelle))
     
     await app_tg.initialize()
     await app_tg.start()
