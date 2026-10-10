@@ -67,8 +67,8 @@ exchange.set_sandbox_mode(True)
 # ==================== AYARLAR ====================
 DINAMIK_LISTE = []
 SON_LISTE_GUNCELLEME = 0
-LISTE_GUNCELLEME_SURESI = 30 * 60
-LISTE_BOYUT = 8
+LISTE_GUNCELLEME_SURESI = 15 * 60
+LISTE_BOYUT = 10
 
 KARA_LISTE = [
     'BTC/USDT:USDT', 'ETH/USDT:USDT', 'AVAX/USDT:USDT',
@@ -82,6 +82,9 @@ MIN_DEGISIM_YUZDE = 1.0
 MIN_FIYAT = 1.0
 MAX_FIYAT = 300.0
 
+HOT_MOVER_YUZDE = 5.0
+HOT_MOVER_MAX = 3
+
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
 
@@ -94,7 +97,7 @@ TP_YUZDE = 3.0
 TOPLAM_ZARAR_LIMIT = 1.5
 COOLDOWN_SANIYE = 30 * 60
 
-# Gevşetilmiş Order Flow eşikleri
+# Order Flow eşikleri
 MFI_ESIK_AL = 52
 MFI_ESIK_SAT = 48
 CMF_ESIK = 0.03
@@ -170,7 +173,8 @@ def dinamik_liste_guncelle(zorla=False):
     
     try:
         tickers = exchange.fetch_tickers()
-        adaylar = []
+        normal_adaylar = []
+        hot_movers = []
         
         for sym, t in tickers.items():
             if ':USDT' not in sym: continue
@@ -178,11 +182,12 @@ def dinamik_liste_guncelle(zorla=False):
             
             try:
                 hacim = float(t.get('quoteVolume', 0) or 0)
-                degisim = abs(float(t.get('percentage', 0) or 0))
+                degisim = float(t.get('percentage', 0) or 0)
+                abs_degisim = abs(degisim)
                 fiyat = float(t.get('last', 0) or 0)
                 
                 if hacim < MIN_HACIM_24S: continue
-                if degisim < MIN_DEGISIM_YUZDE: continue
+                if abs_degisim < MIN_DEGISIM_YUZDE: continue
                 if fiyat < MIN_FIYAT: continue
                 if fiyat > MAX_FIYAT: continue
                 
@@ -195,19 +200,37 @@ def dinamik_liste_guncelle(zorla=False):
                 except:
                     continue
                 
-                skor = (hacim / 1_000_000) * degisim
-                adaylar.append({"symbol": sym, "skor": skor, "degisim": degisim, "hacim": hacim, "fiyat": fiyat})
+                if abs_degisim >= HOT_MOVER_YUZDE:
+                    hot_movers.append({
+                        "symbol": sym, "skor": abs_degisim * 100,
+                        "degisim": degisim, "hacim": hacim, "fiyat": fiyat,
+                        "tip": "HOT"
+                    })
+                else:
+                    skor = (hacim / 1_000_000) * abs_degisim
+                    normal_adaylar.append({
+                        "symbol": sym, "skor": skor,
+                        "degisim": degisim, "hacim": hacim, "fiyat": fiyat,
+                        "tip": "NORMAL"
+                    })
             except:
                 continue
         
-        adaylar.sort(key=lambda x: x['skor'], reverse=True)
-        yeni_liste = [a['symbol'] for a in adaylar[:LISTE_BOYUT]]
+        hot_movers.sort(key=lambda x: x['skor'], reverse=True)
+        normal_adaylar.sort(key=lambda x: x['skor'], reverse=True)
+        
+        hot_secim = hot_movers[:HOT_MOVER_MAX]
+        normal_secim = normal_adaylar[:LISTE_BOYUT - len(hot_secim)]
+        tum_secim = hot_secim + normal_secim
+        
+        yeni_liste = [a['symbol'] for a in tum_secim]
         
         if yeni_liste:
             DINAMIK_LISTE = yeni_liste
             print(f"✅ [DİNAMİK] {len(DINAMIK_LISTE)} coin:", flush=True)
-            for a in adaylar[:LISTE_BOYUT]:
-                print(f"   • {a['symbol'].replace('/USDT:USDT','')} | %{a['degisim']:.1f} | {a['hacim']/1_000_000:.0f}M", flush=True)
+            for a in tum_secim:
+                tip_emoji = "🔥" if a['tip'] == "HOT" else "  "
+                print(f"   {tip_emoji} {a['symbol'].replace('/USDT:USDT','')} | %{a['degisim']:+.1f} | {a['hacim']/1_000_000:.0f}M", flush=True)
     except Exception as e:
         print(f"⚠️ [DİNAMİK] Hata: {e}", flush=True)
 
@@ -361,9 +384,11 @@ def order_flow_analiz(symbol):
     except Exception as e:
         return None, {"hata": str(e)}
 
-# ==================== YARDIMCI ====================
+# ==================== TELEGRAM ====================
 def telegram_gonder(mesaj, deneme=3):
-    if not TELEGRAM_TOKEN or not CHAT_ID: return False
+    if not TELEGRAM_TOKEN or not CHAT_ID: 
+        return False
+    
     for i in range(deneme):
         try:
             r = requests.post(
@@ -374,11 +399,24 @@ def telegram_gonder(mesaj, deneme=3):
             if r.status_code == 200:
                 return True
             else:
-                print(f"⚠️ Telegram deneme {i+1} hata: {r.status_code}", flush=True)
+                print(f"⚠️ Telegram(MD) deneme {i+1}: {r.status_code}", flush=True)
         except Exception as e:
-            print(f"⚠️ Telegram deneme {i+1}: {e}", flush=True)
+            print(f"⚠️ Telegram(MD) deneme {i+1}: {e}", flush=True)
+        
+        try:
+            r = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                json={"chat_id": CHAT_ID, "text": mesaj},
+                timeout=10
+            )
+            if r.status_code == 200:
+                return True
+        except Exception as e:
+            print(f"⚠️ Telegram(düz) deneme {i+1}: {e}", flush=True)
+        
         time.sleep(2)
-    print(f"🚨 Telegram gönderilemedi: {mesaj[:50]}", flush=True)
+    
+    print(f"🚨 Telegram gönderilemedi: {mesaj[:80]}", flush=True)
     return False
 
 def market_kapat(symbol, miktar, yon):
@@ -406,31 +444,25 @@ def sayaci_artir(basarili_mi):
             ANALITIK["basarisiz_islem_sayisi"] = int(ANALITIK.get("basarisiz_islem_sayisi", 0)) + 1
     hafizayi_kaydet()
 
+# ==================== ✅ v15.3: BASLANGIC TEMIZLIGI KALDIRILDI ====================
 def baslangic_temizligi():
-    print("\n🧹 [BAŞLANGIÇ TEMİZLİĞİ]...", flush=True)
+    """✅ v15.3: Otomatik kapatma YOK. Sadece bilgi verir."""
+    print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     try:
         raw_pos = exchange.fetch_positions()
-        eski = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
+        mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
         
-        if eski:
-            print(f"⚠️ Eski pozisyonlar: {eski}", flush=True)
-            telegram_gonder(f"⚠️ *TEMİZLİK*\n`{eski}`")
-            for p in raw_pos:
-                k = float(p.get('contracts', 0) or p.get('size', 0) or 0)
-                if k > 0:
-                    sym = p['symbol']
-                    yon = str(p.get('side', '')).upper() or "LONG"
-                    try: exchange.cancel_all_orders(sym)
-                    except: pass
-                    market_kapat(sym, k, yon)
-            with state_lock: AKTIF_SISTEMLER.clear()
-            hafizayi_kaydet()
+        if mevcut:
+            print(f"✅ Mevcut pozisyonlar: {mevcut}", flush=True)
+            print(f"✅ Bu pozisyonlar KORUNUYOR, kapatılmayacak.", flush=True)
+            telegram_gonder(f"ℹ️ *BOT BAŞLATILDI*\n\nMevcut pozisyonlar korunuyor:\n`{mevcut}`\n\nBot yönetmeye devam ediyor.")
         else:
-            print("✅ Temiz başlangıç.", flush=True)
+            print("✅ Açık pozisyon yok, temiz başlangıç.", flush=True)
+            telegram_gonder("🟢 *BOT BAŞLATILDI*\nAçık pozisyon yok, temiz başlangıç.")
     except Exception as e:
-        print(f"⚠️ Temizlik: {e}", flush=True)
+        print(f"⚠️ Başlangıç kontrolü: {e}", flush=True)
 
-# ==================== POZİSYON AÇMA (TP+SL EMİRLİ) ====================
+# ==================== POZİSYON AÇMA ====================
 def pozisyon_ac(symbol, yon, anlik_fiyat, sebep):
     global AKTIF_SISTEMLER
     try:
@@ -466,36 +498,26 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep):
             sl = anlik_fiyat * (1 + SL_YUZDE / 100)
             kapat_yon = 'buy'
         
-        # Market emriyle pozisyon aç
         islem_y = 'buy' if yon == 'LONG' else 'sell'
         exchange.create_order(symbol, 'market', islem_y, miktar)
         time.sleep(1.0)
         
-        # ✅ TP LIMIT order
         tp_ok = False
         try:
-            exchange.create_order(
-                symbol, 'limit', kapat_yon, miktar, tp,
-                {'reduceOnly': True}
-            )
+            exchange.create_order(symbol, 'limit', kapat_yon, miktar, tp, {'reduceOnly': True})
             tp_ok = True
             print(f"  ✅ TP emri koyuldu: {tp:.4f}", flush=True)
         except Exception as e:
             print(f"  ⚠️ TP emri koyulamadı: {e}", flush=True)
         
-        # ✅ SL STOP order
         sl_ok = False
         try:
-            exchange.create_order(
-                symbol, 'stop', kapat_yon, miktar, sl,
-                {'stopPrice': sl, 'reduceOnly': True}
-            )
+            exchange.create_order(symbol, 'stop', kapat_yon, miktar, sl, {'stopPrice': sl, 'reduceOnly': True})
             sl_ok = True
             print(f"  ✅ SL emri koyuldu: {sl:.4f}", flush=True)
         except Exception as e:
             print(f"  🚨 SL emri koyulamadı: {e}", flush=True)
         
-        # SL emri koyulamadıysa → POZİSYONU KAPAT (risk yönetimi)
         if not sl_ok:
             print(f"  🚨 [ACİL] {symbol} SL emri koyulamadı, pozisyon kapatılıyor!", flush=True)
             try:
@@ -511,17 +533,18 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep):
             }
         
         hafizayi_kaydet()
-        print(f"  ✅ [AÇILDI] {symbol} {yon} @ {anlik_fiyat} | TP: {tp:.4f} | SL: {sl:.4f} | Marj: {gercek_marj:.2f}", flush=True)
+        print(f"  ✅ [AÇILDI] {symbol} {yon} @ {anlik_fiyat}", flush=True)
         
-        telegram_gonder(
-            f"🎯 *SİNYAL*\n"
-            f"📌 `{symbol}` | *{yon}*\n"
+        mesaj = (
+            f"🎯 SİNYAL\n"
+            f"📌 {symbol} | {yon}\n"
             f"📊 {sebep}\n"
-            f"🎯 Giriş: `{anlik_fiyat:.4f}`\n"
-            f"💰 TP: `{tp:.4f}` | 🛑 SL: `{sl:.4f}`\n"
-            f"💵 Marj: `{gercek_marj:.2f}` | Kaldıraç: `{KALDIRAC}x`\n"
-            f"📋 TP: {'✅' if tp_ok else '⚠️'} | SL: {'✅' if sl_ok else '🚨'}"
+            f"🎯 Giriş: {anlik_fiyat:.4f}\n"
+            f"💰 TP: {tp:.4f}\n"
+            f"🛑 SL: {sl:.4f}\n"
+            f"💵 Marj: {gercek_marj:.2f} | Kaldıraç: {KALDIRAC}x"
         )
+        telegram_gonder(mesaj)
         return True
     except Exception as e:
         print(f"  ⚠️ Pozisyon {symbol}: {e}", flush=True)
@@ -529,7 +552,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep):
 
 # ==================== MANUEL SL/TP KONTROLÜ ====================
 def manuel_sl_tp_kontrol(aktif_borsa_map):
-    """Borsa emirleri tetiklenmezse manuel kontrol (yedek)"""
     global AKTIF_SISTEMLER
     
     with state_lock:
@@ -554,9 +576,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
         elif yon == "SHORT" and anlik >= sl: sl_tetiklendi = True
         
         if sl_tetiklendi:
-            # Borsa emri hala duruyorsa iptal et
             tum_emirleri_iptal(symbol)
-            # İşaretli PnL
             if yon == "LONG":
                 kar = (anlik - giris) * miktar
             else:
@@ -569,7 +589,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
                     COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_SANIYE), "son_yon": yon}
                 sayaci_artir(False)
                 hafizayi_kaydet()
-                telegram_gonder(f"🛑 *SL*\n📌 `{symbol}` {yon}\n💵 PnL: `{kar:.4f}` USDT")
+                telegram_gonder(f"🛑 SL\n📌 {symbol} {yon}\n💵 PnL: {kar:.4f} USDT")
             continue
         
         if tp > 0:
@@ -591,11 +611,10 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
                         COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_SANIYE), "son_yon": yon}
                     sayaci_artir(True)
                     hafizayi_kaydet()
-                    telegram_gonder(f"💰 *TP*\n📌 `{symbol}` {yon}\n💵 PnL: `+{kar:.4f}` USDT")
+                    telegram_gonder(f"💰 TP\n📌 {symbol} {yon}\n💵 PnL: +{kar:.4f} USDT")
 
 # ==================== BORSA KAPANIŞ TESPİTİ ====================
 def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
-    """Borsa emri tetiklendiğinde (TP/SL) hafızadan sil"""
     global AKTIF_SISTEMLER
     
     try:
@@ -605,11 +624,8 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
                 bilgi = AKTIF_SISTEMLER[eski]
                 g = float(bilgi.get("giris_fiyati", 0))
                 y = bilgi.get("yon", "LONG")
-                tp = float(bilgi.get("tp", 0))
-                sl = float(bilgi.get("sl", 0))
                 miktar = float(bilgi.get("miktar", 0))
                 
-                # Kâr mı zarar mı?
                 karli = False
                 pnl = 0
                 try:
@@ -617,30 +633,26 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
                     cikis = float(t['last'])
                     if y == "LONG":
                         pnl = (cikis - g) * miktar
-                        karli = pnl > 0
                     else:
                         pnl = (g - cikis) * miktar
-                        karli = pnl > 0
+                    karli = pnl > 0
                 except: karli = True
                 
                 sayaci_artir(karli)
                 
                 with state_lock:
-                    COIN_COOLDOWNLAR[eski] = {
-                        "zaman": float(time.time() + COOLDOWN_SANIYE),
-                        "son_yon": y
-                    }
+                    COIN_COOLDOWNLAR[eski] = {"zaman": float(time.time() + COOLDOWN_SANIYE), "son_yon": y}
                     if eski in AKTIF_SISTEMLER:
                         del AKTIF_SISTEMLER[eski]
                 
                 hafizayi_kaydet()
                 
                 if karli:
-                    print(f"  ✅ [KAPANDI-TP] {eski} | +{pnl:.4f} USDT", flush=True)
-                    telegram_gonder(f"✅ *KÂRLA KAPANDI*\n📌 `{eski}` {y}\n💵 +{pnl:.4f} USDT")
+                    print(f"  ✅ [BORSA-TP] {eski} | +{pnl:.4f} USDT", flush=True)
+                    telegram_gonder(f"✅ KÂRLA KAPANDI\n📌 {eski} {y}\n💵 +{pnl:.4f} USDT")
                 else:
-                    print(f"  ❌ [KAPANDI-SL] {eski} | {pnl:.4f} USDT", flush=True)
-                    telegram_gonder(f"❌ *ZARARLA KAPANDI*\n📌 `{eski}` {y}\n💵 {pnl:.4f} USDT")
+                    print(f"  ❌ [BORSA-SL] {eski} | {pnl:.4f} USDT", flush=True)
+                    telegram_gonder(f"❌ ZARARLA KAPANDI\n📌 {eski} {y}\n💵 {pnl:.4f} USDT")
     except Exception as e:
         print(f"⚠️ Kapanış kontrolü: {e}", flush=True)
 
@@ -648,10 +660,9 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
     
-    print("🚀 [BAŞLANGIÇ] v15.1 - Trend + Emirli Sistem", flush=True)
+    print("🚀 [BAŞLANGIÇ] v15.3 - Otomatik Temizlik YOK", flush=True)
     print(f"⚙️ Kaldıraç: {KALDIRAC}x | Marj: %{POZISYON_MARJ*100:.0f} | Max Poz: {MAKS_POZISYON}", flush=True)
     print(f"⚙️ SL: %{SL_YUZDE} | TP: %{TP_YUZDE} | Gerekli Sinyal: {GEREKLI_SINYAL}/12", flush=True)
-    print(f"⚙️ Eşikler: MFI {MFI_ESIK_SAT}-{MFI_ESIK_AL} | CMF ±{CMF_ESIK} | Hacim {HACIM_ESIK}x", flush=True)
     
     try:
         exchange.load_markets()
@@ -660,6 +671,7 @@ def ana_dongu():
         print(f"💰 Başlangıç: {GUNLUK_BASLANGIC_BAKIYE:.2f} USDT", flush=True)
     except: pass
     
+    # ✅ v15.3: Sadece bilgi verir, kapatmaz
     baslangic_temizligi()
     dinamik_liste_guncelle(zorla=True)
     
@@ -676,7 +688,6 @@ def ana_dongu():
             
             dinamik_liste_guncelle()
             
-            # Kasa
             try:
                 b = exchange.fetch_balance()
                 su_an = float(b['total'].get('USDT', 0))
@@ -684,13 +695,12 @@ def ana_dongu():
                     gk = (su_an - GUNLUK_BASLANGIC_BAKIYE) / GUNLUK_BASLANGIC_BAKIYE
                     print(f"💰 Kasa: {su_an:.2f} | Günlük: %{gk*100:+.2f}", flush=True)
                     if gk <= -GUNLUK_ZARAR_LIMIT:
-                        telegram_gonder(f"🛑 *KILL-SWITCH*")
+                        telegram_gonder(f"🛑 KILL-SWITCH")
                         time.sleep(3600)
                         GUNLUK_BASLANGIC_BAKIYE = su_an
                         continue
             except: pass
             
-            # Pozisyonlar
             try:
                 raw_pos = exchange.fetch_positions()
                 aktif_borsa_map = {}
@@ -705,18 +715,15 @@ def ana_dongu():
                 aktif_borsa_map = {}
                 aktif_semboller_seti = set()
             
-            # ✅ Açık pozisyonları takip et (borsa emir tetiklenmesi + manuel SL/TP)
             if aktif_semboller_seti:
                 manuel_sl_tp_kontrol(aktif_borsa_map)
-                # Borsa emri tetiklendi mi?
                 kapanan_pozisyonlari_kontrol(aktif_semboller_seti)
             
-            # Toplam zarar
             try:
                 toplam_acik_zarar = sum(float(p.get('unrealizedPnl', 0)) for p in raw_pos 
                                        if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0)
                 if toplam_acik_zarar < -TOPLAM_ZARAR_LIMIT:
-                    telegram_gonder(f"🛑 *TOPLAM ZARAR* {toplam_acik_zarar:.2f}")
+                    telegram_gonder(f"🛑 TOPLAM ZARAR {toplam_acik_zarar:.2f}")
                     for p in raw_pos:
                         k = float(p.get('contracts', 0) or p.get('size', 0) or 0)
                         if k > 0:
@@ -728,13 +735,11 @@ def ana_dongu():
                     continue
             except: pass
             
-            # Limit kontrolü
             if len(aktif_semboller_seti) >= MAKS_POZISYON:
                 print(f"  ⛔ Limit dolu ({len(aktif_semboller_seti)}/{MAKS_POZISYON})", flush=True)
                 time.sleep(10)
                 continue
             
-            # ✅ Sürekli sinyal tara
             print(f"\n🔍 SİNYAL TARAMA ({len(DINAMIK_LISTE)} coin):", flush=True)
             for symbol in DINAMIK_LISTE:
                 if not BOT_CALISIYOR_MU: break
@@ -786,7 +791,7 @@ def ana_dongu():
         
         time.sleep(10)
 
-# ==================== TELEGRAM ====================
+# ==================== TELEGRAM KOMUTLARI ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     try:
@@ -837,10 +842,10 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             pos_detay = "\n\n📌 Açık pozisyon yok."
         
-        liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:8]]) if DINAMIK_LISTE else "Boş"
+        liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         
         mesaj = (
-            f"📊 *TREND BOT (v15.1)*\n\n"
+            f"📊 *TREND BOT (v15.3)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -862,7 +867,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Trend Bot (v15.1) aktif!")
+    await update.message.reply_text("🟢 Trend Bot (v15.3) aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -892,6 +897,16 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
 
+async def liste_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != int(CHAT_ID): return
+    if not DINAMIK_LISTE:
+        await update.message.reply_text("⚠️ Liste boş")
+        return
+    liste_str = "📋 *DİNAMİK LİSTE*\n\n"
+    for i, s in enumerate(DINAMIK_LISTE, 1):
+        liste_str += f"{i}. `{s.replace('/USDT:USDT','')}`\n"
+    await update.message.reply_text(liste_str, parse_mode='Markdown')
+
 # ==================== MAIN ====================
 async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)
@@ -906,6 +921,7 @@ async def main():
     app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
+    app_tg.add_handler(CommandHandler("liste", liste_komutu))
     
     await app_tg.initialize()
     await app_tg.start()
