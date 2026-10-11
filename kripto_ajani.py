@@ -90,11 +90,11 @@ state_lock = threading.Lock()
 
 # Risk yönetimi
 KALDIRAC = 5
-POZISYON_MARJ = 0.10       # ✅ %10 olarak KALDI (düşürülmedi)
-MAKS_POZISYON = 3          # ✅ 2 → 3 (3. işlem açılabilecek)
+POZISYON_MARJ = 0.10       # ✅ %10 (düşürülmedi)
+MAKS_POZISYON = 3          # ✅ 3 işlem
 SL_YUZDE = 1.5
 TP_YUZDE = 3.0
-TOPLAM_ZARAR_LIMIT = 2.5   # ✅ 3 işlem için esnettik (istersen 1.5 yap)
+TOPLAM_ZARAR_LIMIT = 2.5
 COOLDOWN_SANIYE = 30 * 60
 
 # Order Flow eşikleri
@@ -108,7 +108,11 @@ MFI_ASIRI_ALIM = 85
 
 # ✅ DİNAMİK SİNYAL EŞİĞİ
 GEREKLI_SINYAL = 6            # 1. ve 2. işlem için
-GEREKLI_SINYAL_3_ISLEM = 10   # 3. işlem için (sadece güçlü sinyal)
+GEREKLI_SINYAL_3_ISLEM = 10   # 3. işlem için
+
+# ✅ ÖNCÜ SİNYAL (SIKIŞMA) AYARLARI
+SIKISMA_BONUS = 3             # Sıkışma 3+ ise eklenecek bonus puan
+SIKISMA_MIN_SKOR = 3          # Bonus için minimum sıkışma skoru
 
 # Kill-switch
 GUNLUK_BASLANGIC_BAKIYE = None
@@ -321,6 +325,69 @@ def destek_direnc_yakinlik(symbol, anlik):
     except:
         return {"destek_mesafe": 999, "direnc_mesafe": 999, "destege_yakin": False, "direnge_yakin": False}
 
+# ==================== ✅ YENİ: SIKIŞMA (ÖNCÜ SİNYAL) ANALİZİ ====================
+def sikisma_analizi(symbol):
+    """
+    Pump/Dump öncesi sıkışma tespiti.
+    - Bollinger Bant genişliği daralmış mı?
+    - Hacim kurumuş mu?
+    - RSI yatay mı?
+    - Fiyat EMA'lara yapışık mı?
+    Dönüş: (skor 0-4, detay dict)
+    """
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
+        if len(ohlcv) < 25:
+            return 0, {}
+        
+        df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        
+        # Bollinger Bant Genişliği
+        bb_ust = ta.volatility.bollinger_hband(df['c'], window=20)
+        bb_alt = ta.volatility.bollinger_lband(df['c'], window=20)
+        bb_genislik = ((bb_ust - bb_alt) / df['c']) * 100
+        bb_genislik_son = bb_genislik.iloc[-1]
+        bb_genislik_ort = bb_genislik.iloc[-20:].mean()
+        
+        # Hacim Kuruması
+        hacim_son5 = df['v'].iloc[-5:].mean()
+        hacim_ort20 = df['v'].iloc[-20:].mean()
+        hacim_oran = hacim_son5 / hacim_ort20 if hacim_ort20 > 0 else 1.0
+        
+        # RSI Yataylığı (standart sapma düşükse yatay)
+        rsi = ta.momentum.rsi(df['c'], window=14)
+        rsi_son5_std = rsi.iloc[-5:].std()
+        
+        # Fiyatın EMA'lara yakınlığı
+        ema9 = ta.trend.ema_indicator(df['c'], window=9).iloc[-1]
+        fiyat = df['c'].iloc[-1]
+        ema_yakinlik = abs(fiyat - ema9) / ema9 * 100
+        
+        # Sıkışma Skoru (0-4)
+        sikisma_skoru = 0
+        detay = {}
+        
+        if bb_genislik_son < bb_genislik_ort * 0.7:
+            sikisma_skoru += 1
+            detay['bb'] = f"BB Sıkışık ({bb_genislik_son:.1f}%<{bb_genislik_ort:.1f}%)"
+        
+        if hacim_oran < 0.6:
+            sikisma_skoru += 1
+            detay['hacim'] = f"Hacim Kurumuş ({hacim_oran:.2f}x)"
+        
+        if rsi_son5_std < 3.0:
+            sikisma_skoru += 1
+            detay['rsi'] = f"RSI Yatay (std:{rsi_son5_std:.1f})"
+        
+        if ema_yakinlik < 0.5:
+            sikisma_skoru += 1
+            detay['ema'] = f"EMA'ya Yapışık (%{ema_yakinlik:.2f})"
+        
+        return sikisma_skoru, detay
+    except Exception as e:
+        return 0, {}
+
+# ==================== ORDER FLOW ANALİZ ====================
 def order_flow_analiz(symbol):
     try:
         ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
@@ -341,6 +408,12 @@ def order_flow_analiz(symbol):
         ema_slope = ((ema20 - ema20_onceki) / ema20_onceki) * 100
         ema50 = ta.trend.ema_indicator(df['close'], window=50).iloc[-1]
         
+        # ✅ Aşırı uzaklık kontrolü (tepeden alma engeli)
+        ema9_15m = ta.trend.ema_indicator(df['close'], window=9).iloc[-1]
+        fiyat_ema9_fark = ((anlik_fiyat - ema9_15m) / ema9_15m) * 100
+        asiri_uzak_long = fiyat_ema9_fark > 2.0
+        asiri_uzak_short = fiyat_ema9_fark < -2.0
+        
         tf = coklu_tf_trend(symbol)
         tf15 = tf['tf15']; tf60 = tf['tf60']; tf240 = tf['tf240']
         btc_yon = btc_bias()
@@ -354,7 +427,8 @@ def order_flow_analiz(symbol):
             "tf15": tf15, "tf60": tf60, "tf240": tf240, "btc": btc_yon,
             "momentum": momentum, "swing": swing,
             "destek_mesafe": dd['destek_mesafe'], "direnc_mesafe": dd['direnc_mesafe'],
-            "destege_yakin": dd['destege_yakin'], "direnge_yakin": dd['direnge_yakin']
+            "destege_yakin": dd['destege_yakin'], "direnge_yakin": dd['direnge_yakin'],
+            "fiyat_ema9_fark": round(fiyat_ema9_fark, 2)
         }
         
         if mfi < MFI_ASIRI_SATIM: return None, {**detay, "sebep": f"MFI DİP ({mfi:.0f})"}
@@ -366,7 +440,8 @@ def order_flow_analiz(symbol):
             ema_slope > EMA_TREND_ESIK, anlik_fiyat > ema50,
             tf15 == "YUKARI", tf60 == "YUKARI", tf240 != "ASAGI",
             btc_yon != "SHORT", momentum != "YAVASLIYOR",
-            swing != "ASAGI_TREND", not dd['direnge_yakin']
+            swing != "ASAGI_TREND", not dd['direnge_yakin'],
+            not asiri_uzak_long  # ✅ Tepeden alma engeli
         ]
         
         short_kosullar = [
@@ -374,19 +449,39 @@ def order_flow_analiz(symbol):
             ema_slope < -EMA_TREND_ESIK, anlik_fiyat < ema50,
             tf15 == "ASAGI", tf60 == "ASAGI", tf240 != "YUKARI",
             btc_yon != "LONG", momentum != "YAVASLIYOR",
-            swing != "YUKARI_TREND", not dd['destege_yakin']
+            swing != "YUKARI_TREND", not dd['destege_yakin'],
+            not asiri_uzak_short  # ✅ Dipten short engeli
         ]
         
         long_say = sum(long_kosullar)
         short_say = sum(short_kosullar)
-        sebep = f"L:{long_say}/12 S:{short_say}/12 TF[{tf15}/{tf60}/{tf240}] BTC:{btc_yon} Swing:{swing}"
         
-        # ✅ Fonksiyon 6+ sinyalleri döndürür (3. işlem kontrolü ana döngüde)
-        if long_say >= GEREKLI_SINYAL: 
-            return "LONG", {**detay, "sebep": sebep, "sinyal_skoru": long_say}
-        if short_say >= GEREKLI_SINYAL: 
-            return "SHORT", {**detay, "sebep": sebep, "sinyal_skoru": short_say}
-        return None, {**detay, "sebep": sebep}
+        # ✅ SIKIŞMA ANALİZİ + ÖNCÜ SİNYAL BONUSU
+        sikisma_skoru, sikisma_detay = sikisma_analizi(symbol)
+        oncu_sinyal = False
+        
+        if sikisma_skoru >= SIKISMA_MIN_SKOR:
+            if long_say >= GEREKLI_SINYAL:
+                long_say = min(12, long_say + SIKISMA_BONUS)
+                oncu_sinyal = True
+            elif short_say >= GEREKLI_SINYAL:
+                short_say = min(12, short_say + SIKISMA_BONUS)
+                oncu_sinyal = True
+        
+        sebep_str = f"L:{long_say}/12 S:{short_say}/12 TF[{tf15}/{tf60}/{tf240}] BTC:{btc_yon} Swing:{swing} Sıkışma:{sikisma_skoru}/4"
+        if oncu_sinyal:
+            sebep_str = f"🚀ÖNCÜ! {sebep_str}"
+        
+        detay["sikisma_skoru"] = sikisma_skoru
+        detay["sikisma_detay"] = sikisma_detay
+        detay["oncu_sinyal"] = oncu_sinyal
+        detay["sebep"] = sebep_str
+        
+        if long_say >= GEREKLI_SINYAL:
+            return "LONG", {**detay, "sinyal_skoru": long_say}
+        if short_say >= GEREKLI_SINYAL:
+            return "SHORT", {**detay, "sinyal_skoru": short_say}
+        return None, detay
     except Exception as e:
         return None, {"hata": str(e)}
 
@@ -542,7 +637,12 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0):
         print(f"  ✅ [AÇILDI] {symbol} {yon} @ {anlik_fiyat} | Skor: {sinyal_skoru}/12", flush=True)
         
         islem_no = len(AKTIF_SISTEMLER)
-        etiket = "🔥 GÜÇLÜ SİNYAL" if sinyal_skoru >= GEREKLI_SINYAL_3_ISLEM else "🎯 SİNYAL"
+        if "🚀ÖNCÜ" in sebep:
+            etiket = "🚀 ÖNCÜ SİNYAL"
+        elif sinyal_skoru >= GEREKLI_SINYAL_3_ISLEM:
+            etiket = "🔥 GÜÇLÜ SİNYAL"
+        else:
+            etiket = "🎯 SİNYAL"
         
         mesaj = (
             f"{etiket} ({islem_no}. İşlem)\n"
@@ -687,10 +787,11 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
     
-    print("🚀 [BAŞLANGIÇ] v15.5 - Dinamik Sinyal Eşiği (1-2:6+, 3:10+)", flush=True)
+    print("🚀 [BAŞLANGIÇ] v16.0 - Öncü Sinyal (Sıkışma) Modülü Aktif", flush=True)
     print(f"⚙️ Kaldıraç: {KALDIRAC}x | Marj: %{POZISYON_MARJ*100:.0f} | Max Poz: {MAKS_POZISYON}", flush=True)
     print(f"⚙️ SL: %{SL_YUZDE} | TP: %{TP_YUZDE}", flush=True)
     print(f"⚙️ 1-2. İşlem: {GEREKLI_SINYAL}+ | 3. İşlem: {GEREKLI_SINYAL_3_ISLEM}+", flush=True)
+    print(f"⚙️ Sıkışma Bonusu: +{SIKISMA_BONUS} (min sıkışma: {SIKISMA_MIN_SKOR}/4)", flush=True)
     
     try:
         exchange.load_markets()
@@ -767,7 +868,6 @@ def ana_dongu():
                 time.sleep(10)
                 continue
             
-            # ✅ Kaç açık işlem var? Ona göre eşik belirle
             mevcut_acik = len(aktif_semboller_seti)
             if mevcut_acik >= 2:
                 bu_dongu_gerekli_skor = GEREKLI_SINYAL_3_ISLEM
@@ -804,17 +904,18 @@ def ana_dongu():
                 tf240 = detay.get('tf240', '?')
                 btc = detay.get('btc', '?')
                 skor = detay.get('sinyal_skoru', 0)
+                sikisma = detay.get('sikisma_skoru', 0)
+                oncu = detay.get('oncu_sinyal', False)
+                oncu_etiket = "🚀" if oncu else "  "
                 
-                print(f"  {sym_kisa}: MFI:{mfi:.0f} CMF:{cmf:.2f} Hacim:{hacim:.2f}x | TF[15m:{tf15} 1h:{tf60} 4h:{tf240}] | BTC:{btc} | {detay.get('sebep', '')}", flush=True)
+                print(f"  {oncu_etiket} {sym_kisa}: MFI:{mfi:.0f} CMF:{cmf:.2f} Hacim:{hacim:.2f}x | TF[15m:{tf15} 1h:{tf60} 4h:{tf240}] | BTC:{btc} | Sıkışma:{sikisma}/4 | {detay.get('sebep', '')}", flush=True)
                 
                 if karar is None:
                     continue
                 
-                # ✅ DİNAMİK EŞİK KONTROLÜ
                 acik_sayisi = len(aktif_semboller_seti)
                 
                 if acik_sayisi >= 2:
-                    # 3. işlem: sadece 10+ sinyal
                     if skor < GEREKLI_SINYAL_3_ISLEM:
                         print(f"  ⏭️ 3. işlem için sinyal ZAYIF (Skor: {skor}/12 < {GEREKLI_SINYAL_3_ISLEM}). Atlanıyor.", flush=True)
                         continue
@@ -896,7 +997,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         
         mesaj = (
-            f"📊 *TREND BOT (v15.5)*\n\n"
+            f"📊 *TREND BOT (v16.0 - Öncü Sinyal)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}` {'🔥' if len(pos) >= MAKS_POZISYON else ''}"
@@ -904,7 +1005,8 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📋 *Coin Havuzu:*\n{liste_str}\n\n"
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
             f"📈 Başarı: `%{oran:.1f}`\n"
-            f"🎯 Sinyal: `1-2. işlem {GEREKLI_SINYAL}+` | `3. işlem {GEREKLI_SINYAL_3_ISLEM}+`"
+            f"🎯 Sinyal: `1-2. işlem {GEREKLI_SINYAL}+` | `3. işlem {GEREKLI_SINYAL_3_ISLEM}+`\n"
+            f"🚀 Sıkışma Bonusu: `+{SIKISMA_BONUS}` (min `{SIKISMA_MIN_SKOR}/4`)"
         )
         
         await update.message.reply_text(mesaj, parse_mode='Markdown')
@@ -919,7 +1021,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Trend Bot (v15.5) aktif!")
+    await update.message.reply_text("🟢 Trend Bot (v16.0 - Öncü Sinyal) aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
