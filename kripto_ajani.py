@@ -83,7 +83,8 @@ MIN_FIYAT = 1.0
 MAX_FIYAT = 300.0
 
 HOT_MOVER_YUZDE = 5.0
-HOT_MOVER_MAX = 3
+HOT_MOVER_MAX = 2       # ✅ 3 → 2 (sıkışanlara yer açtık)
+SIKISAN_MAX = 4         # ✅ 3 → 4 (1 tık artırıldı)
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
@@ -118,6 +119,7 @@ GEREKLI_SINYAL_3_ISLEM = 10
 
 # Öncü sinyal (sıkışma)
 SIKISMA_BONUS = 3
+SIKISMA_EKSTRA_BONUS = 2
 SIKISMA_MIN_SKOR = 3
 
 # Kill-switch
@@ -174,7 +176,57 @@ AKTIF_SISTEMLER = kalici.get("aktif_sistemler", {})
 ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []})
 COIN_COOLDOWNLAR = kalici.get("cooldownlar", {})
 
-# ==================== DİNAMİK COIN HAVUZU ====================
+# ==================== SIKIŞMA ANALİZİ ====================
+def sikisma_analizi(symbol):
+    """Pump/Dump öncesi sıkışma tespiti."""
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
+        if len(ohlcv) < 25:
+            return 0, {}
+        
+        df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        
+        bb_ust = ta.volatility.bollinger_hband(df['c'], window=20)
+        bb_alt = ta.volatility.bollinger_lband(df['c'], window=20)
+        bb_genislik = ((bb_ust - bb_alt) / df['c']) * 100
+        bb_genislik_son = bb_genislik.iloc[-1]
+        bb_genislik_ort = bb_genislik.iloc[-20:].mean()
+        
+        hacim_son5 = df['v'].iloc[-5:].mean()
+        hacim_ort20 = df['v'].iloc[-20:].mean()
+        hacim_oran = hacim_son5 / hacim_ort20 if hacim_ort20 > 0 else 1.0
+        
+        rsi = ta.momentum.rsi(df['c'], window=14)
+        rsi_son5_std = rsi.iloc[-5:].std()
+        
+        ema9 = ta.trend.ema_indicator(df['c'], window=9).iloc[-1]
+        fiyat = df['c'].iloc[-1]
+        ema_yakinlik = abs(fiyat - ema9) / ema9 * 100
+        
+        sikisma_skoru = 0
+        detay = {}
+        
+        if bb_genislik_son < bb_genislik_ort * 0.7:
+            sikisma_skoru += 1
+            detay['bb'] = f"BB Sıkışık ({bb_genislik_son:.1f}%<{bb_genislik_ort:.1f}%)"
+        
+        if hacim_oran < 0.6:
+            sikisma_skoru += 1
+            detay['hacim'] = f"Hacim Kurumuş ({hacim_oran:.2f}x)"
+        
+        if rsi_son5_std < 3.0:
+            sikisma_skoru += 1
+            detay['rsi'] = f"RSI Yatay (std:{rsi_son5_std:.1f})"
+        
+        if ema_yakinlik < 0.5:
+            sikisma_skoru += 1
+            detay['ema'] = f"EMA'ya Yapışık (%{ema_yakinlik:.2f})"
+        
+        return sikisma_skoru, detay
+    except Exception as e:
+        return 0, {}
+
+# ==================== DİNAMİK COIN HAVUZU (GÜNCELLENDİ - SIKIŞANLAR BAŞTA) ====================
 def dinamik_liste_guncelle(zorla=False):
     global DINAMIK_LISTE, SON_LISTE_GUNCELLEME
     
@@ -188,19 +240,19 @@ def dinamik_liste_guncelle(zorla=False):
         tickers = exchange.fetch_tickers()
         normal_adaylar = []
         hot_movers = []
+        sikisanlar = []
         
-        for sym, t in tickers.items():
-            if ':USDT' not in sym: continue
-            if sym in KARA_LISTE: continue
-            
+        tum_semboller = [s for s in tickers.keys() if ':USDT' in s and s not in KARA_LISTE]
+        
+        for sym in tum_semboller:
             try:
+                t = tickers[sym]
                 hacim = float(t.get('quoteVolume', 0) or 0)
                 degisim = float(t.get('percentage', 0) or 0)
                 abs_degisim = abs(degisim)
                 fiyat = float(t.get('last', 0) or 0)
                 
                 if hacim < MIN_HACIM_24S: continue
-                if abs_degisim < MIN_DEGISIM_YUZDE: continue
                 if fiyat < MIN_FIYAT: continue
                 if fiyat > MAX_FIYAT: continue
                 
@@ -211,6 +263,17 @@ def dinamik_liste_guncelle(zorla=False):
                     min_marj = (min_miktar * fiyat * contract_size) / KALDIRAC
                     if min_marj > 15.0: continue
                 except:
+                    continue
+                
+                # SIKIŞAN TARAMASI
+                if abs_degisim < MIN_DEGISIM_YUZDE:
+                    sikisma_skoru, _ = sikisma_analizi(sym)
+                    if sikisma_skoru >= SIKISMA_MIN_SKOR:
+                        sikisanlar.append({
+                            "symbol": sym, "skor": sikisma_skoru * 1000,
+                            "degisim": degisim, "hacim": hacim, "fiyat": fiyat,
+                            "tip": "SIKISAN", "sikisma": sikisma_skoru
+                        })
                     continue
                 
                 if abs_degisim >= HOT_MOVER_YUZDE:
@@ -231,10 +294,15 @@ def dinamik_liste_guncelle(zorla=False):
         
         hot_movers.sort(key=lambda x: x['skor'], reverse=True)
         normal_adaylar.sort(key=lambda x: x['skor'], reverse=True)
+        sikisanlar.sort(key=lambda x: x['skor'], reverse=True)
         
+        # ✅ YENİ SIRALAMA: SIKIŞANLAR BAŞTA
+        sikisan_secim = sikisanlar[:SIKISAN_MAX]
         hot_secim = hot_movers[:HOT_MOVER_MAX]
-        normal_secim = normal_adaylar[:LISTE_BOYUT - len(hot_secim)]
-        tum_secim = hot_secim + normal_secim
+        normal_secim = normal_adaylar[:LISTE_BOYUT - len(sikisan_secim) - len(hot_secim)]
+        
+        # ✅ SIKIŞAN → HOT → NORMAL
+        tum_secim = sikisan_secim + hot_secim + normal_secim
         
         yeni_liste = [a['symbol'] for a in tum_secim]
         
@@ -242,8 +310,18 @@ def dinamik_liste_guncelle(zorla=False):
             DINAMIK_LISTE = yeni_liste
             print(f"✅ [DİNAMİK] {len(DINAMIK_LISTE)} coin:", flush=True)
             for a in tum_secim:
-                tip_emoji = "🔥" if a['tip'] == "HOT" else "  "
-                print(f"   {tip_emoji} {a['symbol'].replace('/USDT:USDT','')} | %{a['degisim']:+.1f} | {a['hacim']/1_000_000:.0f}M", flush=True)
+                if a['tip'] == "HOT":
+                    tip_emoji = "🔥"
+                elif a['tip'] == "SIKISAN":
+                    tip_emoji = "🔷"
+                else:
+                    tip_emoji = "  "
+                
+                ekstra = ""
+                if a['tip'] == "SIKISAN":
+                    ekstra = f" [Sıkışma:{a.get('sikisma', 0)}/4]"
+                
+                print(f"   {tip_emoji} {a['symbol'].replace('/USDT:USDT','')} | %{a['degisim']:+.1f} | {a['hacim']/1_000_000:.0f}M{ekstra}", flush=True)
     except Exception as e:
         print(f"⚠️ [DİNAMİK] Hata: {e}", flush=True)
 
@@ -331,55 +409,6 @@ def destek_direnc_yakinlik(symbol, anlik):
     except:
         return {"destek_mesafe": 999, "direnc_mesafe": 999, "destege_yakin": False, "direnge_yakin": False}
 
-def sikisma_analizi(symbol):
-    """Pump/Dump öncesi sıkışma tespiti."""
-    try:
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
-        if len(ohlcv) < 25:
-            return 0, {}
-        
-        df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
-        
-        bb_ust = ta.volatility.bollinger_hband(df['c'], window=20)
-        bb_alt = ta.volatility.bollinger_lband(df['c'], window=20)
-        bb_genislik = ((bb_ust - bb_alt) / df['c']) * 100
-        bb_genislik_son = bb_genislik.iloc[-1]
-        bb_genislik_ort = bb_genislik.iloc[-20:].mean()
-        
-        hacim_son5 = df['v'].iloc[-5:].mean()
-        hacim_ort20 = df['v'].iloc[-20:].mean()
-        hacim_oran = hacim_son5 / hacim_ort20 if hacim_ort20 > 0 else 1.0
-        
-        rsi = ta.momentum.rsi(df['c'], window=14)
-        rsi_son5_std = rsi.iloc[-5:].std()
-        
-        ema9 = ta.trend.ema_indicator(df['c'], window=9).iloc[-1]
-        fiyat = df['c'].iloc[-1]
-        ema_yakinlik = abs(fiyat - ema9) / ema9 * 100
-        
-        sikisma_skoru = 0
-        detay = {}
-        
-        if bb_genislik_son < bb_genislik_ort * 0.7:
-            sikisma_skoru += 1
-            detay['bb'] = f"BB Sıkışık ({bb_genislik_son:.1f}%<{bb_genislik_ort:.1f}%)"
-        
-        if hacim_oran < 0.6:
-            sikisma_skoru += 1
-            detay['hacim'] = f"Hacim Kurumuş ({hacim_oran:.2f}x)"
-        
-        if rsi_son5_std < 3.0:
-            sikisma_skoru += 1
-            detay['rsi'] = f"RSI Yatay (std:{rsi_son5_std:.1f})"
-        
-        if ema_yakinlik < 0.5:
-            sikisma_skoru += 1
-            detay['ema'] = f"EMA'ya Yapışık (%{ema_yakinlik:.2f})"
-        
-        return sikisma_skoru, detay
-    except Exception as e:
-        return 0, {}
-
 # ==================== ORDER FLOW ANALİZ ====================
 def order_flow_analiz(symbol):
     try:
@@ -448,6 +477,7 @@ def order_flow_analiz(symbol):
         long_say = sum(long_kosullar)
         short_say = sum(short_kosullar)
         
+        # SIKIŞMA ANALİZİ + BONUS
         sikisma_skoru, sikisma_detay = sikisma_analizi(symbol)
         oncu_sinyal = False
         
@@ -457,6 +487,15 @@ def order_flow_analiz(symbol):
                 oncu_sinyal = True
             elif short_say >= GEREKLI_SINYAL:
                 short_say = min(12, short_say + SIKISMA_BONUS)
+                oncu_sinyal = True
+        
+        # 4/4 sıkışma ekstra bonus
+        if sikisma_skoru == 4:
+            if long_say >= GEREKLI_SINYAL - 1:
+                long_say = min(12, long_say + SIKISMA_EKSTRA_BONUS)
+                oncu_sinyal = True
+            elif short_say >= GEREKLI_SINYAL - 1:
+                short_say = min(12, short_say + SIKISMA_EKSTRA_BONUS)
                 oncu_sinyal = True
         
         sebep_str = f"L:{long_say}/12 S:{short_say}/12 TF[{tf15}/{tf60}/{tf240}] BTC:{btc_yon} Swing:{swing} Sıkışma:{sikisma_skoru}/4"
@@ -478,7 +517,6 @@ def order_flow_analiz(symbol):
 
 # ==================== TELEGRAM ====================
 def telegram_gonder(mesaj, deneme=5):
-    """Telegram mesaj gönder - 5 deneme, hata durumunda tam log"""
     if not TELEGRAM_TOKEN or not CHAT_ID:
         print("⚠️ Telegram token/chat_id eksik", flush=True)
         return False
@@ -503,7 +541,6 @@ def telegram_gonder(mesaj, deneme=5):
     return False
 
 def telegram_kritik(mesaj):
-    """Kapanış/açılış gibi kritik mesajlar - başarısız olursa loglara tam yaz"""
     basarili = telegram_gonder(mesaj, deneme=5)
     if not basarili:
         print(f"🚨 KRİTİK MESAJ GİTMEDİ, TAM İÇERİK:\n{mesaj}\n", flush=True)
@@ -543,10 +580,10 @@ def baslangic_temizligi():
         
         if mevcut:
             print(f"✅ Mevcut pozisyonlar: {mevcut}", flush=True)
-            telegram_gonder(f"ℹ️ BOT BAŞLATILDI (v17.1)\n\nMevcut pozisyonlar korunuyor:\n{mevcut}")
+            telegram_gonder(f"ℹ️ BOT BAŞLATILDI (v18.1)\n\nMevcut pozisyonlar korunuyor:\n{mevcut}")
         else:
             print("✅ Açık pozisyon yok.", flush=True)
-            telegram_gonder("🟢 BOT BAŞLATILDI (v17.1)\nAçık pozisyon yok.")
+            telegram_gonder("🟢 BOT BAŞLATILDI (v18.1)\nAçık pozisyon yok.")
     except Exception as e:
         print(f"⚠️ Başlangıç kontrolü: {e}", flush=True)
 
@@ -648,7 +685,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0):
 
 # ==================== TERS DÖNÜŞ SİNYALİ ====================
 def ters_donus_sinyali(symbol, yon):
-    """Teknik gösterge tabanlı ters dönüş sinyali."""
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=30)
         if len(ohlcv) < 20: return False, ""
@@ -681,7 +717,6 @@ def ters_donus_sinyali(symbol, yon):
 
 # ==================== FİYAT KIRILIM ANALİZİ ====================
 def kirilim_analizi(symbol, yon, giris_fiyati):
-    """Fiyat yapısı ve kırılım analizi (çıkış için)."""
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=20)
         if len(ohlcv) < 15: return False, "", 0
@@ -768,7 +803,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
             kar = (giris - anlik) * miktar * contract_size
             kar_yuzde = ((giris - anlik) / giris) * 100
         
-        # ========== 1. TEYİTLİ ÇIKIŞ ==========
+        # TEYİTLİ ÇIKIŞ
         ters_var, ters_sebep = ters_donus_sinyali(symbol, yon)
         kirilim_var, kirilim_sebep, kirilim_guc = kirilim_analizi(symbol, yon, giris)
         
@@ -781,7 +816,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
             cikis_sebep = f"TEYİT: {ters_sebep} + {kirilim_sebep}"
             cikis_tipi = "teyitli"
         
-        # ========== 2. ACİL ÇIKIŞ ==========
+        # ACİL ÇIKIŞ
         if not cikis_karari:
             try:
                 ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=3)
@@ -801,11 +836,10 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
                             cikis_tipi = "acil"
             except: pass
         
-        # ========== ÇIKIŞ UYGULA - KÂR/ZARAR DURUMUNA GÖRE TP/SL ==========
+        # ÇIKIŞ UYGULA
         if cikis_karari:
             tum_emirleri_iptal(symbol)
             
-            # ✅ KÂR/ZARAR DURUMUNA GÖRE ETİKET
             if kar > 0:
                 etiket = "💰 TP"
                 basarili_mi = True
@@ -842,7 +876,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
                 )
             continue
         
-        # ========== 3. SL KONTROLÜ ==========
+        # SL KONTROLÜ
         sl_tetiklendi = False
         if yon == "LONG" and anlik <= sl: sl_tetiklendi = True
         elif yon == "SHORT" and anlik >= sl: sl_tetiklendi = True
@@ -859,7 +893,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
                 telegram_kritik(f"🛑 SL\n📌 {symbol} {yon}\n💵 PnL: {kar:.4f} USDT\n⏳ Cooldown: {COOLDOWN_SL//60} dk")
             continue
         
-        # ========== 4. TP KONTROLÜ ==========
+        # TP KONTROLÜ
         if tp > 0:
             tp_tetiklendi = False
             if yon == "LONG" and anlik >= tp: tp_tetiklendi = True
@@ -931,13 +965,12 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
     
-    print("🚀 [BAŞLANGIÇ] v17.1 - Teyitli Çıkış + TP/SL Sayaç", flush=True)
+    print("🚀 [BAŞLANGIÇ] v18.1 - Sıkışanlar Başta", flush=True)
     print(f"⚙️ Kaldıraç: {KALDIRAC}x | Marj: %{POZISYON_MARJ*100:.0f} | Max Poz: {MAKS_POZISYON}", flush=True)
     print(f"⚙️ SL: %{SL_YUZDE} | TP: %{TP_YUZDE}", flush=True)
     print(f"⚙️ 1-2. İşlem: {GEREKLI_SINYAL}+ | 3. İşlem: {GEREKLI_SINYAL_3_ISLEM}+", flush=True)
-    print(f"⚙️ Çıkış: Teyitli (Teknik+Kırılım) VEYA Acil", flush=True)
-    print(f"⚙️ Kârda çıkış = TP | Zararda çıkış = SL", flush=True)
-    print(f"⚙️ Break-even: YOK | Trailing: YOK", flush=True)
+    print(f"⚙️ Liste Sırası: {SIKISAN_MAX} SIKIŞAN + {HOT_MOVER_MAX} HOT + {LISTE_BOYUT - SIKISAN_MAX - HOT_MOVER_MAX} NORMAL", flush=True)
+    print(f"⚙️ Sıkışma Bonusu: +{SIKISMA_BONUS} (3/4) | +{SIKISMA_BONUS+SIKISMA_EKSTRA_BONUS} (4/4)", flush=True)
     
     try:
         exchange.load_markets()
@@ -1143,7 +1176,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         
         mesaj = (
-            f"📊 *TREND BOT (v17.1)*\n\n"
+            f"📊 *TREND BOT (v18.1)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}` {'🔥' if len(pos) >= MAKS_POZISYON else ''}"
@@ -1152,7 +1185,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
             f"📈 Başarı: `%{oran:.1f}`\n"
             f"🎯 Sinyal: `1-2. işlem {GEREKLI_SINYAL}+` | `3. işlem {GEREKLI_SINYAL_3_ISLEM}+`\n"
-            f"🚀 Sıkışma Bonusu: `+{SIKISMA_BONUS}` (min `{SIKISMA_MIN_SKOR}/4`)"
+            f"🔷 Sıkışan: `{SIKISAN_MAX}` | 🔥 HOT: `{HOT_MOVER_MAX}` | Normal: `{LISTE_BOYUT - SIKISAN_MAX - HOT_MOVER_MAX}`"
         )
         
         await update.message.reply_text(mesaj, parse_mode='Markdown')
@@ -1167,7 +1200,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Trend Bot (v17.1) aktif!")
+    await update.message.reply_text("🟢 Trend Bot (v18.1) aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
