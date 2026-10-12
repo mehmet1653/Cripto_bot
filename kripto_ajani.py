@@ -90,12 +90,18 @@ state_lock = threading.Lock()
 
 # Risk yönetimi
 KALDIRAC = 5
-POZISYON_MARJ = 0.10       # ✅ %10 (düşürülmedi)
-MAKS_POZISYON = 3          # ✅ 3 işlem
+POZISYON_MARJ = 0.10
+MAKS_POZISYON = 3
 SL_YUZDE = 1.5
 TP_YUZDE = 3.0
 TOPLAM_ZARAR_LIMIT = 2.5
-COOLDOWN_SANIYE = 30 * 60
+
+# Cooldown süreleri (çıkış sebebine göre)
+COOLDOWN_TP = 15 * 60
+COOLDOWN_SL = 30 * 60
+COOLDOWN_TEYITLI_CIKIS = 45 * 60
+COOLDOWN_ACIL_CIKIS = 60 * 60
+COOLDOWN_VARSAYILAN = 30 * 60
 
 # Order Flow eşikleri
 MFI_ESIK_AL = 52
@@ -106,13 +112,13 @@ EMA_TREND_ESIK = 0.05
 MFI_ASIRI_SATIM = 15
 MFI_ASIRI_ALIM = 85
 
-# ✅ DİNAMİK SİNYAL EŞİĞİ
-GEREKLI_SINYAL = 6            # 1. ve 2. işlem için
-GEREKLI_SINYAL_3_ISLEM = 10   # 3. işlem için
+# Dinamik sinyal eşiği
+GEREKLI_SINYAL = 6
+GEREKLI_SINYAL_3_ISLEM = 10
 
-# ✅ ÖNCÜ SİNYAL (SIKIŞMA) AYARLARI
-SIKISMA_BONUS = 3             # Sıkışma 3+ ise eklenecek bonus puan
-SIKISMA_MIN_SKOR = 3          # Bonus için minimum sıkışma skoru
+# Öncü sinyal (sıkışma) ayarları
+SIKISMA_BONUS = 3
+SIKISMA_MIN_SKOR = 3
 
 # Kill-switch
 GUNLUK_BASLANGIC_BAKIYE = None
@@ -325,16 +331,8 @@ def destek_direnc_yakinlik(symbol, anlik):
     except:
         return {"destek_mesafe": 999, "direnc_mesafe": 999, "destege_yakin": False, "direnge_yakin": False}
 
-# ==================== ✅ YENİ: SIKIŞMA (ÖNCÜ SİNYAL) ANALİZİ ====================
 def sikisma_analizi(symbol):
-    """
-    Pump/Dump öncesi sıkışma tespiti.
-    - Bollinger Bant genişliği daralmış mı?
-    - Hacim kurumuş mu?
-    - RSI yatay mı?
-    - Fiyat EMA'lara yapışık mı?
-    Dönüş: (skor 0-4, detay dict)
-    """
+    """Pump/Dump öncesi sıkışma tespiti."""
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
         if len(ohlcv) < 25:
@@ -342,28 +340,23 @@ def sikisma_analizi(symbol):
         
         df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         
-        # Bollinger Bant Genişliği
         bb_ust = ta.volatility.bollinger_hband(df['c'], window=20)
         bb_alt = ta.volatility.bollinger_lband(df['c'], window=20)
         bb_genislik = ((bb_ust - bb_alt) / df['c']) * 100
         bb_genislik_son = bb_genislik.iloc[-1]
         bb_genislik_ort = bb_genislik.iloc[-20:].mean()
         
-        # Hacim Kuruması
         hacim_son5 = df['v'].iloc[-5:].mean()
         hacim_ort20 = df['v'].iloc[-20:].mean()
         hacim_oran = hacim_son5 / hacim_ort20 if hacim_ort20 > 0 else 1.0
         
-        # RSI Yataylığı (standart sapma düşükse yatay)
         rsi = ta.momentum.rsi(df['c'], window=14)
         rsi_son5_std = rsi.iloc[-5:].std()
         
-        # Fiyatın EMA'lara yakınlığı
         ema9 = ta.trend.ema_indicator(df['c'], window=9).iloc[-1]
         fiyat = df['c'].iloc[-1]
         ema_yakinlik = abs(fiyat - ema9) / ema9 * 100
         
-        # Sıkışma Skoru (0-4)
         sikisma_skoru = 0
         detay = {}
         
@@ -408,7 +401,6 @@ def order_flow_analiz(symbol):
         ema_slope = ((ema20 - ema20_onceki) / ema20_onceki) * 100
         ema50 = ta.trend.ema_indicator(df['close'], window=50).iloc[-1]
         
-        # ✅ Aşırı uzaklık kontrolü (tepeden alma engeli)
         ema9_15m = ta.trend.ema_indicator(df['close'], window=9).iloc[-1]
         fiyat_ema9_fark = ((anlik_fiyat - ema9_15m) / ema9_15m) * 100
         asiri_uzak_long = fiyat_ema9_fark > 2.0
@@ -441,7 +433,7 @@ def order_flow_analiz(symbol):
             tf15 == "YUKARI", tf60 == "YUKARI", tf240 != "ASAGI",
             btc_yon != "SHORT", momentum != "YAVASLIYOR",
             swing != "ASAGI_TREND", not dd['direnge_yakin'],
-            not asiri_uzak_long  # ✅ Tepeden alma engeli
+            not asiri_uzak_long
         ]
         
         short_kosullar = [
@@ -450,13 +442,12 @@ def order_flow_analiz(symbol):
             tf15 == "ASAGI", tf60 == "ASAGI", tf240 != "YUKARI",
             btc_yon != "LONG", momentum != "YAVASLIYOR",
             swing != "YUKARI_TREND", not dd['destege_yakin'],
-            not asiri_uzak_short  # ✅ Dipten short engeli
+            not asiri_uzak_short
         ]
         
         long_say = sum(long_kosullar)
         short_say = sum(short_kosullar)
         
-        # ✅ SIKIŞMA ANALİZİ + ÖNCÜ SİNYAL BONUSU
         sikisma_skoru, sikisma_detay = sikisma_analizi(symbol)
         oncu_sinyal = False
         
@@ -499,10 +490,8 @@ def telegram_gonder(mesaj, deneme=3):
             )
             if r.status_code == 200:
                 return True
-            else:
-                print(f"⚠️ Telegram(MD) deneme {i+1}: {r.status_code}", flush=True)
         except Exception as e:
-            print(f"⚠️ Telegram(MD) deneme {i+1}: {e}", flush=True)
+            pass
         
         try:
             r = requests.post(
@@ -513,11 +502,10 @@ def telegram_gonder(mesaj, deneme=3):
             if r.status_code == 200:
                 return True
         except Exception as e:
-            print(f"⚠️ Telegram(düz) deneme {i+1}: {e}", flush=True)
+            pass
         
         time.sleep(2)
     
-    print(f"🚨 Telegram gönderilemedi: {mesaj[:80]}", flush=True)
     return False
 
 def market_kapat(symbol, miktar, yon):
@@ -554,11 +542,10 @@ def baslangic_temizligi():
         
         if mevcut:
             print(f"✅ Mevcut pozisyonlar: {mevcut}", flush=True)
-            print(f"✅ Bu pozisyonlar KORUNUYOR, kapatılmayacak.", flush=True)
-            telegram_gonder(f"ℹ️ BOT BAŞLATILDI\n\nMevcut pozisyonlar korunuyor:\n{mevcut}\n\nBot yönetmeye devam ediyor.")
+            telegram_gonder(f"ℹ️ BOT BAŞLATILDI\n\nMevcut pozisyonlar korunuyor:\n{mevcut}")
         else:
-            print("✅ Açık pozisyon yok, temiz başlangıç.", flush=True)
-            telegram_gonder("🟢 BOT BAŞLATILDI\nAçık pozisyon yok.")
+            print("✅ Açık pozisyon yok.", flush=True)
+            telegram_gonder("🟢 BOT BAŞLATILDI (v17.0 - Teyitli Çıkış)\nAçık pozisyon yok.")
     except Exception as e:
         print(f"⚠️ Başlangıç kontrolü: {e}", flush=True)
 
@@ -606,22 +593,19 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0):
         try:
             exchange.create_order(symbol, 'limit', kapat_yon, miktar, tp, {'reduceOnly': True})
             tp_ok = True
-            print(f"  ✅ TP emri koyuldu: {tp:.4f}", flush=True)
         except Exception as e:
-            print(f"  ⚠️ TP emri koyulamadı: {e}", flush=True)
+            print(f"  ⚠️ TP: {e}", flush=True)
         
         sl_ok = False
         try:
             exchange.create_order(symbol, 'stop', kapat_yon, miktar, sl, {'stopPrice': sl, 'reduceOnly': True})
             sl_ok = True
-            print(f"  ✅ SL emri koyuldu: {sl:.4f}", flush=True)
         except Exception as e:
-            print(f"  🚨 SL emri koyulamadı: {e}", flush=True)
+            print(f"  🚨 SL: {e}", flush=True)
         
         if not sl_ok:
-            print(f"  🚨 [ACİL] {symbol} SL emri koyulamadı, pozisyon kapatılıyor!", flush=True)
-            try:
-                market_kapat(symbol, miktar, yon)
+            print(f"  🚨 [ACİL] {symbol} SL koyulamadı, kapatılıyor!", flush=True)
+            try: market_kapat(symbol, miktar, yon)
             except: pass
             return False
         
@@ -653,7 +637,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0):
             f"🛑 SL: {sl:.4f}\n"
             f"💵 Marj: {gercek_marj:.2f} | Kaldıraç: {KALDIRAC}x\n"
             f"⭐ Skor: {sinyal_skoru}/12\n"
-            f"📌 Açık İşlem: {islem_no}/{MAKS_POZISYON}"
+            f"📌 Açık: {islem_no}/{MAKS_POZISYON}"
         )
         telegram_gonder(mesaj)
         return True
@@ -661,7 +645,93 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0):
         print(f"  ⚠️ Pozisyon {symbol}: {e}", flush=True)
         return False
 
-# ==================== MANUEL SL/TP KONTROLÜ ====================
+# ==================== TERS DÖNÜŞ SİNYALİ ====================
+def ters_donus_sinyali(symbol, yon):
+    """Teknik gösterge tabanlı ters dönüş sinyali."""
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=30)
+        if len(ohlcv) < 20: return False, ""
+        
+        df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        
+        rsi = ta.momentum.rsi(df['c'], window=14).iloc[-1]
+        macd = ta.trend.macd_diff(df['c'])
+        macd_son = macd.iloc[-1]
+        macd_onceki = macd.iloc[-2]
+        
+        ema9 = ta.trend.ema_indicator(df['c'], window=9).iloc[-1]
+        ema21 = ta.trend.ema_indicator(df['c'], window=21).iloc[-1]
+        fiyat = df['c'].iloc[-1]
+        
+        if yon == "LONG":
+            if rsi > 70 and macd_son < macd_onceki:
+                return True, f"RSI:{rsi:.0f}+MACD↓"
+            elif fiyat < ema9 and ema9 < ema21:
+                return True, f"EMA↓"
+        else:
+            if rsi < 30 and macd_son > macd_onceki:
+                return True, f"RSI:{rsi:.0f}+MACD↑"
+            elif fiyat > ema9 and ema9 > ema21:
+                return True, f"EMA↑"
+        
+        return False, ""
+    except:
+        return False, ""
+
+# ==================== FİYAT KIRILIM ANALİZİ ====================
+def kirilim_analizi(symbol, yon, giris_fiyati):
+    """Fiyat yapısı ve kırılım analizi (çıkış için)."""
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=20)
+        if len(ohlcv) < 15: return False, "", 0
+        
+        df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        
+        anlik_fiyat = df['c'].iloc[-1]
+        son_mum = df.iloc[-1]
+        
+        son10_dusuk = df['l'].iloc[-11:-1].min()
+        son10_yuksek = df['h'].iloc[-11:-1].max()
+        
+        son_mum_hacim = son_mum['v']
+        ort_hacim = df['v'].iloc[-20:].mean()
+        hacim_orani = son_mum_hacim / ort_hacim if ort_hacim > 0 else 1
+        
+        govde = abs(son_mum['c'] - son_mum['o'])
+        toplam_aralik = son_mum['h'] - son_mum['l']
+        govde_orani = govde / toplam_aralik if toplam_aralik > 0 else 0
+        mum_yonu = "YESIL" if son_mum['c'] > son_mum['o'] else "KIRMIZI"
+        
+        kirilim = False
+        sebep = ""
+        guc = 0
+        
+        if yon == "LONG":
+            if anlik_fiyat < son10_dusuk:
+                kirilim = True
+                guc += 2
+                sebep = f"↓KIRILIM(dip:{son10_dusuk:.4f})"
+            if mum_yonu == "KIRMIZI" and hacim_orani > 1.5 and govde_orani > 0.6:
+                kirilim = True
+                guc += 2
+                if sebep: sebep += "+"
+                sebep += f"HACİMLİ KIRMIZI({hacim_orani:.1f}x)"
+        else:
+            if anlik_fiyat > son10_yuksek:
+                kirilim = True
+                guc += 2
+                sebep = f"↑KIRILIM(tepe:{son10_yuksek:.4f})"
+            if mum_yonu == "YESIL" and hacim_orani > 1.5 and govde_orani > 0.6:
+                kirilim = True
+                guc += 2
+                if sebep: sebep += "+"
+                sebep += f"HACİMLİ YEŞİL({hacim_orani:.1f}x)"
+        
+        return kirilim, sebep, guc
+    except:
+        return False, "", 0
+
+# ==================== MANUEL SL/TP + TEYİTLİ ÇIKIŞ ====================
 def manuel_sl_tp_kontrol(aktif_borsa_map):
     global AKTIF_SISTEMLER
     
@@ -690,27 +760,95 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
             except:
                 contract_size = 1.0
         
+        if yon == "LONG":
+            kar = (anlik - giris) * miktar * contract_size
+            kar_yuzde = ((anlik - giris) / giris) * 100
+        else:
+            kar = (giris - anlik) * miktar * contract_size
+            kar_yuzde = ((giris - anlik) / giris) * 100
+        
+        # ========== 1. TEYİTLİ ÇIKIŞ (İki sinyal birden) ==========
+        ters_var, ters_sebep = ters_donus_sinyali(symbol, yon)
+        kirilim_var, kirilim_sebep, kirilim_guc = kirilim_analizi(symbol, yon, giris)
+        
+        cikis_karari = False
+        cikis_sebep = ""
+        cikis_tipi = ""
+        
+        if ters_var and kirilim_var:
+            cikis_karari = True
+            cikis_sebep = f"TEYİT: {ters_sebep} + {kirilim_sebep}"
+            cikis_tipi = "teyitli"
+        
+        # ========== 2. ACİL ÇIKIŞ (Flash crash/pump) ==========
+        if not cikis_karari:
+            try:
+                ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=3)
+                if len(ohlcv) >= 2:
+                    son_kapanis = ohlcv[-1][4]
+                    onceki_kapanis = ohlcv[-2][4]
+                    mum_degisim = ((son_kapanis - onceki_kapanis) / onceki_kapanis) * 100
+                    
+                    if kar_yuzde >= 0.3:
+                        if yon == "LONG" and mum_degisim < -1.5:
+                            cikis_karari = True
+                            cikis_sebep = f"ACİL: Ani düşüş %{mum_degisim:.2f}"
+                            cikis_tipi = "acil"
+                        elif yon == "SHORT" and mum_degisim > 1.5:
+                            cikis_karari = True
+                            cikis_sebep = f"ACİL: Ani yükseliş %{mum_degisim:.2f}"
+                            cikis_tipi = "acil"
+            except: pass
+        
+        if cikis_karari:
+            tum_emirleri_iptal(symbol)
+            durum = "KÂR" if kar > 0 else "ZARAR"
+            print(f"  🎯 [{cikis_tipi.upper()} ÇIKIŞ] {symbol} | {cikis_sebep} | {durum}: {kar:+.4f} USDT", flush=True)
+            
+            if market_kapat(symbol, miktar, yon):
+                with state_lock:
+                    if symbol in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[symbol]
+                    
+                    if cikis_tipi == "teyitli":
+                        cd_sure = COOLDOWN_TEYITLI_CIKIS
+                    elif cikis_tipi == "acil":
+                        cd_sure = COOLDOWN_ACIL_CIKIS
+                    else:
+                        cd_sure = COOLDOWN_VARSAYILAN
+                    
+                    COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + cd_sure), "son_yon": yon}
+                
+                sayaci_artir(kar > 0)
+                hafizayi_kaydet()
+                
+                emoji = "💰" if kar > 0 else "⚠️"
+                telegram_gonder(
+                    f"{emoji} {cikis_tipi.upper()} ÇIKIŞ\n"
+                    f"📌 {symbol} {yon}\n"
+                    f"📊 {cikis_sebep}\n"
+                    f"💵 {durum}: {kar:+.4f} USDT\n"
+                    f"⏳ Cooldown: {cd_sure//60} dk"
+                )
+            continue
+        
+        # ========== 3. SL KONTROLÜ ==========
         sl_tetiklendi = False
         if yon == "LONG" and anlik <= sl: sl_tetiklendi = True
         elif yon == "SHORT" and anlik >= sl: sl_tetiklendi = True
         
         if sl_tetiklendi:
             tum_emirleri_iptal(symbol)
-            if yon == "LONG":
-                kar = (anlik - giris) * miktar * contract_size
-            else:
-                kar = (giris - anlik) * miktar * contract_size
-            
-            print(f"  🛑 [MANUEL SL] {symbol} {yon} | PnL: {kar:.4f} USDT", flush=True)
+            print(f"  🛑 [SL] {symbol} {yon} | PnL: {kar:.4f} USDT", flush=True)
             if market_kapat(symbol, miktar, yon):
                 with state_lock:
                     if symbol in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[symbol]
-                    COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_SANIYE), "son_yon": yon}
+                    COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_SL), "son_yon": yon}
                 sayaci_artir(False)
                 hafizayi_kaydet()
-                telegram_gonder(f"🛑 SL\n📌 {symbol} {yon}\n💵 PnL: {kar:.4f} USDT")
+                telegram_gonder(f"🛑 SL\n📌 {symbol} {yon}\n💵 PnL: {kar:.4f} USDT\n⏳ Cooldown: {COOLDOWN_SL//60} dk")
             continue
         
+        # ========== 4. TP KONTROLÜ ==========
         if tp > 0:
             tp_tetiklendi = False
             if yon == "LONG" and anlik >= tp: tp_tetiklendi = True
@@ -718,19 +856,14 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
             
             if tp_tetiklendi:
                 tum_emirleri_iptal(symbol)
-                if yon == "LONG":
-                    kar = (anlik - giris) * miktar * contract_size
-                else:
-                    kar = (giris - anlik) * miktar * contract_size
-                
-                print(f"  💰 [MANUEL TP] {symbol} {yon} | PnL: +{kar:.4f} USDT", flush=True)
+                print(f"  💰 [TP] {symbol} {yon} | PnL: +{kar:.4f} USDT", flush=True)
                 if market_kapat(symbol, miktar, yon):
                     with state_lock:
                         if symbol in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[symbol]
-                        COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_SANIYE), "son_yon": yon}
+                        COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_TP), "son_yon": yon}
                     sayaci_artir(True)
                     hafizayi_kaydet()
-                    telegram_gonder(f"💰 TP\n📌 {symbol} {yon}\n💵 PnL: +{kar:.4f} USDT")
+                    telegram_gonder(f"💰 TP\n📌 {symbol} {yon}\n💵 PnL: +{kar:.4f} USDT\n⏳ Cooldown: {COOLDOWN_TP//60} dk")
 
 # ==================== BORSA KAPANIŞ TESPİTİ ====================
 def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
@@ -768,7 +901,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
                 sayaci_artir(karli)
                 
                 with state_lock:
-                    COIN_COOLDOWNLAR[eski] = {"zaman": float(time.time() + COOLDOWN_SANIYE), "son_yon": y}
+                    COIN_COOLDOWNLAR[eski] = {"zaman": float(time.time() + COOLDOWN_VARSAYILAN), "son_yon": y}
                     if eski in AKTIF_SISTEMLER:
                         del AKTIF_SISTEMLER[eski]
                 
@@ -787,11 +920,12 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
     
-    print("🚀 [BAŞLANGIÇ] v16.0 - Öncü Sinyal (Sıkışma) Modülü Aktif", flush=True)
+    print("🚀 [BAŞLANGIÇ] v17.0 - Teyitli Çıkış Modülü", flush=True)
     print(f"⚙️ Kaldıraç: {KALDIRAC}x | Marj: %{POZISYON_MARJ*100:.0f} | Max Poz: {MAKS_POZISYON}", flush=True)
     print(f"⚙️ SL: %{SL_YUZDE} | TP: %{TP_YUZDE}", flush=True)
     print(f"⚙️ 1-2. İşlem: {GEREKLI_SINYAL}+ | 3. İşlem: {GEREKLI_SINYAL_3_ISLEM}+", flush=True)
-    print(f"⚙️ Sıkışma Bonusu: +{SIKISMA_BONUS} (min sıkışma: {SIKISMA_MIN_SKOR}/4)", flush=True)
+    print(f"⚙️ Çıkış: Teknik+Kırılım teyidi VEYA Acil durum", flush=True)
+    print(f"⚙️ Break-even: YOK | Trailing: YOK", flush=True)
     
     try:
         exchange.load_markets()
@@ -871,10 +1005,10 @@ def ana_dongu():
             mevcut_acik = len(aktif_semboller_seti)
             if mevcut_acik >= 2:
                 bu_dongu_gerekli_skor = GEREKLI_SINYAL_3_ISLEM
-                print(f"\n🔍 SİNYAL TARAMA ({len(DINAMIK_LISTE)} coin) - 🔥 3. İŞLEM MODU ({bu_dongu_gerekli_skor}+ sinyal)", flush=True)
+                print(f"\n🔍 SİNYAL TARAMA ({len(DINAMIK_LISTE)} coin) - 🔥 3. İŞLEM MODU ({bu_dongu_gerekli_skor}+)", flush=True)
             else:
                 bu_dongu_gerekli_skor = GEREKLI_SINYAL
-                print(f"\n🔍 SİNYAL TARAMA ({len(DINAMIK_LISTE)} coin) - {mevcut_acik+1}. işlem ({bu_dongu_gerekli_skor}+ sinyal)", flush=True)
+                print(f"\n🔍 SİNYAL TARAMA ({len(DINAMIK_LISTE)} coin) - {mevcut_acik+1}. işlem ({bu_dongu_gerekli_skor}+)", flush=True)
             
             for symbol in DINAMIK_LISTE:
                 if not BOT_CALISIYOR_MU: break
@@ -984,7 +1118,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if p['symbol'] in AKTIF_SISTEMLER:
                     bilgi = AKTIF_SISTEMLER[p['symbol']]
                     sl_bilgi = f"\n  🛑 SL: `{bilgi.get('sl', 0):.4f}` | 💰 TP: `{bilgi.get('tp', 0):.4f}`"
-                    skor_bilgi = f"\n  ⭐ Sinyal Skoru: `{bilgi.get('sinyal_skoru', 0)}/12`"
+                    skor_bilgi = f"\n  ⭐ Skor: `{bilgi.get('sinyal_skoru', 0)}/12`"
                 
                 pos_detay += (
                     f"\n{emoji} `{sym}` | *{yon}* ({kaldirac_p}x){sl_bilgi}{skor_bilgi}\n"
@@ -997,7 +1131,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         
         mesaj = (
-            f"📊 *TREND BOT (v16.0 - Öncü Sinyal)*\n\n"
+            f"📊 *TREND BOT (v17.0 - Teyitli Çıkış)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}` {'🔥' if len(pos) >= MAKS_POZISYON else ''}"
@@ -1021,7 +1155,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Trend Bot (v16.0 - Öncü Sinyal) aktif!")
+    await update.message.reply_text("🟢 Trend Bot (v17.0) aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
