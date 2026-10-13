@@ -176,7 +176,6 @@ COIN_COOLDOWNLAR = kalici.get("cooldownlar", {})
 
 # ==================== SIKIŞMA ANALİZİ ====================
 def sikisma_analizi(symbol):
-    """Pump/Dump öncesi sıkışma tespiti."""
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
         if len(ohlcv) < 25:
@@ -472,7 +471,6 @@ def order_flow_analiz(symbol):
         long_say = sum(long_kosullar)
         short_say = sum(short_kosullar)
         
-        # SIKIŞMA ANALİZİ + BONUS
         sikisma_skoru, sikisma_detay = sikisma_analizi(symbol)
         oncu_sinyal = False
         
@@ -509,10 +507,11 @@ def order_flow_analiz(symbol):
     except Exception as e:
         return None, {"hata": str(e)}
 
-# ==================== TELEGRAM + KUYRUK SİSTEMİ ====================
+# ==================== TELEGRAM ====================
 def telegram_direkt_gonder(mesaj, deneme=3):
-    """Anlık gönderim dener (Markdown + fallback)"""
+    """Markdown + fallback düz metin"""
     if not TELEGRAM_TOKEN or not CHAT_ID:
+        print("⚠️ Telegram token/chat_id eksik", flush=True)
         return False
     
     for i in range(deneme):
@@ -525,9 +524,12 @@ def telegram_direkt_gonder(mesaj, deneme=3):
             )
             if r.status_code == 200:
                 return True
-        except: pass
+            else:
+                print(f"⚠️ MD hatası (deneme {i+1}): {r.status_code} - {r.text[:150]}", flush=True)
+        except Exception as e:
+            print(f"⚠️ MD Exception: {e}", flush=True)
         
-        # Düz metin
+        # Düz metin fallback
         try:
             r = requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
@@ -535,8 +537,12 @@ def telegram_direkt_gonder(mesaj, deneme=3):
                 timeout=15
             )
             if r.status_code == 200:
+                print(f"✅ Düz metin olarak gönderildi", flush=True)
                 return True
-        except: pass
+            else:
+                print(f"⚠️ Düz metin hatası (deneme {i+1}): {r.status_code}", flush=True)
+        except Exception as e:
+            print(f"⚠️ Düz metin Exception: {e}", flush=True)
         
         time.sleep(2)
     
@@ -544,14 +550,13 @@ def telegram_direkt_gonder(mesaj, deneme=3):
 
 
 def telegram_kuyruga_ekle(mesaj):
-    """Mesajı Supabase kuyruğuna ekle"""
     try:
         supabase.table("telegram_kuyruk").insert({
             "mesaj": mesaj,
             "deneme_sayisi": 0,
             "gonderildi": False
         }).execute()
-        print(f"📬 [KUYRUK] Mesaj kuyruğa eklendi", flush=True)
+        print(f"📬 [KUYRUK] Eklendi", flush=True)
         return True
     except Exception as e:
         print(f"⚠️ [KUYRUK] Ekleme hatası: {e}", flush=True)
@@ -561,34 +566,38 @@ def telegram_kuyruga_ekle(mesaj):
 def telegram_kuyruk_isle():
     """Kuyruktaki bekleyen mesajları gönder"""
     try:
-        response = supabase.table("telegram_kuyruk").select("*").eq("gonderildi", False).order("id").limit(5).execute()
+        response = supabase.table("telegram_kuyruk").select("*").eq("gonderildi", False).order("id").limit(10).execute()
         if not response.data:
-            return
+            return 0
         
+        gonderilen = 0
         for kayit in response.data:
             mesaj = kayit['mesaj']
             kayit_id = kayit['id']
             deneme = kayit.get('deneme_sayisi', 0) or 0
             
             if deneme >= 10:
-                # 10 deneme sonrası vazgeç
                 supabase.table("telegram_kuyruk").update({"gonderildi": True}).eq("id", kayit_id).execute()
-                print(f"⚠️ [KUYRUK] Mesaj {kayit_id} 10 denemede gönderilemedi, atlandı", flush=True)
+                print(f"⚠️ [KUYRUK] Mesaj {kayit_id} 10 denemede atlandı", flush=True)
                 continue
             
             basarili = telegram_direkt_gonder(mesaj, deneme=2)
             if basarili:
                 supabase.table("telegram_kuyruk").update({"gonderildi": True}).eq("id", kayit_id).execute()
                 print(f"✅ [KUYRUK] Mesaj {kayit_id} gönderildi", flush=True)
+                gonderilen += 1
             else:
                 supabase.table("telegram_kuyruk").update({"deneme_sayisi": deneme + 1}).eq("id", kayit_id).execute()
                 print(f"⏳ [KUYRUK] Mesaj {kayit_id} deneme {deneme+1}/10", flush=True)
+        
+        return gonderilen
     except Exception as e:
         print(f"⚠️ [KUYRUK] İşleme hatası: {e}", flush=True)
+        return 0
 
 
 def telegram_kritik(mesaj):
-    """Kritik mesaj - hemen gönder, başarısız olursa kuyruğa ekle"""
+    """Hemen gönder, olmazsa kuyruğa ekle"""
     basarili = telegram_direkt_gonder(mesaj, deneme=3)
     if not basarili:
         telegram_kuyruga_ekle(mesaj)
@@ -597,8 +606,18 @@ def telegram_kritik(mesaj):
 
 
 def telegram_gonder(mesaj, deneme=3):
-    """Genel amaçlı - direkt gönderir, olmazsa kuyruğa ekler"""
     return telegram_kritik(mesaj)
+
+
+def kuyruk_worker():
+    """Ayrı thread - her 30 saniyede kuyruğu işle"""
+    while True:
+        try:
+            if BOT_CALISIYOR_MU:
+                telegram_kuyruk_isle()
+        except Exception as e:
+            print(f"⚠️ [KUYRUK WORKER] {e}", flush=True)
+        time.sleep(30)
 
 
 def market_kapat(symbol, miktar, yon):
@@ -635,10 +654,10 @@ def baslangic_temizligi():
         
         if mevcut:
             print(f"✅ Mevcut pozisyonlar: {mevcut}", flush=True)
-            telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v19.0)\n\nMevcut pozisyonlar korunuyor:\n{mevcut}")
+            telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v19.1)\n\nMevcut pozisyonlar korunuyor:\n{mevcut}")
         else:
             print("✅ Açık pozisyon yok.", flush=True)
-            telegram_kritik("🟢 BOT BAŞLATILDI (v19.0)\nAçık pozisyon yok.")
+            telegram_kritik("🟢 BOT BAŞLATILDI (v19.1)\nAçık pozisyon yok.")
     except Exception as e:
         print(f"⚠️ Başlangıç kontrolü: {e}", flush=True)
 
@@ -738,12 +757,8 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0):
         print(f"  ⚠️ Pozisyon {symbol}: {e}", flush=True)
         return False
 
-# ==================== SL/TP KONTROLÜ (SADELEŞTİRİLDİ) ====================
+# ==================== SL/TP KONTROLÜ ====================
 def manuel_sl_tp_kontrol(aktif_borsa_map):
-    """
-    ✅ v19.0: Sadece SL ve TP kontrolü.
-    Teyitli çıkış, acil çıkış, erken çıkış YOK.
-    """
     global AKTIF_SISTEMLER
     
     with state_lock:
@@ -773,13 +788,12 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
             except:
                 contract_size = 1.0
         
-        # Kâr/Zarar hesapla
         if yon == "LONG":
             kar = (anlik - giris) * miktar * contract_size
         else:
             kar = (giris - anlik) * miktar * contract_size
         
-        # ========== SL KONTROLÜ ==========
+        # SL
         sl_tetiklendi = False
         if yon == "LONG" and anlik <= sl: sl_tetiklendi = True
         elif yon == "SHORT" and anlik >= sl: sl_tetiklendi = True
@@ -801,7 +815,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
                 )
             continue
         
-        # ========== TP KONTROLÜ ==========
+        # TP
         if tp > 0:
             tp_tetiklendi = False
             if yon == "LONG" and anlik >= tp: tp_tetiklendi = True
@@ -825,7 +839,6 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
 
 # ==================== BORSA KAPANIŞ TESPİTİ ====================
 def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
-    """Borsa tarafında otomatik kapanan pozisyonları yakala (SL/TP emirleri tetiklenmiş)"""
     global AKTIF_SISTEMLER
     
     try:
@@ -879,12 +892,12 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
     
-    print("🚀 [BAŞLANGIÇ] v19.0 - Sadece SL/TP + Telegram Kuyruk Sistemi", flush=True)
+    print("🚀 [BAŞLANGIÇ] v19.1 - Kuyruk Worker + Full Bildirim", flush=True)
     print(f"⚙️ Kaldıraç: {KALDIRAC}x | Marj: %{POZISYON_MARJ*100:.0f} | Max Poz: {MAKS_POZISYON}", flush=True)
     print(f"⚙️ SL: %{SL_YUZDE} | TP: %{TP_YUZDE}", flush=True)
     print(f"⚙️ 1-2. İşlem: {GEREKLI_SINYAL}+ | 3. İşlem: {GEREKLI_SINYAL_3_ISLEM}+", flush=True)
-    print(f"⚙️ Erken Çıkış: DEVRE DIŞI | Sadece SL/TP", flush=True)
-    print(f"⚙️ Telegram: Direkt + Supabase Kuyruk", flush=True)
+    print(f"⚙️ Erken Çıkış: YOK | Sadece SL/TP", flush=True)
+    print(f"⚙️ Telegram: Direkt + Supabase Kuyruk + Worker Thread", flush=True)
     
     try:
         exchange.load_markets()
@@ -906,9 +919,6 @@ def ana_dongu():
             print(f"\n{'='*60}", flush=True)
             print(f"🔄 [DÖNGÜ #{dongu}] {datetime.now().strftime('%H:%M:%S')}", flush=True)
             print(f"{'='*60}", flush=True)
-            
-            # ✅ KUYRUK İŞLE
-            telegram_kuyruk_isle()
             
             dinamik_liste_guncelle()
             
@@ -1093,7 +1103,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         
         mesaj = (
-            f"📊 *TREND BOT (v19.0)*\n\n"
+            f"📊 *TREND BOT (v19.1)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}` {'🔥' if len(pos) >= MAKS_POZISYON else ''}"
@@ -1117,7 +1127,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Trend Bot (v19.0) aktif!")
+    await update.message.reply_text("🟢 Trend Bot (v19.1) aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -1164,14 +1174,20 @@ async def kuyruk_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = supabase.table("telegram_kuyruk").select("*").eq("gonderildi", False).execute()
         bekleyen = len(response.data) if response.data else 0
         
-        # Gönderilmiş son 5
         response2 = supabase.table("telegram_kuyruk").select("*").eq("gonderildi", True).order("id", desc=True).limit(5).execute()
         gonderilmis = len(response2.data) if response2.data else 0
+        
+        # İlk bekleyen mesajı göster
+        ilk_mesaj = ""
+        if bekleyen > 0 and response.data:
+            ilk = response.data[0]
+            ilk_mesaj = f"\n\n📝 *İlk Bekleyen:*\n`{ilk['mesaj'][:100]}...`\nDeneme: {ilk.get('deneme_sayisi', 0)}"
         
         await update.message.reply_text(
             f"📬 *TELEGRAM KUYRUK*\n\n"
             f"⏳ Bekleyen: `{bekleyen}`\n"
-            f"✅ Gönderilmiş (son 5): `{gonderilmis}`",
+            f"✅ Gönderilmiş (son 5): `{gonderilmis}`"
+            f"{ilk_mesaj}",
             parse_mode='Markdown'
         )
     except Exception as e:
@@ -1181,6 +1197,11 @@ async def kuyruk_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
+    
+    # Kuyruk worker thread
+    kuyruk_thread = threading.Thread(target=kuyruk_worker, daemon=True)
+    kuyruk_thread.start()
+    print("🧵 [KUYRUK WORKER] Thread başlatıldı (30s interval)", flush=True)
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     try:
