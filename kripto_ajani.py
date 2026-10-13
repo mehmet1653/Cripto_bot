@@ -83,8 +83,8 @@ MIN_FIYAT = 1.0
 MAX_FIYAT = 300.0
 
 HOT_MOVER_YUZDE = 5.0
-HOT_MOVER_MAX = 2       # ✅ 3 → 2 (sıkışanlara yer açtık)
-SIKISAN_MAX = 4         # ✅ 3 → 4 (1 tık artırıldı)
+HOT_MOVER_MAX = 2
+SIKISAN_MAX = 4
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
@@ -226,7 +226,7 @@ def sikisma_analizi(symbol):
     except Exception as e:
         return 0, {}
 
-# ==================== DİNAMİK COIN HAVUZU (GÜNCELLENDİ - SIKIŞANLAR BAŞTA) ====================
+# ==================== DİNAMİK COIN HAVUZU ====================
 def dinamik_liste_guncelle(zorla=False):
     global DINAMIK_LISTE, SON_LISTE_GUNCELLEME
     
@@ -265,7 +265,6 @@ def dinamik_liste_guncelle(zorla=False):
                 except:
                     continue
                 
-                # SIKIŞAN TARAMASI
                 if abs_degisim < MIN_DEGISIM_YUZDE:
                     sikisma_skoru, _ = sikisma_analizi(sym)
                     if sikisma_skoru >= SIKISMA_MIN_SKOR:
@@ -296,12 +295,10 @@ def dinamik_liste_guncelle(zorla=False):
         normal_adaylar.sort(key=lambda x: x['skor'], reverse=True)
         sikisanlar.sort(key=lambda x: x['skor'], reverse=True)
         
-        # ✅ YENİ SIRALAMA: SIKIŞANLAR BAŞTA
         sikisan_secim = sikisanlar[:SIKISAN_MAX]
         hot_secim = hot_movers[:HOT_MOVER_MAX]
         normal_secim = normal_adaylar[:LISTE_BOYUT - len(sikisan_secim) - len(hot_secim)]
         
-        # ✅ SIKIŞAN → HOT → NORMAL
         tum_secim = sikisan_secim + hot_secim + normal_secim
         
         yeni_liste = [a['symbol'] for a in tum_secim]
@@ -452,7 +449,7 @@ def order_flow_analiz(symbol):
             "fiyat_ema9_fark": round(fiyat_ema9_fark, 2)
         }
         
-        if mfi < MFI_ASIRI_SATIM: return None, {**detay, "sebep": f"MFI DİP ({mfi:.0f})"}
+        if mfi < MFI_ASIRI_SATIM: return None, {**detay, "sebep": f"MFI DIP ({mfi:.0f})"}
         if mfi > MFI_ASIRI_ALIM: return None, {**detay, "sebep": f"MFI TEPE ({mfi:.0f})"}
         if hacim_oran < HACIM_ESIK: return None, {**detay, "sebep": f"HACIM ZAYIF ({hacim_oran:.2f}x)"}
         
@@ -498,9 +495,10 @@ def order_flow_analiz(symbol):
                 short_say = min(12, short_say + SIKISMA_EKSTRA_BONUS)
                 oncu_sinyal = True
         
-        sebep_str = f"L:{long_say}/12 S:{short_say}/12 TF[{tf15}/{tf60}/{tf240}] BTC:{btc_yon} Swing:{swing} Sıkışma:{sikisma_skoru}/4"
+        # ✅ DÜZELTME: [ ] yerine ( ) kullanıldı (Telegram Markdown hatası çözümü)
+        sebep_str = f"L:{long_say}/12 S:{short_say}/12 TF({tf15}/{tf60}/{tf240}) BTC:{btc_yon} Swing:{swing} Sikisma:{sikisma_skoru}/4"
         if oncu_sinyal:
-            sebep_str = f"🚀ÖNCÜ! {sebep_str}"
+            sebep_str = f"ONCU! {sebep_str}"
         
         detay["sikisma_skoru"] = sikisma_skoru
         detay["sikisma_detay"] = sikisma_detay
@@ -515,13 +513,18 @@ def order_flow_analiz(symbol):
     except Exception as e:
         return None, {"hata": str(e)}
 
-# ==================== TELEGRAM ====================
+# ==================== TELEGRAM (DÜZELTİLDİ) ====================
 def telegram_gonder(mesaj, deneme=5):
+    """
+    Telegram mesaj gönder.
+    Önce Markdown ile dener, başarısız olursa düz metin gönderir.
+    """
     if not TELEGRAM_TOKEN or not CHAT_ID:
         print("⚠️ Telegram token/chat_id eksik", flush=True)
         return False
     
     for i in range(deneme):
+        # 1. DENEME: Markdown ile
         try:
             r = requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
@@ -531,9 +534,24 @@ def telegram_gonder(mesaj, deneme=5):
             if r.status_code == 200:
                 return True
             else:
-                print(f"⚠️ Telegram HTTP {r.status_code} (deneme {i+1}): {r.text[:150]}", flush=True)
+                print(f"⚠️ Telegram Markdown hatası (deneme {i+1}): {r.status_code} - {r.text[:200]}", flush=True)
         except Exception as e:
-            print(f"⚠️ Telegram Exception (deneme {i+1}): {e}", flush=True)
+            print(f"⚠️ Telegram Markdown Exception (deneme {i+1}): {e}", flush=True)
+        
+        # 2. DENEME: Düz metin (Markdown olmadan)
+        try:
+            r = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                json={"chat_id": CHAT_ID, "text": mesaj},
+                timeout=15
+            )
+            if r.status_code == 200:
+                print(f"✅ Telegram düz metin olarak gönderildi", flush=True)
+                return True
+            else:
+                print(f"⚠️ Telegram düz metin hatası (deneme {i+1}): {r.status_code} - {r.text[:200]}", flush=True)
+        except Exception as e:
+            print(f"⚠️ Telegram düz metin Exception (deneme {i+1}): {e}", flush=True)
         
         time.sleep(3)
     
@@ -580,10 +598,10 @@ def baslangic_temizligi():
         
         if mevcut:
             print(f"✅ Mevcut pozisyonlar: {mevcut}", flush=True)
-            telegram_gonder(f"ℹ️ BOT BAŞLATILDI (v18.1)\n\nMevcut pozisyonlar korunuyor:\n{mevcut}")
+            telegram_gonder(f"ℹ️ BOT BAŞLATILDI (v18.2)\n\nMevcut pozisyonlar korunuyor:\n{mevcut}")
         else:
             print("✅ Açık pozisyon yok.", flush=True)
-            telegram_gonder("🟢 BOT BAŞLATILDI (v18.1)\nAçık pozisyon yok.")
+            telegram_gonder("🟢 BOT BAŞLATILDI (v18.2)\nAçık pozisyon yok.")
     except Exception as e:
         print(f"⚠️ Başlangıç kontrolü: {e}", flush=True)
 
@@ -659,7 +677,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0):
         print(f"  ✅ [AÇILDI] {symbol} {yon} @ {anlik_fiyat} | Skor: {sinyal_skoru}/12", flush=True)
         
         islem_no = len(AKTIF_SISTEMLER)
-        if "🚀ÖNCÜ" in sebep:
+        if "ONCU" in sebep:
             etiket = "🚀 ÖNCÜ SİNYAL"
         elif sinyal_skoru >= GEREKLI_SINYAL_3_ISLEM:
             etiket = "🔥 GÜÇLÜ SİNYAL"
@@ -702,14 +720,14 @@ def ters_donus_sinyali(symbol, yon):
         
         if yon == "LONG":
             if rsi > 70 and macd_son < macd_onceki:
-                return True, f"RSI:{rsi:.0f}+MACD↓"
+                return True, f"RSI:{rsi:.0f}+MACD dusus"
             elif fiyat < ema9 and ema9 < ema21:
-                return True, f"EMA↓"
+                return True, f"EMA dusus"
         else:
             if rsi < 30 and macd_son > macd_onceki:
-                return True, f"RSI:{rsi:.0f}+MACD↑"
+                return True, f"RSI:{rsi:.0f}+MACD yukselis"
             elif fiyat > ema9 and ema9 > ema21:
-                return True, f"EMA↑"
+                return True, f"EMA yukselis"
         
         return False, ""
     except:
@@ -746,22 +764,22 @@ def kirilim_analizi(symbol, yon, giris_fiyati):
             if anlik_fiyat < son10_dusuk:
                 kirilim = True
                 guc += 2
-                sebep = f"↓KIRILIM(dip:{son10_dusuk:.4f})"
+                sebep = f"KIRILIM-dip({son10_dusuk:.4f})"
             if mum_yonu == "KIRMIZI" and hacim_orani > 1.5 and govde_orani > 0.6:
                 kirilim = True
                 guc += 2
                 if sebep: sebep += "+"
-                sebep += f"HACİMLİ KIRMIZI({hacim_orani:.1f}x)"
+                sebep += f"HACIMLI-KIRMIZI({hacim_orani:.1f}x)"
         else:
             if anlik_fiyat > son10_yuksek:
                 kirilim = True
                 guc += 2
-                sebep = f"↑KIRILIM(tepe:{son10_yuksek:.4f})"
+                sebep = f"KIRILIM-tepe({son10_yuksek:.4f})"
             if mum_yonu == "YESIL" and hacim_orani > 1.5 and govde_orani > 0.6:
                 kirilim = True
                 guc += 2
                 if sebep: sebep += "+"
-                sebep += f"HACİMLİ YEŞİL({hacim_orani:.1f}x)"
+                sebep += f"HACIMLI-YESIL({hacim_orani:.1f}x)"
         
         return kirilim, sebep, guc
     except:
@@ -813,7 +831,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
         
         if ters_var and kirilim_var:
             cikis_karari = True
-            cikis_sebep = f"TEYİT: {ters_sebep} + {kirilim_sebep}"
+            cikis_sebep = f"TEYIT: {ters_sebep} + {kirilim_sebep}"
             cikis_tipi = "teyitli"
         
         # ACİL ÇIKIŞ
@@ -828,11 +846,11 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
                     if kar_yuzde >= 0.3:
                         if yon == "LONG" and mum_degisim < -1.5:
                             cikis_karari = True
-                            cikis_sebep = f"ACİL: Ani düşüş %{mum_degisim:.2f}"
+                            cikis_sebep = f"ACIL: Ani dusus %{mum_degisim:.2f}"
                             cikis_tipi = "acil"
                         elif yon == "SHORT" and mum_degisim > 1.5:
                             cikis_karari = True
-                            cikis_sebep = f"ACİL: Ani yükseliş %{mum_degisim:.2f}"
+                            cikis_sebep = f"ACIL: Ani yukselis %{mum_degisim:.2f}"
                             cikis_tipi = "acil"
             except: pass
         
@@ -965,12 +983,13 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
     
-    print("🚀 [BAŞLANGIÇ] v18.1 - Sıkışanlar Başta", flush=True)
+    print("🚀 [BAŞLANGIÇ] v18.2 - Telegram Fix + Markdown Fallback", flush=True)
     print(f"⚙️ Kaldıraç: {KALDIRAC}x | Marj: %{POZISYON_MARJ*100:.0f} | Max Poz: {MAKS_POZISYON}", flush=True)
     print(f"⚙️ SL: %{SL_YUZDE} | TP: %{TP_YUZDE}", flush=True)
     print(f"⚙️ 1-2. İşlem: {GEREKLI_SINYAL}+ | 3. İşlem: {GEREKLI_SINYAL_3_ISLEM}+", flush=True)
     print(f"⚙️ Liste Sırası: {SIKISAN_MAX} SIKIŞAN + {HOT_MOVER_MAX} HOT + {LISTE_BOYUT - SIKISAN_MAX - HOT_MOVER_MAX} NORMAL", flush=True)
     print(f"⚙️ Sıkışma Bonusu: +{SIKISMA_BONUS} (3/4) | +{SIKISMA_BONUS+SIKISMA_EKSTRA_BONUS} (4/4)", flush=True)
+    print(f"⚙️ Telegram: Markdown + Düz metin fallback", flush=True)
     
     try:
         exchange.load_markets()
@@ -1087,7 +1106,7 @@ def ana_dongu():
                 oncu = detay.get('oncu_sinyal', False)
                 oncu_etiket = "🚀" if oncu else "  "
                 
-                print(f"  {oncu_etiket} {sym_kisa}: MFI:{mfi:.0f} CMF:{cmf:.2f} Hacim:{hacim:.2f}x | TF[15m:{tf15} 1h:{tf60} 4h:{tf240}] | BTC:{btc} | Sıkışma:{sikisma}/4 | {detay.get('sebep', '')}", flush=True)
+                print(f"  {oncu_etiket} {sym_kisa}: MFI:{mfi:.0f} CMF:{cmf:.2f} Hacim:{hacim:.2f}x | TF(15m:{tf15} 1h:{tf60} 4h:{tf240}) | BTC:{btc} | Sikisma:{sikisma}/4 | {detay.get('sebep', '')}", flush=True)
                 
                 if karar is None:
                     continue
@@ -1176,7 +1195,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         
         mesaj = (
-            f"📊 *TREND BOT (v18.1)*\n\n"
+            f"📊 *TREND BOT (v18.2)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}` {'🔥' if len(pos) >= MAKS_POZISYON else ''}"
@@ -1200,7 +1219,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Trend Bot (v18.1) aktif!")
+    await update.message.reply_text("🟢 Trend Bot (v18.2) aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
