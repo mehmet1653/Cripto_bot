@@ -91,10 +91,10 @@ state_lock = threading.Lock()
 
 # Risk yönetimi
 KALDIRAC = 5
-POZISYON_MARJ = 0.10
+POZISYON_MARJ = 0.20
 MAKS_POZISYON = 3
 SL_YUZDE = 1.5
-TP_YUZDE = 3.0
+TP_YUZDE = 2.0       # ✅ GÜNCELLENDİ: 3.0 → 2.0
 TOPLAM_ZARAR_LIMIT = 2.5
 
 # Cooldown süreleri
@@ -111,8 +111,8 @@ EMA_TREND_ESIK = 0.05
 MFI_ASIRI_SATIM = 15
 MFI_ASIRI_ALIM = 85
 
-# Dinamik sinyal eşiği
-GEREKLI_SINYAL = 6
+# Tüm işlemler için sinyal barajı
+GEREKLI_SINYAL = 10
 GEREKLI_SINYAL_3_ISLEM = 10
 
 # Öncü sinyal (sıkışma)
@@ -509,13 +509,11 @@ def order_flow_analiz(symbol):
 
 # ==================== TELEGRAM ====================
 def telegram_direkt_gonder(mesaj, deneme=3):
-    """Markdown + fallback düz metin"""
     if not TELEGRAM_TOKEN or not CHAT_ID:
         print("⚠️ Telegram token/chat_id eksik", flush=True)
         return False
     
     for i in range(deneme):
-        # Markdown
         try:
             r = requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
@@ -529,7 +527,6 @@ def telegram_direkt_gonder(mesaj, deneme=3):
         except Exception as e:
             print(f"⚠️ MD Exception: {e}", flush=True)
         
-        # Düz metin fallback
         try:
             r = requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
@@ -539,8 +536,6 @@ def telegram_direkt_gonder(mesaj, deneme=3):
             if r.status_code == 200:
                 print(f"✅ Düz metin olarak gönderildi", flush=True)
                 return True
-            else:
-                print(f"⚠️ Düz metin hatası (deneme {i+1}): {r.status_code}", flush=True)
         except Exception as e:
             print(f"⚠️ Düz metin Exception: {e}", flush=True)
         
@@ -564,7 +559,6 @@ def telegram_kuyruga_ekle(mesaj):
 
 
 def telegram_kuyruk_isle():
-    """Kuyruktaki bekleyen mesajları gönder"""
     try:
         response = supabase.table("telegram_kuyruk").select("*").eq("gonderildi", False).order("id").limit(10).execute()
         if not response.data:
@@ -597,7 +591,6 @@ def telegram_kuyruk_isle():
 
 
 def telegram_kritik(mesaj):
-    """Hemen gönder, olmazsa kuyruğa ekle"""
     basarili = telegram_direkt_gonder(mesaj, deneme=3)
     if not basarili:
         telegram_kuyruga_ekle(mesaj)
@@ -610,7 +603,6 @@ def telegram_gonder(mesaj, deneme=3):
 
 
 def kuyruk_worker():
-    """Ayrı thread - her 30 saniyede kuyruğu işle"""
     while True:
         try:
             if BOT_CALISIYOR_MU:
@@ -654,10 +646,10 @@ def baslangic_temizligi():
         
         if mevcut:
             print(f"✅ Mevcut pozisyonlar: {mevcut}", flush=True)
-            telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v19.1)\n\nMevcut pozisyonlar korunuyor:\n{mevcut}")
+            telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v20.1)\n\nMarj: %20 | Sinyal: 10+\nTP: %2.0 | SL: %1.5\n\nMevcut pozisyonlar korunuyor:\n{mevcut}")
         else:
             print("✅ Açık pozisyon yok.", flush=True)
-            telegram_kritik("🟢 BOT BAŞLATILDI (v19.1)\nAçık pozisyon yok.")
+            telegram_kritik("🟢 BOT BAŞLATILDI (v20.1)\nMarj: %20 | Sinyal: 10+\nTP: %2.0 | SL: %1.5\nAçık pozisyon yok.")
     except Exception as e:
         print(f"⚠️ Başlangıç kontrolü: {e}", flush=True)
 
@@ -730,15 +722,13 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0):
             }
         
         hafizayi_kaydet()
-        print(f"  ✅ [AÇILDI] {symbol} {yon} @ {anlik_fiyat} | Skor: {sinyal_skoru}/12", flush=True)
+        print(f"  ✅ [AÇILDI] {symbol} {yon} @ {anlik_fiyat} | Skor: {sinyal_skoru}/12 | Marj: {gercek_marj:.2f}", flush=True)
         
         islem_no = len(AKTIF_SISTEMLER)
         if "ONCU" in sebep:
             etiket = "🚀 ÖNCÜ SİNYAL"
-        elif sinyal_skoru >= GEREKLI_SINYAL_3_ISLEM:
-            etiket = "🔥 GÜÇLÜ SİNYAL"
         else:
-            etiket = "🎯 SİNYAL"
+            etiket = "🔥 GÜÇLÜ SİNYAL"
         
         mesaj = (
             f"{etiket} ({islem_no}. İşlem)\n"
@@ -793,7 +783,6 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
         else:
             kar = (giris - anlik) * miktar * contract_size
         
-        # SL
         sl_tetiklendi = False
         if yon == "LONG" and anlik <= sl: sl_tetiklendi = True
         elif yon == "SHORT" and anlik >= sl: sl_tetiklendi = True
@@ -815,7 +804,6 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
                 )
             continue
         
-        # TP
         if tp > 0:
             tp_tetiklendi = False
             if yon == "LONG" and anlik >= tp: tp_tetiklendi = True
@@ -892,10 +880,10 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
     
-    print("🚀 [BAŞLANGIÇ] v19.1 - Kuyruk Worker + Full Bildirim", flush=True)
+    print("🚀 [BAŞLANGIÇ] v20.1 - TP %2.0 | Marj %20 | Sinyal 10+", flush=True)
     print(f"⚙️ Kaldıraç: {KALDIRAC}x | Marj: %{POZISYON_MARJ*100:.0f} | Max Poz: {MAKS_POZISYON}", flush=True)
-    print(f"⚙️ SL: %{SL_YUZDE} | TP: %{TP_YUZDE}", flush=True)
-    print(f"⚙️ 1-2. İşlem: {GEREKLI_SINYAL}+ | 3. İşlem: {GEREKLI_SINYAL_3_ISLEM}+", flush=True)
+    print(f"⚙️ SL: %{SL_YUZDE} | TP: %{TP_YUZDE} | R:R = 1:{TP_YUZDE/SL_YUZDE:.2f}", flush=True)
+    print(f"⚙️ TÜM İŞLEMLER İÇİN SİNYAL BARAJI: {GEREKLI_SINYAL}+", flush=True)
     print(f"⚙️ Erken Çıkış: YOK | Sadece SL/TP", flush=True)
     print(f"⚙️ Telegram: Direkt + Supabase Kuyruk + Worker Thread", flush=True)
     
@@ -974,13 +962,7 @@ def ana_dongu():
                 time.sleep(10)
                 continue
             
-            mevcut_acik = len(aktif_semboller_seti)
-            if mevcut_acik >= 2:
-                bu_dongu_gerekli_skor = GEREKLI_SINYAL_3_ISLEM
-                print(f"\n🔍 SİNYAL TARAMA ({len(DINAMIK_LISTE)} coin) - 🔥 3. İŞLEM MODU ({bu_dongu_gerekli_skor}+)", flush=True)
-            else:
-                bu_dongu_gerekli_skor = GEREKLI_SINYAL
-                print(f"\n🔍 SİNYAL TARAMA ({len(DINAMIK_LISTE)} coin) - {mevcut_acik+1}. işlem ({bu_dongu_gerekli_skor}+)", flush=True)
+            print(f"\n🔍 SİNYAL TARAMA ({len(DINAMIK_LISTE)} coin) - TÜM İŞLEMLER İÇİN {GEREKLI_SINYAL}+", flush=True)
             
             for symbol in DINAMIK_LISTE:
                 if not BOT_CALISIYOR_MU: break
@@ -1019,16 +1001,11 @@ def ana_dongu():
                 if karar is None:
                     continue
                 
-                acik_sayisi = len(aktif_semboller_seti)
+                if skor < GEREKLI_SINYAL:
+                    print(f"  ⏭️ Sinyal ZAYIF (Skor: {skor}/12 < {GEREKLI_SINYAL}). Atlanıyor.", flush=True)
+                    continue
                 
-                if acik_sayisi >= 2:
-                    if skor < GEREKLI_SINYAL_3_ISLEM:
-                        print(f"  ⏭️ 3. işlem için sinyal ZAYIF (Skor: {skor}/12 < {GEREKLI_SINYAL_3_ISLEM}). Atlanıyor.", flush=True)
-                        continue
-                    else:
-                        print(f"  🔥 3. İŞLEM AÇILIYOR! GÜÇLÜ SİNYAL: {skor}/12", flush=True)
-                else:
-                    print(f"  🎯 [SİNYAL] {sym_kisa}: {karar} (Skor: {skor}/12) → {acik_sayisi+1}. işlem", flush=True)
+                print(f"  🔥 İŞLEM AÇILIYOR! Skor: {skor}/12 → {len(aktif_semboller_seti)+1}. işlem", flush=True)
                 
                 ticker = exchange.fetch_ticker(symbol)
                 anlik_fiyat = float(ticker['last'])
@@ -1103,7 +1080,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         
         mesaj = (
-            f"📊 *TREND BOT (v19.1)*\n\n"
+            f"📊 *TREND BOT (v20.1)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}` {'🔥' if len(pos) >= MAKS_POZISYON else ''}"
@@ -1111,8 +1088,9 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📋 *Coin Havuzu:*\n{liste_str}\n\n"
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
             f"📈 Başarı: `%{oran:.1f}`\n"
-            f"🎯 Sinyal: `1-2. işlem {GEREKLI_SINYAL}+` | `3. işlem {GEREKLI_SINYAL_3_ISLEM}+`\n"
-            f"🔷 Sıkışan: `{SIKISAN_MAX}` | 🔥 HOT: `{HOT_MOVER_MAX}` | Normal: `{LISTE_BOYUT - SIKISAN_MAX - HOT_MOVER_MAX}`"
+            f"🎯 Sinyal: `TÜM İŞLEMLER {GEREKLI_SINYAL}+`\n"
+            f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`\n"
+            f"⚖️ SL: `%{SL_YUZDE}` | TP: `%{TP_YUZDE}`"
         )
         
         await update.message.reply_text(mesaj, parse_mode='Markdown')
@@ -1127,7 +1105,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Trend Bot (v19.1) aktif!")
+    await update.message.reply_text("🟢 Trend Bot (v20.1) aktif!")
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
@@ -1168,7 +1146,6 @@ async def liste_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(liste_str, parse_mode='Markdown')
 
 async def kuyruk_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Bekleyen kuyruk mesajlarını göster"""
     if update.effective_chat.id != int(CHAT_ID): return
     try:
         response = supabase.table("telegram_kuyruk").select("*").eq("gonderildi", False).execute()
@@ -1177,7 +1154,6 @@ async def kuyruk_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response2 = supabase.table("telegram_kuyruk").select("*").eq("gonderildi", True).order("id", desc=True).limit(5).execute()
         gonderilmis = len(response2.data) if response2.data else 0
         
-        # İlk bekleyen mesajı göster
         ilk_mesaj = ""
         if bekleyen > 0 and response.data:
             ilk = response.data[0]
@@ -1198,7 +1174,6 @@ async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
     
-    # Kuyruk worker thread
     kuyruk_thread = threading.Thread(target=kuyruk_worker, daemon=True)
     kuyruk_thread.start()
     print("🧵 [KUYRUK WORKER] Thread başlatıldı (30s interval)", flush=True)
