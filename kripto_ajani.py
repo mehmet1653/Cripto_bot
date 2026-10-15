@@ -77,14 +77,14 @@ KARA_LISTE = [
     'FDUSD/USDT:USDT', 'TUSD/USDT:USDT', 'BUSD/USDT:USDT'
 ]
 
-MIN_HACIM_24S = 10_000_000
-MIN_DEGISIM_YUZDE = 1.0
+# Havuz filtreleri (daha esnek - puanlama odaklı)
+MIN_HACIM_24S = 5_000_000
+MIN_DEGISIM_YUZDE = 0.5
 MIN_FIYAT = 1.0
 MAX_FIYAT = 300.0
 
-# ✅ C seçeneği: HOT slotu artırıldı
 HOT_MOVER_YUZDE = 5.0
-HOT_MOVER_MAX = 4            # 2 → 4
+HOT_MOVER_MAX = 4
 SIKISAN_MAX = 4
 
 BOT_CALISIYOR_MU = True
@@ -117,19 +117,19 @@ COOLDOWN_VARSAYILAN = 30 * 60
 MFI_ESIK_AL = 52
 MFI_ESIK_SAT = 48
 CMF_ESIK = 0.03
-HACIM_ESIK = 1.0
-MFI_ASIRI_SATIM = 15
-MFI_ASIRI_ALIM = 85
+HACIM_ESIK = 0.5
+MFI_ASIRI_SATIM = 10
+MFI_ASIRI_ALIM = 90
 
 GEREKLI_SINYAL = 6
-MIN_PUAN = 7
+MIN_PUAN = 7  # ⚠️ İstersen 10 yap
 TOP_N_ADAY = 3
 
-# ✅ YENİ: Rotasyon ayarları
+# Rotasyon
 ROTASYON_AKTIF = True
-ROTASYON_MIN_KAR = 0.12          # Min 0.12 USDT kâr
-ROTASYON_MIN_YENI_PUAN = 12      # Yeni aday min 12 puan
-ROTASYON_PUAN_FARK = 7           # Fark en az 7 puan
+ROTASYON_MIN_KAR = 0.12
+ROTASYON_MIN_YENI_PUAN = 12
+ROTASYON_PUAN_FARK = 7
 
 # Kill-switch
 GUNLUK_BASLANGIC_BAKIYE = None
@@ -186,6 +186,144 @@ ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_
 COIN_COOLDOWNLAR = kalici.get("cooldownlar", {})
 
 
+# ==================== HIZLI ÖN PUAN (HAVUZ İÇİN) ====================
+def hizli_on_puan(symbol):
+    """
+    Havuz seçimi için hızlı ön puan.
+    4 kriter: MFI, hacim, trend, sıkışma.
+    """
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
+        if len(ohlcv) < 30:
+            return 0, {}
+        
+        df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        
+        mfi = ta.volume.money_flow_index(high=df['h'], low=df['l'], 
+                                          close=df['c'], volume=df['v'], window=14).iloc[-1]
+        
+        # Aşırı bölge kontrolü
+        if mfi < MFI_ASIRI_SATIM or mfi > MFI_ASIRI_ALIM:
+            return 0, {"sebep": f"MFI aşırı ({mfi:.0f})"}
+        
+        son3_hacim = df['v'].iloc[-3:].mean()
+        ort20_hacim = df['v'].iloc[-20:].mean()
+        hacim_oran = son3_hacim / ort20_hacim if ort20_hacim > 0 else 0
+        
+        if hacim_oran < HACIM_ESIK:
+            return 0, {"sebep": f"Hacim zayıf ({hacim_oran:.2f}x)"}
+        
+        puan = 0
+        
+        # 1. MFI orta bölge
+        if 40 < mfi < 60:
+            puan += 3
+        elif 30 < mfi < 70:
+            puan += 1
+        
+        # 2. Hacim
+        if hacim_oran > 1.5:
+            puan += 3
+        elif hacim_oran > 1.2:
+            puan += 2
+        elif hacim_oran > 1.0:
+            puan += 1
+        
+        # 3. Trend
+        ema9 = ta.trend.ema_indicator(df['c'], window=9).iloc[-1]
+        ema21 = ta.trend.ema_indicator(df['c'], window=21).iloc[-1]
+        if abs(ema9 - ema21) / ema21 > 0.005:
+            puan += 2
+        
+        # 4. Sıkışma
+        bb_ust = ta.volatility.bollinger_hband(df['c'], window=20)
+        bb_alt = ta.volatility.bollinger_lband(df['c'], window=20)
+        bb_genislik = ((bb_ust - bb_alt) / df['c']) * 100
+        if bb_genislik.iloc[-1] < bb_genislik.iloc[-20:].mean() * 0.8:
+            puan += 2
+        
+        return puan, {"mfi": round(mfi, 1), "hacim_oran": round(hacim_oran, 2)}
+    except:
+        return 0, {}
+
+
+# ==================== DİNAMİK COIN HAVUZU (PUANLAMA ODAKLI) ====================
+def dinamik_liste_guncelle(zorla=False):
+    """
+    PUANLAMA ODAKLI HAVUZ:
+    Sadece potansiyeli olan coinler listeye girer.
+    """
+    global DINAMIK_LISTE, SON_LISTE_GUNCELLEME
+    
+    if not zorla and (time.time() - SON_LISTE_GUNCELLEME < LISTE_GUNCELLEME_SURESI):
+        return
+    
+    print(f"\n🔄 [DİNAMİK LİSTE] Güncelleniyor (puanlama odaklı)...", flush=True)
+    SON_LISTE_GUNCELLEME = time.time()
+    
+    try:
+        tickers = exchange.fetch_tickers()
+        adaylar = []
+        
+        tum_semboller = [s for s in tickers.keys() if ':USDT' in s and s not in KARA_LISTE]
+        
+        for sym in tum_semboller:
+            try:
+                t = tickers[sym]
+                hacim = float(t.get('quoteVolume', 0) or 0)
+                degisim = float(t.get('percentage', 0) or 0)
+                abs_degisim = abs(degisim)
+                fiyat = float(t.get('last', 0) or 0)
+                
+                # HIZLI ÖN FİLTRE
+                if hacim < MIN_HACIM_24S: continue
+                if fiyat < MIN_FIYAT: continue
+                if fiyat > MAX_FIYAT: continue
+                
+                try:
+                    market = exchange.market(sym)
+                    min_miktar = float(market['limits']['amount']['min'] or 1.0)
+                    contract_size = float(market.get('contractSize', 1.0))
+                    min_marj = (min_miktar * fiyat * contract_size) / KALDIRAC
+                    if min_marj > 15.0: continue
+                except:
+                    continue
+                
+                # HIZLI PUAN
+                hizli_puan, hizli_detay = hizli_on_puan(sym)
+                
+                if hizli_puan > 0:
+                    adaylar.append({
+                        "symbol": sym,
+                        "hizli_puan": hizli_puan,
+                        "degisim": degisim,
+                        "hacim": hacim,
+                        "fiyat": fiyat,
+                        "detay": hizli_detay
+                    })
+            except:
+                continue
+        
+        # Hızlı puana göre sırala
+        adaylar.sort(key=lambda x: x['hizli_puan'], reverse=True)
+        
+        # İlk LISTE_BOYUT kadarını seç
+        secilenler = adaylar[:LISTE_BOYUT]
+        yeni_liste = [a['symbol'] for a in secilenler]
+        
+        if yeni_liste:
+            DINAMIK_LISTE = yeni_liste
+            print(f"✅ [DİNAMİK] {len(DINAMIK_LISTE)} coin (puanlama odaklı):", flush=True)
+            for a in secilenler:
+                sym_kisa = a['symbol'].replace('/USDT:USDT', '')
+                detay_str = f"MFI:{a['detay'].get('mfi', '?')} Hacim:{a['detay'].get('hacim_oran', '?')}x"
+                print(f"   ⭐ {sym_kisa} | Hızlı Puan: {a['hizli_puan']} | %{a['degisim']:+.1f} | {a['hacim']/1_000_000:.0f}M | {detay_str}", flush=True)
+        else:
+            print(f"⚠️ [DİNAMİK] Hiç coin potansiyelli bulunamadı", flush=True)
+    except Exception as e:
+        print(f"⚠️ [DİNAMİK] Hata: {e}", flush=True)
+
+
 # ==================== SIKIŞMA ANALİZİ ====================
 def sikisma_analizi(symbol):
     try:
@@ -221,95 +359,6 @@ def sikisma_analizi(symbol):
         return sikisma_skoru, {}
     except:
         return 0, {}
-
-
-# ==================== DİNAMİK COIN HAVUZU ====================
-def dinamik_liste_guncelle(zorla=False):
-    global DINAMIK_LISTE, SON_LISTE_GUNCELLEME
-    
-    if not zorla and (time.time() - SON_LISTE_GUNCELLEME < LISTE_GUNCELLEME_SURESI):
-        return
-    
-    print(f"\n🔄 [DİNAMİK LİSTE] Güncelleniyor...", flush=True)
-    SON_LISTE_GUNCELLEME = time.time()
-    
-    try:
-        tickers = exchange.fetch_tickers()
-        normal_adaylar = []
-        hot_movers = []
-        sikisanlar = []
-        
-        tum_semboller = [s for s in tickers.keys() if ':USDT' in s and s not in KARA_LISTE]
-        
-        for sym in tum_semboller:
-            try:
-                t = tickers[sym]
-                hacim = float(t.get('quoteVolume', 0) or 0)
-                degisim = float(t.get('percentage', 0) or 0)
-                abs_degisim = abs(degisim)
-                fiyat = float(t.get('last', 0) or 0)
-                
-                if hacim < MIN_HACIM_24S: continue
-                if fiyat < MIN_FIYAT: continue
-                if fiyat > MAX_FIYAT: continue
-                
-                try:
-                    market = exchange.market(sym)
-                    min_miktar = float(market['limits']['amount']['min'] or 1.0)
-                    contract_size = float(market.get('contractSize', 1.0))
-                    min_marj = (min_miktar * fiyat * contract_size) / KALDIRAC
-                    if min_marj > 15.0: continue
-                except:
-                    continue
-                
-                if abs_degisim < MIN_DEGISIM_YUZDE:
-                    sikisma_skoru, _ = sikisma_analizi(sym)
-                    if sikisma_skoru >= 3:
-                        sikisanlar.append({
-                            "symbol": sym, "skor": sikisma_skoru * 1000,
-                            "degisim": degisim, "hacim": hacim, "fiyat": fiyat,
-                            "tip": "SIKISAN", "sikisma": sikisma_skoru
-                        })
-                    continue
-                
-                if abs_degisim >= HOT_MOVER_YUZDE:
-                    hot_movers.append({
-                        "symbol": sym, "skor": abs_degisim * 100,
-                        "degisim": degisim, "hacim": hacim, "fiyat": fiyat,
-                        "tip": "HOT"
-                    })
-                else:
-                    skor = (hacim / 1_000_000) * abs_degisim
-                    normal_adaylar.append({
-                        "symbol": sym, "skor": skor,
-                        "degisim": degisim, "hacim": hacim, "fiyat": fiyat,
-                        "tip": "NORMAL"
-                    })
-            except:
-                continue
-        
-        hot_movers.sort(key=lambda x: x['skor'], reverse=True)
-        normal_adaylar.sort(key=lambda x: x['skor'], reverse=True)
-        sikisanlar.sort(key=lambda x: x['skor'], reverse=True)
-        
-        sikisan_secim = sikisanlar[:SIKISAN_MAX]
-        hot_secim = hot_movers[:HOT_MOVER_MAX]
-        normal_secim = normal_adaylar[:LISTE_BOYUT - len(sikisan_secim) - len(hot_secim)]
-        
-        tum_secim = sikisan_secim + hot_secim + normal_secim
-        yeni_liste = [a['symbol'] for a in tum_secim]
-        
-        if yeni_liste:
-            DINAMIK_LISTE = yeni_liste
-            print(f"✅ [DİNAMİK] {len(DINAMIK_LISTE)} coin:", flush=True)
-            for a in tum_secim:
-                if a['tip'] == "HOT": tip_emoji = "🔥"
-                elif a['tip'] == "SIKISAN": tip_emoji = "🔷"
-                else: tip_emoji = "  "
-                ekstra = f" [Sıkışma:{a.get('sikisma', 0)}/4]" if a['tip'] == "SIKISAN" else ""
-                print(f"   {tip_emoji} {a['symbol'].replace('/USDT:USDT','')} | %{a['degisim']:+.1f} | {a['hacim']/1_000_000:.0f}M{ekstra}", flush=True)
-    except Exception as e:
-        print(f"⚠️ [DİNAMİK] Hata: {e}", flush=True)
 
 
 # ==================== MODÜL 1: ORDER BOOK ====================
@@ -582,7 +631,7 @@ def mum_yapisi(df):
     return None, ""
 
 
-# ==================== COİN PUAN HESAPLA ====================
+# ==================== COİN PUAN HESAPLA (DETAYLI) ====================
 def coin_puan_hesapla(symbol):
     try:
         ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=PIVOT_LOOKBACK)
@@ -677,9 +726,9 @@ def coin_puan_hesapla(symbol):
             short_puan += 3; short_sebep.append(f"Mum: {mum_sebep}")
         
         if destege_yakin and not dirence_yakin:
-            long_puan += 2; long_sebep.append(f"Destek")
+            long_puan += 2; long_sebep.append("Destek")
         if dirence_yakin and not destege_yakin:
-            short_puan += 2; short_sebep.append(f"Direnç")
+            short_puan += 2; short_sebep.append("Direnç")
         
         if mfi > MFI_ESIK_AL: long_puan += 1
         if mfi < MFI_ESIK_SAT: short_puan += 1
@@ -721,9 +770,9 @@ def coin_puan_hesapla(symbol):
         
         if likidite:
             if likidite['yon'] == "LONG":
-                long_puan += 4; long_sebep.append(f"🎣 Likidite avı")
+                long_puan += 4; long_sebep.append("🎣 Likidite avı")
             elif likidite['yon'] == "SHORT":
-                short_puan += 4; short_sebep.append(f"🎣 Likidite avı")
+                short_puan += 4; short_sebep.append("🎣 Likidite avı")
         
         if btc_yon == "SHORT": long_puan -= 2
         elif btc_yon == "LONG": short_puan -= 2
@@ -860,9 +909,9 @@ def baslangic_temizligi():
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
         if mevcut:
-            telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v28.0)\n\nRotasyon: AKTİF\nMevcut pozisyonlar:\n{mevcut}")
+            telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v29.0)\n\nMevcut pozisyonlar:\n{mevcut}")
         else:
-            telegram_kritik("🟢 BOT BAŞLATILDI (v28.0)\n\nRotasyon: AKTİF\nMin Kâr: 0.12 USDT\nMin Yeni Puan: 12\nFark: 7")
+            telegram_kritik("🟢 BOT BAŞLATILDI (v29.0)\n\nPuanlama Odaklı Havuz\nRotasyon: AKTİF")
     except: pass
 
 
@@ -1036,9 +1085,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
     
-    print("🚀 [BAŞLANGIÇ] v28.0 - Rotasyon + En İyi Seç", flush=True)
-    print(f"⚙️ Rotasyon: AKTİF | Min Kâr: {ROTASYON_MIN_KAR} | Min Yeni Puan: {ROTASYON_MIN_YENI_PUAN} | Fark: {ROTASYON_PUAN_FARK}", flush=True)
-    print(f"⚙️ HOT Slotu: {HOT_MOVER_MAX} | Sıkışan: {SIKISAN_MAX}", flush=True)
+    print("🚀 [BAŞLANGIÇ] v29.0 - Puanlama Odaklı Havuz", flush=True)
     
     try:
         exchange.load_markets()
@@ -1093,7 +1140,6 @@ def ana_dongu():
                 manuel_sl_tp_kontrol(aktif_borsa_map)
                 kapanan_pozisyonlari_kontrol(aktif_semboller_seti)
             
-            # ✅ HER ZAMAN TARA (limit dolu olsa bile)
             print(f"\n🔍 1. AŞAMA: TÜM COİNLERİ TARA VE PUANLA", flush=True)
             
             adaylar = []
@@ -1115,9 +1161,9 @@ def ana_dongu():
                     adaylar.append((symbol, karar, detay, puan))
                     print(f"  ✅ {sym_kisa}: {karar} | Puan: {puan}", flush=True)
                 else:
-                    print(f"  ⏭️  {sym_kisa}: Puan {puan}/{MIN_PUAN}", flush=True)
+                    print(f"  ⏭️  {sym_kisa}: Puan {puan}/{MIN_PUAN} | {detay.get('sebep', '')[:60]}", flush=True)
             
-            # ✅ AÇIK POZİSYONLARIN GÜNCEL PUANLARINI HESAPLA
+            # Açık pozisyonların güncel puanları
             print(f"\n📊 2. AŞAMA: AÇIK POZİSYONLARIN GÜNCEL PUANLARI", flush=True)
             
             rotasyon_adaylari = []
@@ -1146,7 +1192,6 @@ def ana_dongu():
                 
                 yeni_karar, _, yeni_puan = coin_puan_hesapla(sym_acik)
                 
-                # Aynı yönde mi?
                 if yeni_karar != yon_acik:
                     yeni_puan = 0
                 
@@ -1155,7 +1200,6 @@ def ana_dongu():
                 
                 print(f"  📊 {sym_kisa} {yon_acik}: Giriş {giris_puan}p → Şimdi {yeni_puan}p | Kâr: {kar:+.4f} USDT", flush=True)
                 
-                # Rotasyon şartları
                 if kar >= ROTASYON_MIN_KAR and puan_dusus >= 3:
                     rotasyon_adaylari.append({
                         "symbol": sym_acik,
@@ -1166,7 +1210,7 @@ def ana_dongu():
                     })
                     print(f"  ⚠️ {sym_kisa} ROTASYON ADAYI (Kâr: {kar:+.4f}, Puan: {giris_puan}→{yeni_puan})", flush=True)
             
-            # ✅ ROTASYON KARARI
+            # Rotasyon kararı
             if ROTASYON_AKTIF and rotasyon_adaylari and adaylar:
                 adaylar.sort(key=lambda x: x[3], reverse=True)
                 en_iyi_yeni = adaylar[0]
@@ -1175,7 +1219,6 @@ def ana_dongu():
                 rotasyon_adaylari.sort(key=lambda x: x['yeni_puan'])
                 en_zayif_acik = rotasyon_adaylari[0]
                 
-                # Şartları kontrol et
                 puan_fark = yeni_puan - en_zayif_acik['yeni_puan']
                 yeni_puan_yeterli = yeni_puan >= ROTASYON_MIN_YENI_PUAN
                 fark_yeterli = puan_fark >= ROTASYON_PUAN_FARK
@@ -1193,7 +1236,6 @@ def ana_dongu():
                     
                     eski_sym = en_zayif_acik['symbol']
                     
-                    # Eski pozisyonu kapat
                     if market_kapat(eski_sym, float(AKTIF_SISTEMLER[eski_sym]['miktar']), en_zayif_acik['yon']):
                         tum_emirleri_iptal(eski_sym)
                         
@@ -1217,7 +1259,6 @@ def ana_dongu():
                         
                         aktif_semboller_seti.discard(eski_sym)
                         
-                        # Yeni pozisyonu aç
                         ticker = exchange.fetch_ticker(yeni_sym)
                         anlik_fiyat = float(ticker['last'])
                         
@@ -1236,7 +1277,6 @@ def ana_dongu():
                 else:
                     print(f"  ⏸️ Rotasyon şartları sağlanmadı", flush=True)
             
-            # ✅ NORMAL İŞLEM AÇMA
             limit_dolu = len(aktif_semboller_seti) >= MAKS_POZISYON
             
             if not adaylar:
@@ -1249,7 +1289,7 @@ def ana_dongu():
             en_iyiler = adaylar[:TOP_N_ADAY]
             
             for i, (sym, karar, detay, puan) in enumerate(en_iyiler, 1):
-                durum = "👀 İZLE (limit dolu)" if limit_dolu else "🚀 AÇILACAK"
+                durum = "👀 İZLE" if limit_dolu else "🚀 AÇILACAK"
                 print(f"     {i}. {sym.replace('/USDT:USDT','')}: {karar} | Puan: {puan} | {durum}", flush=True)
             
             if not limit_dolu:
@@ -1268,7 +1308,7 @@ def ana_dongu():
                     if sonuc:
                         aktif_semboller_seti.add(sym)
             else:
-                print(f"  ⛔ Limit dolu, sadece izleme modu", flush=True)
+                print(f"  ⛔ Limit dolu, izleme modu", flush=True)
             
         except Exception as e:
             print(f"⚠️ Ana döngü: {e}", flush=True)
@@ -1325,7 +1365,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         
         mesaj = (
-            f"📊 *TREND BOT (v28.0 - ROTASYON)*\n\n"
+            f"📊 *TREND BOT (v29.0)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1333,8 +1373,9 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📋 *Coin Havuzu:*\n{liste_str}\n\n"
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
             f"📈 Başarı: `%{oran:.1f}`\n"
-            f"🔄 *Rotasyon:* `Min Kâr: {ROTASYON_MIN_KAR}` | `Fark: {ROTASYON_PUAN_FARK}p` | `Min Yeni: {ROTASYON_MIN_YENI_PUAN}p`\n"
-            f"🔥 HOT Slotu: `{HOT_MOVER_MAX}` | 💵 Marj: `%{POZISYON_MARJ*100:.0f}`"
+            f"⭐ Min Puan: `{MIN_PUAN}` | Havuz: Puanlama Odaklı\n"
+            f"🔄 Rotasyon: `Min Kâr {ROTASYON_MIN_KAR}` | `Fark {ROTASYON_PUAN_FARK}p`\n"
+            f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | SL: `%{SL_YUZDE}` | TP: `%{TP_YUZDE}`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
     except Exception as e:
@@ -1349,7 +1390,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Trend Bot (v28.0 - ROTASYON) aktif!")
+    await update.message.reply_text("🟢 Trend Bot (v29.0) aktif!")
 
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
