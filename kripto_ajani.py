@@ -121,8 +121,8 @@ MFI_ASIRI_SATIM = 15
 MFI_ASIRI_ALIM = 85
 
 GEREKLI_SINYAL = 6
-MIN_PUAN = 7  # ✅ 9'dan 7'ye düşürdük
-TOP_N_ADAY = 3  # ✅ En iyi 3 adayı seç
+MIN_PUAN = 7
+TOP_N_ADAY = 3
 
 # Kill-switch
 GUNLUK_BASLANGIC_BAKIYE = None
@@ -178,7 +178,134 @@ AKTIF_SISTEMLER = kalici.get("aktif_sistemler", {})
 ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []})
 COIN_COOLDOWNLAR = kalici.get("cooldownlar", {})
 
-# ==================== MODÜL 1: ORDER BOOK ANALİZİ ====================
+
+# ==================== SIKIŞMA ANALİZİ ====================
+def sikisma_analizi(symbol):
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
+        if len(ohlcv) < 25:
+            return 0, {}
+        
+        df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        
+        bb_ust = ta.volatility.bollinger_hband(df['c'], window=20)
+        bb_alt = ta.volatility.bollinger_lband(df['c'], window=20)
+        bb_genislik = ((bb_ust - bb_alt) / df['c']) * 100
+        bb_genislik_son = bb_genislik.iloc[-1]
+        bb_genislik_ort = bb_genislik.iloc[-20:].mean()
+        
+        hacim_son5 = df['v'].iloc[-5:].mean()
+        hacim_ort20 = df['v'].iloc[-20:].mean()
+        hacim_oran = hacim_son5 / hacim_ort20 if hacim_ort20 > 0 else 1.0
+        
+        rsi = ta.momentum.rsi(df['c'], window=14)
+        rsi_son5_std = rsi.iloc[-5:].std()
+        
+        ema9 = ta.trend.ema_indicator(df['c'], window=9).iloc[-1]
+        fiyat = df['c'].iloc[-1]
+        ema_yakinlik = abs(fiyat - ema9) / ema9 * 100
+        
+        sikisma_skoru = 0
+        if bb_genislik_son < bb_genislik_ort * 0.7: sikisma_skoru += 1
+        if hacim_oran < 0.6: sikisma_skoru += 1
+        if rsi_son5_std < 3.0: sikisma_skoru += 1
+        if ema_yakinlik < 0.5: sikisma_skoru += 1
+        
+        return sikisma_skoru, {}
+    except:
+        return 0, {}
+
+
+# ==================== DİNAMİK COIN HAVUZU ====================
+def dinamik_liste_guncelle(zorla=False):
+    global DINAMIK_LISTE, SON_LISTE_GUNCELLEME
+    
+    if not zorla and (time.time() - SON_LISTE_GUNCELLEME < LISTE_GUNCELLEME_SURESI):
+        return
+    
+    print(f"\n🔄 [DİNAMİK LİSTE] Güncelleniyor...", flush=True)
+    SON_LISTE_GUNCELLEME = time.time()
+    
+    try:
+        tickers = exchange.fetch_tickers()
+        normal_adaylar = []
+        hot_movers = []
+        sikisanlar = []
+        
+        tum_semboller = [s for s in tickers.keys() if ':USDT' in s and s not in KARA_LISTE]
+        
+        for sym in tum_semboller:
+            try:
+                t = tickers[sym]
+                hacim = float(t.get('quoteVolume', 0) or 0)
+                degisim = float(t.get('percentage', 0) or 0)
+                abs_degisim = abs(degisim)
+                fiyat = float(t.get('last', 0) or 0)
+                
+                if hacim < MIN_HACIM_24S: continue
+                if fiyat < MIN_FIYAT: continue
+                if fiyat > MAX_FIYAT: continue
+                
+                try:
+                    market = exchange.market(sym)
+                    min_miktar = float(market['limits']['amount']['min'] or 1.0)
+                    contract_size = float(market.get('contractSize', 1.0))
+                    min_marj = (min_miktar * fiyat * contract_size) / KALDIRAC
+                    if min_marj > 15.0: continue
+                except:
+                    continue
+                
+                if abs_degisim < MIN_DEGISIM_YUZDE:
+                    sikisma_skoru, _ = sikisma_analizi(sym)
+                    if sikisma_skoru >= 3:
+                        sikisanlar.append({
+                            "symbol": sym, "skor": sikisma_skoru * 1000,
+                            "degisim": degisim, "hacim": hacim, "fiyat": fiyat,
+                            "tip": "SIKISAN", "sikisma": sikisma_skoru
+                        })
+                    continue
+                
+                if abs_degisim >= HOT_MOVER_YUZDE:
+                    hot_movers.append({
+                        "symbol": sym, "skor": abs_degisim * 100,
+                        "degisim": degisim, "hacim": hacim, "fiyat": fiyat,
+                        "tip": "HOT"
+                    })
+                else:
+                    skor = (hacim / 1_000_000) * abs_degisim
+                    normal_adaylar.append({
+                        "symbol": sym, "skor": skor,
+                        "degisim": degisim, "hacim": hacim, "fiyat": fiyat,
+                        "tip": "NORMAL"
+                    })
+            except:
+                continue
+        
+        hot_movers.sort(key=lambda x: x['skor'], reverse=True)
+        normal_adaylar.sort(key=lambda x: x['skor'], reverse=True)
+        sikisanlar.sort(key=lambda x: x['skor'], reverse=True)
+        
+        sikisan_secim = sikisanlar[:SIKISAN_MAX]
+        hot_secim = hot_movers[:HOT_MOVER_MAX]
+        normal_secim = normal_adaylar[:LISTE_BOYUT - len(sikisan_secim) - len(hot_secim)]
+        
+        tum_secim = sikisan_secim + hot_secim + normal_secim
+        yeni_liste = [a['symbol'] for a in tum_secim]
+        
+        if yeni_liste:
+            DINAMIK_LISTE = yeni_liste
+            print(f"✅ [DİNAMİK] {len(DINAMIK_LISTE)} coin:", flush=True)
+            for a in tum_secim:
+                if a['tip'] == "HOT": tip_emoji = "🔥"
+                elif a['tip'] == "SIKISAN": tip_emoji = "🔷"
+                else: tip_emoji = "  "
+                ekstra = f" [Sıkışma:{a.get('sikisma', 0)}/4]" if a['tip'] == "SIKISAN" else ""
+                print(f"   {tip_emoji} {a['symbol'].replace('/USDT:USDT','')} | %{a['degisim']:+.1f} | {a['hacim']/1_000_000:.0f}M{ekstra}", flush=True)
+    except Exception as e:
+        print(f"⚠️ [DİNAMİK] Hata: {e}", flush=True)
+
+
+# ==================== MODÜL 1: ORDER BOOK ====================
 def orderbook_analiz(symbol):
     try:
         ob = exchange.fetch_order_book(symbol, limit=50)
@@ -189,38 +316,25 @@ def orderbook_analiz(symbol):
             return None
         
         anlik_fiyat = (bids[0][0] + asks[0][0]) / 2
-        
         bid_hacim = sum(b[1] * b[0] for b in bids[:20])
         ask_hacim = sum(a[1] * a[0] for a in asks[:20])
         
         ort_bid = bid_hacim / 20 if bid_hacim > 0 else 1
         ort_ask = ask_hacim / 20 if ask_hacim > 0 else 1
         
-        alim_duvari = False
-        satim_duvari = False
+        alim_duvari = any(f * m > ort_bid * ORDERBOOK_WALL_ORANI for f, m in bids[:20])
+        satim_duvari = any(f * m > ort_ask * ORDERBOOK_WALL_ORANI for f, m in asks[:20])
         
-        for fiyat, miktar in bids[:20]:
-            if fiyat * miktar > ort_bid * ORDERBOOK_WALL_ORANI:
-                alim_duvari = True
-        
-        for fiyat, miktar in asks[:20]:
-            if fiyat * miktar > ort_ask * ORDERBOOK_WALL_ORANI:
-                satim_duvari = True
-        
-        if bid_hacim > ask_hacim * 1.5:
-            baski = "ALIM"
-        elif ask_hacim > bid_hacim * 1.5:
-            baski = "SATIM"
-        else:
-            baski = "DENGE"
+        if bid_hacim > ask_hacim * 1.5: baski = "ALIM"
+        elif ask_hacim > bid_hacim * 1.5: baski = "SATIM"
+        else: baski = "DENGE"
         
         return {
             "baski": baski,
             "alim_duvari": alim_duvari,
-            "satim_duvari": satim_duvari,
-            "spread": round((asks[0][0] - bids[0][0]) / anlik_fiyat * 100, 3)
+            "satim_duvari": satim_duvari
         }
-    except Exception as e:
+    except:
         return None
 
 
@@ -233,12 +347,9 @@ def funding_analiz(symbol):
         asiri_long = funding > FUNDING_RATE_ASIRI
         asiri_short = funding < -FUNDING_RATE_ASIRI
         
-        if asiri_long:
-            yorum = "ASIRI_LONG"
-        elif asiri_short:
-            yorum = "ASIRI_SHORT"
-        else:
-            yorum = "NORMAL"
+        if asiri_long: yorum = "ASIRI_LONG"
+        elif asiri_short: yorum = "ASIRI_SHORT"
+        else: yorum = "NORMAL"
         
         return {
             "funding": round(funding, 4),
@@ -246,40 +357,33 @@ def funding_analiz(symbol):
             "asiri_long": asiri_long,
             "asiri_short": asiri_short
         }
-    except Exception as e:
+    except:
         return None
 
 
 # ==================== MODÜL 3: VOLUME PROFILE ====================
 def volume_profile_analiz(df):
     try:
-        if len(df) < 30:
-            return None
+        if len(df) < 30: return None
         
         min_fiyat = df['l'].min()
         max_fiyat = df['h'].max()
-        
-        if max_fiyat == min_fiyat:
-            return None
+        if max_fiyat == min_fiyat: return None
         
         bin_boyut = (max_fiyat - min_fiyat) / VOLUME_PROFILE_BINS
-        
         bins = {}
         for _, mum in df.iterrows():
             fiyat_orta = (mum['h'] + mum['l']) / 2
             bin_idx = int((fiyat_orta - min_fiyat) / bin_boyut)
-            if bin_idx not in bins:
-                bins[bin_idx] = 0
-            bins[bin_idx] += mum['v']
+            bins[bin_idx] = bins.get(bin_idx, 0) + mum['v']
         
-        if not bins:
-            return None
+        if not bins: return None
         
         esik = sorted(bins.values())[int(len(bins) * 0.7)] if len(bins) > 3 else 0
-        yuksek_hacim_bins = [b for b, v in bins.items() if v >= esik]
+        yuksek_bins = [b for b, v in bins.items() if v >= esik]
         
         anlik = df['c'].iloc[-1]
-        en_yakin = min(yuksek_hacim_bins, key=lambda b: abs((min_fiyat + (b + 0.5) * bin_boyut) - anlik)) if yuksek_hacim_bins else None
+        en_yakin = min(yuksek_bins, key=lambda b: abs((min_fiyat + (b + 0.5) * bin_boyut) - anlik)) if yuksek_bins else None
         
         if en_yakin is not None:
             yakin_fiyat = min_fiyat + (en_yakin + 0.5) * bin_boyut
@@ -295,7 +399,7 @@ def volume_profile_analiz(df):
             "yakin_hacim_mesafe": round(mesafe, 2),
             "yakin_hacim_tip": tip
         }
-    except Exception as e:
+    except:
         return None
 
 
@@ -327,8 +431,8 @@ def mtf_analiz(symbol):
         elif asagi_say >= 3: uyum = "ZAYIF_SHORT"
         else: uyum = "KARISIK"
         
-        return {"uyum": uyum, "yukari": yukari_say, "asagi": asagi_say}
-    except Exception as e:
+        return {"uyum": uyum}
+    except:
         return None
 
 
@@ -351,15 +455,15 @@ def likidite_avi_tespit(symbol, df_15m, destekler, direncler):
         if yakin_destek:
             son_dusuk = son3['l'].min()
             if son_dusuk < yakin_destek * 0.998 and anlik > yakin_destek and hacim_oran < LIKIDITE_AVI_HACIM_ORANI:
-                return {"tip": "DESTEK_AVI", "yon": "LONG", "sebep": "Likidite avı - Destek"}
+                return {"tip": "DESTEK_AVI", "yon": "LONG", "sebep": "Likidite avı"}
         
         if yakin_direnc:
             son_yuksek = son3['h'].max()
             if son_yuksek > yakin_direnc * 1.002 and anlik < yakin_direnc and hacim_oran < LIKIDITE_AVI_HACIM_ORANI:
-                return {"tip": "DIRENC_AVI", "yon": "SHORT", "sebep": "Likidite avı - Direnç"}
+                return {"tip": "DIRENC_AVI", "yon": "SHORT", "sebep": "Likidite avı"}
         
         return None
-    except Exception as e:
+    except:
         return None
 
 
@@ -471,12 +575,8 @@ def mum_yapisi(df):
     return None, ""
 
 
-# ==================== TEK COİN İÇİN PUAN HESAPLA ====================
+# ==================== COİN PUAN HESAPLA ====================
 def coin_puan_hesapla(symbol):
-    """
-    Tek bir coin için tüm modülleri çalıştır ve puan hesapla.
-    Return: (karar, detay, puan)
-    """
     try:
         ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=PIVOT_LOOKBACK)
         if len(ohlcv_1h) < 30:
@@ -490,7 +590,6 @@ def coin_puan_hesapla(symbol):
             return None, {}, 0
         df_15m = pd.DataFrame(ohlcv_15m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         
-        # Modüller
         formasyon_yon, formasyon_sebep = formasyon_tespit(df_1h)
         destekler, direncler = destek_direnc_seviyeleri(df_1h)
         
@@ -502,7 +601,7 @@ def coin_puan_hesapla(symbol):
         dirence_yakin = 0 <= direnc_mesafe < DESTEK_DIRENC_MESAFE
         
         pivot_highs, pivot_lows = pivot_noktalari_bul(df_1h, lookback=5)
-        trend_tip, trend_sebep = trend_cizgisi_analiz(pivot_highs, pivot_lows)
+        trend_tip, _ = trend_cizgisi_analiz(pivot_highs, pivot_lows)
         
         mum_yon, mum_sebep = mum_yapisi(df_15m)
         
@@ -521,9 +620,8 @@ def coin_puan_hesapla(symbol):
         
         btc_yon = btc_bias()
         
-        # Yeni modüller
         ob_analiz = orderbook_analiz(symbol)
-        funding_analiz_sonuc = funding_analiz(symbol)
+        funding_sonuc = funding_analiz(symbol)
         vp_analiz = volume_profile_analiz(df_1h)
         mtf = mtf_analiz(symbol)
         likidite = likidite_avi_tespit(symbol, df_15m, destekler, direncler)
@@ -531,15 +629,13 @@ def coin_puan_hesapla(symbol):
         detay = {
             "mfi": round(mfi, 1), "cmf": round(cmf, 3), "hacim_oran": round(hacim_oran, 2),
             "fiyat": anlik_fiyat, "btc": btc_yon,
-            "formasyon": formasyon_sebep, "trend": trend_tip,
-            "mum_yapisi": mum_sebep,
+            "formasyon": formasyon_sebep, "trend": trend_tip, "mum_yapisi": mum_sebep,
             "ob_baski": ob_analiz['baski'] if ob_analiz else '?',
-            "funding_yorum": funding_analiz_sonuc['yorum'] if funding_analiz_sonuc else '?',
+            "funding_yorum": funding_sonuc['yorum'] if funding_sonuc else '?',
             "mtf_uyum": mtf['uyum'] if mtf else '?',
             "likidite": likidite['tip'] if likidite else None
         }
         
-        # Filtreler
         if mfi < MFI_ASIRI_SATIM:
             detay["sebep"] = f"MFI DIP ({mfi:.0f})"
             return None, detay, 0
@@ -550,127 +646,87 @@ def coin_puan_hesapla(symbol):
             detay["sebep"] = f"HACIM ZAYIF ({hacim_oran:.2f}x)"
             return None, detay, 0
         
-        # PUANLAMA
         long_puan = 0
         short_puan = 0
         long_sebep = []
         short_sebep = []
         
-        # Formasyon (4 puan)
         if formasyon_yon == "LONG":
-            long_puan += 4
-            long_sebep.append(f"Formasyon: {formasyon_sebep}")
+            long_puan += 4; long_sebep.append(f"Formasyon: {formasyon_sebep}")
         elif formasyon_yon == "SHORT":
-            short_puan += 4
-            short_sebep.append(f"Formasyon: {formasyon_sebep}")
+            short_puan += 4; short_sebep.append(f"Formasyon: {formasyon_sebep}")
         elif formasyon_yon == "SIKISMA":
             if trend_tip == "YUKSELEN": long_puan += 2
             elif trend_tip == "ALCALAN": short_puan += 2
         
-        # Trend (2 puan)
         if trend_tip == "YUKSELEN":
-            long_puan += 2
-            long_sebep.append("Yükselen kanal")
+            long_puan += 2; long_sebep.append("Yükselen kanal")
         elif trend_tip == "ALCALAN":
-            short_puan += 2
-            short_sebep.append("Alçalan kanal")
+            short_puan += 2; short_sebep.append("Alçalan kanal")
         
-        # Mum (3 puan)
         if mum_yon == "LONG":
-            long_puan += 3
-            long_sebep.append(f"Mum: {mum_sebep}")
+            long_puan += 3; long_sebep.append(f"Mum: {mum_sebep}")
         elif mum_yon == "SHORT":
-            short_puan += 3
-            short_sebep.append(f"Mum: {mum_sebep}")
+            short_puan += 3; short_sebep.append(f"Mum: {mum_sebep}")
         
-        # Destek/Direnç (2 puan)
         if destege_yakin and not dirence_yakin:
-            long_puan += 2
-            long_sebep.append(f"Destek({destek_mesafe:.2f}%)")
+            long_puan += 2; long_sebep.append(f"Destek")
         if dirence_yakin and not destege_yakin:
-            short_puan += 2
-            short_sebep.append(f"Direnç({direnc_mesafe:.2f}%)")
+            short_puan += 2; short_sebep.append(f"Direnç")
         
-        # MFI + CMF (1+1 puan)
         if mfi > MFI_ESIK_AL: long_puan += 1
         if mfi < MFI_ESIK_SAT: short_puan += 1
         if cmf > CMF_ESIK: long_puan += 1
         if cmf < -CMF_ESIK: short_puan += 1
         
-        # Hacim (1 puan)
         if hacim_oran > 1.3:
-            long_puan += 1
-            short_puan += 1
+            long_puan += 1; short_puan += 1
         
-        # Order Book
         if ob_analiz:
             if ob_analiz['baski'] == "ALIM":
-                long_puan += 2
-                long_sebep.append("OB Alım")
+                long_puan += 2; long_sebep.append("OB Alım")
             elif ob_analiz['baski'] == "SATIM":
-                short_puan += 2
-                short_sebep.append("OB Satım")
-            if ob_analiz['alim_duvari']:
-                long_puan += 1
-                long_sebep.append("Alım duvarı")
-            if ob_analiz['satim_duvari']:
-                short_puan += 1
-                short_sebep.append("Satım duvarı")
+                short_puan += 2; short_sebep.append("OB Satım")
+            if ob_analiz['alim_duvari']: long_puan += 1
+            if ob_analiz['satim_duvari']: short_puan += 1
         
-        # Funding
-        if funding_analiz_sonuc:
-            if funding_analiz_sonuc['asiri_long']:
-                short_puan += 2
-                short_sebep.append("Funding aşırı long")
-            elif funding_analiz_sonuc['asiri_short']:
-                long_puan += 2
-                long_sebep.append("Funding aşırı short")
+        if funding_sonuc:
+            if funding_sonuc['asiri_long']:
+                short_puan += 2; short_sebep.append("Funding aşırı long")
+            elif funding_sonuc['asiri_short']:
+                long_puan += 2; long_sebep.append("Funding aşırı short")
         
-        # Volume Profile
         if vp_analiz and vp_analiz.get('yakin_hacim_tip'):
             if vp_analiz['yakin_hacim_tip'] == "DESTEK" and vp_analiz['yakin_hacim_mesafe'] < 1.0:
-                long_puan += 2
-                long_sebep.append(f"VP destek")
+                long_puan += 2; long_sebep.append("VP destek")
             elif vp_analiz['yakin_hacim_tip'] == "DIRENC" and vp_analiz['yakin_hacim_mesafe'] < 1.0:
-                short_puan += 2
-                short_sebep.append(f"VP direnç")
+                short_puan += 2; short_sebep.append("VP direnç")
         
-        # Multi-Timeframe
         if mtf:
             if mtf['uyum'] == "GUCLU_LONG":
-                long_puan += 3
-                long_sebep.append("MTF güçlü LONG")
+                long_puan += 3; long_sebep.append("MTF güçlü LONG")
             elif mtf['uyum'] == "GUCLU_SHORT":
-                short_puan += 3
-                short_sebep.append("MTF güçlü SHORT")
+                short_puan += 3; short_sebep.append("MTF güçlü SHORT")
             elif mtf['uyum'] == "ZAYIF_LONG":
-                long_puan += 1
-                long_sebep.append("MTF zayıf LONG")
+                long_puan += 1; long_sebep.append("MTF zayıf LONG")
             elif mtf['uyum'] == "ZAYIF_SHORT":
-                short_puan += 1
-                short_sebep.append("MTF zayıf SHORT")
+                short_puan += 1; short_sebep.append("MTF zayıf SHORT")
         
-        # Likidite Avı
         if likidite:
             if likidite['yon'] == "LONG":
-                long_puan += 4
-                long_sebep.append(f"🎣 {likidite['sebep']}")
+                long_puan += 4; long_sebep.append(f"🎣 Likidite avı")
             elif likidite['yon'] == "SHORT":
-                short_puan += 4
-                short_sebep.append(f"🎣 {likidite['sebep']}")
+                short_puan += 4; short_sebep.append(f"🎣 Likidite avı")
         
-        # BTC bias
         if btc_yon == "SHORT": long_puan -= 2
         elif btc_yon == "LONG": short_puan -= 2
         
-        # Aşırı uzaklık
         if asiri_uzak_long: long_puan -= 3
         if asiri_uzak_short: short_puan -= 3
         
         detay["long_puan"] = long_puan
         detay["short_puan"] = short_puan
         
-        # Karar
         if long_puan >= MIN_PUAN and long_puan > short_puan:
             detay["sinyal_skoru"] = long_puan
             detay["aciklama"] = " + ".join(long_sebep)
@@ -797,9 +853,9 @@ def baslangic_temizligi():
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
         if mevcut:
-            telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v27.0)\n\nMevcut pozisyonlar:\n{mevcut}")
+            telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v27.1)\n\nMevcut pozisyonlar:\n{mevcut}")
         else:
-            telegram_kritik("🟢 BOT BAŞLATILDI (v27.0)\n\nSistem: Tara → Sırala → En İyiyi Seç\nMIN_PUAN: 7")
+            telegram_kritik("🟢 BOT BAŞLATILDI (v27.1)\n\nSistem: Tara → Sırala → En İyiyi Seç\nMIN_PUAN: 7")
     except: pass
 
 
@@ -875,7 +931,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama=""):
             f"📌 {symbol} | {yon}\n"
             f"⭐ Puan: {sinyal_skoru}\n"
             f"📋 {aciklama}\n"
-            f"📊 {sebep}\n"
             f"🎯 Giriş: {anlik_fiyat:.4f}\n"
             f"💰 TP: {tp:.4f}\n"
             f"🛑 SL: {sl:.4f}\n"
@@ -909,10 +964,8 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
         giris = float(bilgi.get("giris_fiyati", 0))
         contract_size = float(bilgi.get("contract_size", 1.0))
         
-        if yon == "LONG":
-            kar = (anlik - giris) * miktar * contract_size
-        else:
-            kar = (giris - anlik) * miktar * contract_size
+        if yon == "LONG": kar = (anlik - giris) * miktar * contract_size
+        else: kar = (giris - anlik) * miktar * contract_size
         
         sl_tetiklendi = (yon == "LONG" and anlik <= sl) or (yon == "SHORT" and anlik >= sl)
         if sl_tetiklendi:
@@ -967,21 +1020,16 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
                     if eski in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[eski]
                 hafizayi_kaydet()
                 
-                if karli:
-                    telegram_kritik(f"✅ TP (Borsa)\n📌 {eski} {y}\n💵 +{pnl:.4f} USDT")
-                else:
-                    telegram_kritik(f"❌ SL (Borsa)\n📌 {eski} {y}\n💵 {pnl:.4f} USDT")
+                if karli: telegram_kritik(f"✅ TP (Borsa)\n📌 {eski} {y}\n💵 +{pnl:.4f} USDT")
+                else: telegram_kritik(f"❌ SL (Borsa)\n📌 {eski} {y}\n💵 {pnl:.4f} USDT")
     except: pass
 
 
-# ==================== ANA DÖNGÜ (YENİ MANTIK) ====================
+# ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
     
-    print("🚀 [BAŞLANGIÇ] v27.0 - Tara, Sırala, En İyiyi Seç", flush=True)
-    print(f"⚙️ Kaldıraç: {KALDIRAC}x | Marj: %{POZISYON_MARJ*100:.0f} | Max Poz: {MAKS_POZISYON}", flush=True)
-    print(f"⚙️ SL: %{SL_YUZDE} | TP: %{TP_YUZDE} | Min Puan: {MIN_PUAN}", flush=True)
-    print(f"⚙️ Sistem: Tüm coinleri tara → Puanla → En iyi {TOP_N_ADAY} adayı seç", flush=True)
+    print("🚀 [BAŞLANGIÇ] v27.1 - Tara, Sırala, En İyiyi Seç", flush=True)
     
     try:
         exchange.load_markets()
@@ -1036,31 +1084,14 @@ def ana_dongu():
                 manuel_sl_tp_kontrol(aktif_borsa_map)
                 kapanan_pozisyonlari_kontrol(aktif_semboller_seti)
             
-            try:
-                toplam_acik_zarar = sum(float(p.get('unrealizedPnl', 0)) for p in raw_pos 
-                                       if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0)
-                if toplam_acik_zarar < -TOPLAM_ZARAR_LIMIT:
-                    telegram_gonder(f"🛑 TOPLAM ZARAR {toplam_acik_zarar:.2f}")
-                    for p in raw_pos:
-                        k = float(p.get('contracts', 0) or p.get('size', 0) or 0)
-                        if k > 0:
-                            y = str(p.get('side', '')).upper() or "LONG"
-                            market_kapat(p['symbol'], k, y)
-                    with state_lock: AKTIF_SISTEMLER.clear()
-                    hafizayi_kaydet()
-                    time.sleep(600)
-                    continue
-            except: pass
-            
             if len(aktif_semboller_seti) >= MAKS_POZISYON:
                 print(f"  ⛔ Limit dolu ({len(aktif_semboller_seti)}/{MAKS_POZISYON})", flush=True)
                 time.sleep(10)
                 continue
             
-            # ========== YENİ: TÜM COİNLERİ TARA VE PUANLA ==========
             print(f"\n🔍 1. AŞAMA: TÜM COİNLERİ TARA VE PUANLA", flush=True)
             
-            adaylar = []  # (symbol, karar, detay, puan)
+            adaylar = []
             
             for symbol in DINAMIK_LISTE:
                 if not BOT_CALISIYOR_MU: break
@@ -1079,41 +1110,32 @@ def ana_dongu():
                     adaylar.append((symbol, karar, detay, puan))
                     print(f"  ✅ {sym_kisa}: {karar} | Puan: {puan}", flush=True)
                 else:
-                    print(f"  ⏭️  {sym_kisa}: Puan yetersiz ({puan}/{MIN_PUAN})", flush=True)
+                    print(f"  ⏭️  {sym_kisa}: Puan {puan}/{MIN_PUAN}", flush=True)
             
             if not adaylar:
-                print(f"  📭 Uygun aday yok, sonraki döngüde tekrar taranacak", flush=True)
+                print(f"  📭 Uygun aday yok", flush=True)
                 time.sleep(10)
                 continue
             
-            # ========== 2. AŞAMA: EN İYİLERİ SIRALA VE SEÇ ==========
             print(f"\n🏆 2. AŞAMA: EN İYİ ADAYLARI SEÇ", flush=True)
-            
             adaylar.sort(key=lambda x: x[3], reverse=True)
             en_iyiler = adaylar[:TOP_N_ADAY]
             
-            print(f"  📊 En iyi {len(en_iyiler)} aday:", flush=True)
             for i, (sym, karar, detay, puan) in enumerate(en_iyiler, 1):
                 print(f"     {i}. {sym.replace('/USDT:USDT','')}: {karar} | Puan: {puan}", flush=True)
             
-            # ========== 3. AŞAMA: İŞLEM AÇ (Yer kaldıkça) ==========
             print(f"\n🎯 3. AŞAMA: İŞLEM AÇILIYOR", flush=True)
             
             for sym, karar, detay, puan in en_iyiler:
-                if len(aktif_semboller_seti) >= MAKS_POZISYON:
-                    print(f"  ⛔ Limit doldu ({MAKS_POZISYON}/{MAKS_POZISYON})", flush=True)
-                    break
-                
-                if sym in aktif_semboller_seti:
-                    continue
+                if len(aktif_semboller_seti) >= MAKS_POZISYON: break
+                if sym in aktif_semboller_seti: continue
                 
                 ticker = exchange.fetch_ticker(sym)
                 anlik_fiyat = float(ticker['last'])
                 
-                print(f"  🚀 {sym.replace('/USDT:USDT','')} {karar} açılıyor (Puan: {puan})", flush=True)
+                print(f"  🚀 {sym.replace('/USDT:USDT','')} {karar} (Puan: {puan})", flush=True)
                 
-                sonuc = pozisyon_ac(sym, karar, anlik_fiyat, detay.get('sebep', ''), 
-                                    puan, detay.get('aciklama', ''))
+                sonuc = pozisyon_ac(sym, karar, anlik_fiyat, detay.get('sebep', ''), puan, detay.get('aciklama', ''))
                 if sonuc:
                     aktif_semboller_seti.add(sym)
             
@@ -1172,7 +1194,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         
         mesaj = (
-            f"📊 *TREND BOT (v27.0 - EN İYİ SEÇ)*\n\n"
+            f"📊 *TREND BOT (v27.1)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1180,7 +1202,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📋 *Coin Havuzu:*\n{liste_str}\n\n"
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
             f"📈 Başarı: `%{oran:.1f}`\n"
-            f"⭐ Min Puan: `{MIN_PUAN}` | En iyi `{TOP_N_ADAY}` aday seçilir\n"
+            f"⭐ Min Puan: `{MIN_PUAN}` | En iyi `{TOP_N_ADAY}` aday\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | SL: `%{SL_YUZDE}` | TP: `%{TP_YUZDE}`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
@@ -1196,7 +1218,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Trend Bot (v27.0 - En İyi Seç) aktif!")
+    await update.message.reply_text("🟢 Trend Bot (v27.1) aktif!")
 
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1255,6 +1277,7 @@ async def main():
     kuyruk_thread.start()
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    
     try:
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
     except: pass
