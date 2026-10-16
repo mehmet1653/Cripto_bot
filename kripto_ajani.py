@@ -79,18 +79,18 @@ KARA_LISTE = [
 
 MIN_HACIM_24S = 5_000_000
 MIN_DEGISIM_YUZDE = 0.5
-MIN_FIYAT = 0.01          # ✅ GÜNCELLENDİ: 1.0 → 0.01
+MIN_FIYAT = 0.01
 MAX_FIYAT = 300.0
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
 
-# Risk yönetimi
+# ✅ Risk yönetimi (GÜNCELLENDİ)
 KALDIRAC = 5
 POZISYON_MARJ = 0.10
 MAKS_POZISYON = 2
-SL_YUZDE = 1.5
-TP_YUZDE = 2.5
+SL_YUZDE = 1.2              # ✅ 1.2
+TP_YUZDE = 2.0              # ✅ 2.0
 TOPLAM_ZARAR_LIMIT = 2.0
 
 # Formasyon ayarları
@@ -120,14 +120,14 @@ GEREKLI_SINYAL = 6
 MIN_PUAN = 10
 TOP_N_ADAY = 3
 
-# Rotasyon
-ROTASYON_AKTIF = True
+# ✅ ROTASYON KAPALI
+ROTASYON_AKTIF = False
 ROTASYON_MIN_KAR = 0.12
 ROTASYON_MIN_YENI_PUAN = 12
 ROTASYON_PUAN_FARK = 7
 
-# Erken çıkış
-ERKEN_CIKIS_AKTIF = True
+# ✅ ERKEN ÇIKIŞ KAPALI
+ERKEN_CIKIS_AKTIF = False
 ERKEN_CIKIS_MIN_KAR = 0.15
 ERKEN_CIKIS_PUAN_ESIK = 2
 ERKEN_CIKIS_MIN_SURE = 30 * 60
@@ -759,9 +759,9 @@ def baslangic_temizligi():
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
         if mevcut:
-            telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v31.1)\n\nMevcut pozisyonlar:\n{mevcut}")
+            telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v32.1)\n\nMevcut pozisyonlar:\n{mevcut}")
         else:
-            telegram_kritik("🟢 BOT BAŞLATILDI (v31.1)\n\nMin Puan: 10\nMin Fiyat: 0.01\nQuick Pump: %5 ROE (ani)")
+            telegram_kritik("🟢 BOT BAŞLATILDI (v32.1)\n\nMin Puan: 10\nTP: %2.0 | SL: %1.2\nRotasyon: KAPALI\nErken Çıkış: KAPALI")
     except: pass
 
 
@@ -839,8 +839,8 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama=""):
             f"⭐ Puan: {sinyal_skoru}\n"
             f"📋 {aciklama}\n"
             f"🎯 Giriş: {anlik_fiyat:.6f}\n"
-            f"💰 TP: {tp:.6f}\n"
-            f"🛑 SL: {sl:.6f}\n"
+            f"💰 TP: {tp:.6f} (%{TP_YUZDE})\n"
+            f"🛑 SL: {sl:.6f} (%{SL_YUZDE})\n"
             f"💵 Marj: {gercek_marj:.2f} | Kaldıraç: {KALDIRAC}x\n"
             f"📌 Açık: {islem_no}/{MAKS_POZISYON}"
         )
@@ -851,7 +851,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama=""):
         return False
 
 
-# ==================== SL/TP + QUICK PUMP + ERKEN ÇIKIŞ ====================
+# ==================== SL/TP + ANİ PUMP ====================
 def manuel_sl_tp_kontrol(aktif_borsa_map):
     global AKTIF_SISTEMLER
     with state_lock:
@@ -870,7 +870,6 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
         miktar = float(bilgi.get("miktar", 0))
         giris = float(bilgi.get("giris_fiyati", 0))
         contract_size = float(bilgi.get("contract_size", 1.0))
-        giris_zamani = float(bilgi.get("giris_zamani", time.time()))
         giris_puan = bilgi.get("sinyal_skoru", 0)
         onceki_roe = float(bilgi.get("onceki_roe", 0.0))
         
@@ -896,11 +895,9 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
             if symbol in AKTIF_SISTEMLER:
                 AKTIF_SISTEMLER[symbol]["onceki_roe"] = roe
         
-        sure_gecen = time.time() - giris_zamani
-        
         # ========== ANİ PUMP ==========
         if QUICK_PUMP_AKTIF and roe >= QUICK_PUMP_ROE and roe_artis >= QUICK_PUMP_ARTIS:
-            print(f"  🚀 [ANİ PUMP] {symbol} | ROE: +{roe:.2f}% | Artış: +{roe_artis:.2f}% | Kâr: {kar:+.4f} | HEPSİ KAPATILIYOR", flush=True)
+            print(f"  🚀 [ANİ PUMP] {symbol} | ROE: +{roe:.2f}% | Artış: +{roe_artis:.2f}% | Kâr: {kar:+.4f} | KAPATILIYOR", flush=True)
             tum_emirleri_iptal(symbol)
             if market_kapat(symbol, miktar, yon):
                 with state_lock:
@@ -915,30 +912,6 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
                     f"📊 ROE: %{roe:.2f} | Artış: +{roe_artis:.2f}%"
                 )
             continue
-        
-        # ========== AKILLI ERKEN ÇIKIŞ ==========
-        if ERKEN_CIKIS_AKTIF and kar >= ERKEN_CIKIS_MIN_KAR and sure_gecen >= ERKEN_CIKIS_MIN_SURE:
-            yeni_karar, _, yeni_puan = coin_puan_hesapla(symbol)
-            
-            if yeni_karar != yon:
-                yeni_puan = 0
-            
-            if yeni_puan <= ERKEN_CIKIS_PUAN_ESIK:
-                tum_emirleri_iptal(symbol)
-                print(f"  💰 [ERKEN ÇIKIŞ] {symbol} | Puan: {giris_puan}→{yeni_puan} | Kâr: {kar:+.4f}", flush=True)
-                if market_kapat(symbol, miktar, yon):
-                    with state_lock:
-                        if symbol in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[symbol]
-                        COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_TP), "son_yon": yon}
-                    sayaci_artir(True)
-                    hafizayi_kaydet()
-                    telegram_kritik(
-                        f"💰 ERKEN ÇIKIŞ\n"
-                        f"📌 {symbol} {yon}\n"
-                        f"💵 Kâr: +{kar:.4f} USDT\n"
-                        f"📉 Puan: {giris_puan} → {yeni_puan}"
-                    )
-                continue
         
         # ========== SL ==========
         sl_tetiklendi = (yon == "LONG" and anlik <= sl) or (yon == "SHORT" and anlik >= sl)
@@ -965,6 +938,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
                     sayaci_artir(True)
                     hafizayi_kaydet()
                     telegram_kritik(f"💰 TP\n📌 {symbol} {yon}\n💵 PnL: +{kar:.4f} USDT")
+            continue
 
 
 def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
@@ -1004,7 +978,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
     
-    print("🚀 [BAŞLANGIÇ] v31.1 - Min Fiyat 0.01", flush=True)
+    print("🚀 [BAŞLANGIÇ] v32.1 - TP %2.0 / SL %1.2 / Rotasyon Kapalı", flush=True)
     
     try:
         exchange.load_markets()
@@ -1081,66 +1055,6 @@ def ana_dongu():
                 else:
                     print(f"  ⏭️  {sym_kisa}: Puan {puan}/{MIN_PUAN} | {detay.get('sebep', '')[:60]}", flush=True)
             
-            print(f"\n📊 2. AŞAMA: AÇIK POZİSYONLARIN GÜNCEL PUANLARI", flush=True)
-            rotasyon_adaylari = []
-            
-            for sym_acik in list(aktif_semboller_seti):
-                if sym_acik not in AKTIF_SISTEMLER: continue
-                bilgi = AKTIF_SISTEMLER[sym_acik]
-                yon_acik = bilgi.get("yon", "LONG")
-                giris_puan = bilgi.get("sinyal_skoru", 0)
-                
-                kar_acik = 0
-                try:
-                    positions = exchange.fetch_positions([sym_acik])
-                    for p in positions:
-                        if p['symbol'] == sym_acik:
-                            kar_acik = float(p.get('unrealizedPnl', 0))
-                            break
-                except: pass
-                
-                yeni_karar, _, yeni_puan = coin_puan_hesapla(sym_acik)
-                if yeni_karar != yon_acik: yeni_puan = 0
-                
-                puan_dusus = giris_puan - yeni_puan
-                sym_kisa = sym_acik.replace('/USDT:USDT', '')
-                print(f"  📊 {sym_kisa} {yon_acik}: Giriş {giris_puan}p → Şimdi {yeni_puan}p | Kâr: {kar_acik:+.4f}", flush=True)
-                
-                if kar_acik >= ROTASYON_MIN_KAR and puan_dusus >= 3:
-                    rotasyon_adaylari.append({"symbol": sym_acik, "yon": yon_acik, "kar": kar_acik,
-                                              "eski_puan": giris_puan, "yeni_puan": yeni_puan})
-            
-            if ROTASYON_AKTIF and rotasyon_adaylari and adaylar:
-                adaylar.sort(key=lambda x: x[3], reverse=True)
-                en_iyi_yeni = adaylar[0]
-                yeni_sym, yeni_karar, yeni_detay, yeni_puan = en_iyi_yeni
-                
-                rotasyon_adaylari.sort(key=lambda x: x['yeni_puan'])
-                en_zayif_acik = rotasyon_adaylari[0]
-                
-                puan_fark = yeni_puan - en_zayif_acik['yeni_puan']
-                if (yeni_puan >= ROTASYON_MIN_YENI_PUAN and 
-                    puan_fark >= ROTASYON_PUAN_FARK and 
-                    en_zayif_acik['kar'] >= ROTASYON_MIN_KAR):
-                    
-                    eski_sym = en_zayif_acik['symbol']
-                    if market_kapat(eski_sym, float(AKTIF_SISTEMLER[eski_sym]['miktar']), en_zayif_acik['yon']):
-                        tum_emirleri_iptal(eski_sym)
-                        with state_lock:
-                            if eski_sym in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[eski_sym]
-                            COIN_COOLDOWNLAR[eski_sym] = {"zaman": float(time.time() + COOLDOWN_VARSAYILAN), "son_yon": en_zayif_acik['yon']}
-                        sayaci_artir(True)
-                        hafizayi_kaydet()
-                        telegram_kritik(f"🔄 ROTASYON KAPAT\n📌 {eski_sym}\n💵 +{en_zayif_acik['kar']:.4f} USDT")
-                        aktif_semboller_seti.discard(eski_sym)
-                        
-                        ticker = exchange.fetch_ticker(yeni_sym)
-                        anlik_fiyat = float(ticker['last'])
-                        if pozisyon_ac(yeni_sym, yeni_karar, anlik_fiyat, yeni_detay.get('sebep', ''), yeni_puan, yeni_detay.get('aciklama', '')):
-                            aktif_semboller_seti.add(yeni_sym)
-                            telegram_kritik(f"🔄 ROTASYON AÇ\n📌 {yeni_sym} {yeni_karar}\n⭐ Puan: {yeni_puan}")
-                            continue
-            
             limit_dolu = len(aktif_semboller_seti) >= MAKS_POZISYON
             
             if not adaylar:
@@ -1151,7 +1065,7 @@ def ana_dongu():
             adaylar.sort(key=lambda x: x[3], reverse=True)
             en_iyiler = adaylar[:TOP_N_ADAY]
             
-            print(f"\n🏆 3. AŞAMA: EN İYİ ADAYLAR", flush=True)
+            print(f"\n🏆 2. AŞAMA: EN İYİ ADAYLAR", flush=True)
             for i, (sym, karar, detay, puan) in enumerate(en_iyiler, 1):
                 durum = "👀 İZLE" if limit_dolu else "🚀 AÇILACAK"
                 print(f"     {i}. {sym.replace('/USDT:USDT','')}: {karar} | Puan: {puan} | {durum}", flush=True)
@@ -1166,6 +1080,8 @@ def ana_dongu():
                     
                     if pozisyon_ac(sym, karar, anlik_fiyat, detay.get('sebep', ''), puan, detay.get('aciklama', '')):
                         aktif_semboller_seti.add(sym)
+            else:
+                print(f"  ⛔ Limit dolu, izleme modu", flush=True)
             
         except Exception as e:
             print(f"⚠️ Ana döngü: {e}", flush=True)
@@ -1222,7 +1138,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         
         mesaj = (
-            f"📊 *TREND BOT (v31.1)*\n\n"
+            f"📊 *TREND BOT (v32.1)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1230,9 +1146,9 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📋 *Coin Havuzu:*\n{liste_str}\n\n"
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
             f"📈 Başarı: `%{oran:.1f}`\n"
-            f"⭐ Min Puan: `{MIN_PUAN}` | Min Fiyat: `{MIN_FIYAT}`\n"
+            f"⭐ Min Puan: `{MIN_PUAN}` | TP: `%{TP_YUZDE}` | SL: `%{SL_YUZDE}`\n"
             f"🚀 Ani Pump: `%{QUICK_PUMP_ROE} ROE + %{QUICK_PUMP_ARTIS} artış`\n"
-            f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | SL: `%{SL_YUZDE}` | TP: `%{TP_YUZDE}`"
+            f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
     except Exception as e:
@@ -1247,7 +1163,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Trend Bot (v31.1) aktif!")
+    await update.message.reply_text("🟢 Trend Bot (v32.1) aktif!")
 
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
