@@ -82,10 +82,6 @@ MIN_DEGISIM_YUZDE = 0.5
 MIN_FIYAT = 1.0
 MAX_FIYAT = 300.0
 
-HOT_MOVER_YUZDE = 5.0
-HOT_MOVER_MAX = 4
-SIKISAN_MAX = 4
-
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
 
@@ -121,7 +117,7 @@ MFI_ASIRI_SATIM = 10
 MFI_ASIRI_ALIM = 90
 
 GEREKLI_SINYAL = 6
-MIN_PUAN = 10                    # ✅ 7 → 10
+MIN_PUAN = 10
 TOP_N_ADAY = 3
 
 # Rotasyon
@@ -130,16 +126,17 @@ ROTASYON_MIN_KAR = 0.12
 ROTASYON_MIN_YENI_PUAN = 12
 ROTASYON_PUAN_FARK = 7
 
-# ✅ AKILLI ERKEN ÇIKIŞ
+# Erken çıkış
 ERKEN_CIKIS_AKTIF = True
-ERKEN_CIKIS_MIN_KAR = 0.15       # Min 0.15 USDT kâr
-ERKEN_CIKIS_PUAN_ESIK = 2        # Sadece puan 2 altına düşerse
-ERKEN_CIKIS_MIN_SURE = 30 * 60   # Min 30 dk geçmeli
+ERKEN_CIKIS_MIN_KAR = 0.15
+ERKEN_CIKIS_PUAN_ESIK = 2
+ERKEN_CIKIS_MIN_SURE = 30 * 60
 
-# ✅ QUICK PUMP EXIT
+# ✅ QUICK PUMP (YENİ)
 QUICK_PUMP_AKTIF = True
-QUICK_PUMP_ROE = 7.0             # %7 ROE (5x kaldıraçla %1.4 fiyat hareketi)
-QUICK_PUMP_SURE = 5 * 60         # Son 5 dakika içinde
+QUICK_PUMP_ROE = 5.0              # %5 ROE (5x kaldıraçla %1 fiyat hareketi)
+QUICK_PUMP_ARTIS = 3.0            # Son 10 saniyede %3 ROE artışı = ANİ PUMP
+# Süre sınırı YOK - ne zaman olursa olsun tetiklenir
 
 # Kill-switch
 GUNLUK_BASLANGIC_BAKIYE = None
@@ -219,7 +216,6 @@ def hizli_on_puan(symbol):
             return 0, {"sebep": f"Hacim zayıf ({hacim_oran:.2f}x)"}
         
         puan = 0
-        
         if 40 < mfi < 60: puan += 3
         elif 30 < mfi < 70: puan += 1
         
@@ -312,7 +308,6 @@ def orderbook_analiz(symbol):
         asks = ob['asks']
         if not bids or not asks: return None
         
-        anlik_fiyat = (bids[0][0] + asks[0][0]) / 2
         bid_hacim = sum(b[1] * b[0] for b in bids[:20])
         ask_hacim = sum(a[1] * a[0] for a in asks[:20])
         ort_bid = bid_hacim / 20 if bid_hacim > 0 else 1
@@ -765,9 +760,9 @@ def baslangic_temizligi():
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
         if mevcut:
-            telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v30.0)\n\nMevcut pozisyonlar:\n{mevcut}")
+            telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v31.0)\n\nMevcut pozisyonlar:\n{mevcut}")
         else:
-            telegram_kritik("🟢 BOT BAŞLATILDI (v30.0)\n\nMin Puan: 10\nErken Çıkış: AKTİF\nQuick Pump: AKTİF")
+            telegram_kritik("🟢 BOT BAŞLATILDI (v31.0)\n\nMin Puan: 10\nQuick Pump: %5 ROE (ani)\nBorsa PnL aktif")
     except: pass
 
 
@@ -833,7 +828,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama=""):
                 "sebep": sebep, "tp": tp, "sl": sl, "marj": gercek_marj,
                 "miktar": miktar, "tp_order": tp_ok, "sl_order": sl_ok,
                 "contract_size": contract_size, "sinyal_skoru": sinyal_skoru,
-                "partial_closed": False
+                "onceki_roe": 0.0
             }
         
         hafizayi_kaydet()
@@ -857,7 +852,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama=""):
         return False
 
 
-# ==================== SL/TP + ERKEN ÇIKIŞ + QUICK PUMP ====================
+# ==================== SL/TP + QUICK PUMP + ERKEN ÇIKIŞ ====================
 def manuel_sl_tp_kontrol(aktif_borsa_map):
     global AKTIF_SISTEMLER
     with state_lock:
@@ -877,65 +872,53 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
         giris = float(bilgi.get("giris_fiyati", 0))
         contract_size = float(bilgi.get("contract_size", 1.0))
         giris_zamani = float(bilgi.get("giris_zamani", time.time()))
-        partial_closed = bilgi.get("partial_closed", False)
         giris_puan = bilgi.get("sinyal_skoru", 0)
+        onceki_roe = float(bilgi.get("onceki_roe", 0.0))
         
-        if yon == "LONG": kar = (anlik - giris) * miktar * contract_size
-        else: kar = (giris - anlik) * miktar * contract_size
+        # ✅ BORSANIN GERÇEK PnL'sini kullan
+        kar = 0
+        try:
+            positions = exchange.fetch_positions([symbol])
+            for p in positions:
+                if p['symbol'] == symbol:
+                    kar = float(p.get('unrealizedPnl', 0))
+                    break
+        except:
+            # Fallback: kendi hesabı
+            if yon == "LONG": kar = (anlik - giris) * miktar * contract_size
+            else: kar = (giris - anlik) * miktar * contract_size
         
-        # ROE hesabı
+        # ROE hesabı (fiyat bazlı - bu değişmez)
         if yon == "LONG": roe = ((anlik - giris) / giris) * 100 * KALDIRAC
         else: roe = ((giris - anlik) / giris) * 100 * KALDIRAC
         
+        # ROE artışı (ani pump tespiti)
+        roe_artis = roe - onceki_roe
+        
+        # Önceki ROE'yi güncelle
+        with state_lock:
+            if symbol in AKTIF_SISTEMLER:
+                AKTIF_SISTEMLER[symbol]["onceki_roe"] = roe
+        
         sure_gecen = time.time() - giris_zamani
         
-        # ========== QUICK PUMP EXIT ==========
-        if QUICK_PUMP_AKTIF and not partial_closed and roe >= QUICK_PUMP_ROE and sure_gecen < QUICK_PUMP_SURE:
-            print(f"  🚀 [QUICK PUMP] {symbol} | ROE: +{roe:.2f}% | {sure_gecen:.0f}s | Yarısı kapatılıyor", flush=True)
-            
-            yari_miktar = float(exchange.amount_to_precision(symbol, miktar / 2))
-            kapat_yon = 'sell' if yon == 'LONG' else 'buy'
-            
-            try:
-                exchange.create_order(symbol, 'market', kapat_yon, yari_miktar, None, {'reduceOnly': True})
-                
-                # Kalan yarının SL'sini girişe çek (breakeven)
-                tum_emirleri_iptal(symbol)
-                
-                # Yeni SL (breakeven)
-                if yon == "LONG":
-                    yeni_sl = giris * 1.001  # Küçük komisyon payı
-                else:
-                    yeni_sl = giris * 0.999
-                
-                try:
-                    exchange.create_order(symbol, 'stop', kapat_yon, miktar - yari_miktar, yeni_sl, 
-                                         {'stopPrice': yeni_sl, 'reduceOnly': True})
-                except: pass
-                
-                # Yeni TP (kalan için)
-                try:
-                    exchange.create_order(symbol, 'limit', kapat_yon, miktar - yari_miktar, tp, {'reduceOnly': True})
-                except: pass
-                
+        # ========== QUICK PUMP (ANİ PUMP) ==========
+        # ROE >= %5 VE son kontrolden beri +%3 artış VARSA → HEPSİNİ KAPAT
+        if QUICK_PUMP_AKTIF and roe >= QUICK_PUMP_ROE and roe_artis >= QUICK_PUMP_ARTIS:
+            print(f"  🚀 [ANİ PUMP] {symbol} | ROE: +{roe:.2f}% | Artış: +{roe_artis:.2f}% | Kâr: {kar:+.4f} | HEPSİ KAPATILIYOR", flush=True)
+            tum_emirleri_iptal(symbol)
+            if market_kapat(symbol, miktar, yon):
                 with state_lock:
-                    AKTIF_SISTEMLER[symbol]["partial_closed"] = True
-                    AKTIF_SISTEMLER[symbol]["miktar"] = miktar - yari_miktar
-                    AKTIF_SISTEMLER[symbol]["sl"] = yeni_sl
-                
+                    if symbol in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[symbol]
+                    COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_TP), "son_yon": yon}
+                sayaci_artir(True)
                 hafizayi_kaydet()
-                
-                yari_kar = kar / 2
                 telegram_kritik(
-                    f"🚀 QUICK PUMP - YARI KAPATILDI\n"
+                    f"🚀 ANİ PUMP ÇIKIŞI\n"
                     f"📌 {symbol} {yon}\n"
-                    f"💵 Cebe: +{yari_kar:.4f} USDT\n"
-                    f"📊 ROE: %{roe:.2f} | Süre: {sure_gecen:.0f}s\n"
-                    f"🛑 SL: Girişe çekildi ({yeni_sl:.4f})\n"
-                    f"📌 Kalan yarı TP'de devam"
+                    f"💵 Kâr: +{kar:.4f} USDT\n"
+                    f"📊 ROE: %{roe:.2f} | Artış: +{roe_artis:.2f}%"
                 )
-            except Exception as e:
-                print(f"  ⚠️ Quick pump hatası: {e}", flush=True)
             continue
         
         # ========== AKILLI ERKEN ÇIKIŞ ==========
@@ -1026,7 +1009,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
     
-    print("🚀 [BAŞLANGIÇ] v30.0 - Min Puan 10 + Erken Çıkış + Quick Pump", flush=True)
+    print("🚀 [BAŞLANGIÇ] v31.0 - Borsa PnL + Ani Pump Exit", flush=True)
     
     try:
         exchange.load_markets()
@@ -1111,27 +1094,26 @@ def ana_dongu():
                 bilgi = AKTIF_SISTEMLER[sym_acik]
                 yon_acik = bilgi.get("yon", "LONG")
                 giris_puan = bilgi.get("sinyal_skoru", 0)
-                giris_fiyat = float(bilgi.get("giris_fiyati", 0))
-                miktar = float(bilgi.get("miktar", 0))
-                cs = float(bilgi.get("contract_size", 1.0))
                 
+                # Borsa PnL
+                kar_acik = 0
                 try:
-                    ticker = exchange.fetch_ticker(sym_acik)
-                    anlik_fiyat = float(ticker['last'])
-                except: continue
-                
-                if yon_acik == "LONG": kar = (anlik_fiyat - giris_fiyat) * miktar * cs
-                else: kar = (giris_fiyat - anlik_fiyat) * miktar * cs
+                    positions = exchange.fetch_positions([sym_acik])
+                    for p in positions:
+                        if p['symbol'] == sym_acik:
+                            kar_acik = float(p.get('unrealizedPnl', 0))
+                            break
+                except: pass
                 
                 yeni_karar, _, yeni_puan = coin_puan_hesapla(sym_acik)
                 if yeni_karar != yon_acik: yeni_puan = 0
                 
                 puan_dusus = giris_puan - yeni_puan
                 sym_kisa = sym_acik.replace('/USDT:USDT', '')
-                print(f"  📊 {sym_kisa} {yon_acik}: Giriş {giris_puan}p → Şimdi {yeni_puan}p | Kâr: {kar:+.4f}", flush=True)
+                print(f"  📊 {sym_kisa} {yon_acik}: Giriş {giris_puan}p → Şimdi {yeni_puan}p | Kâr: {kar_acik:+.4f}", flush=True)
                 
-                if kar >= ROTASYON_MIN_KAR and puan_dusus >= 3:
-                    rotasyon_adaylari.append({"symbol": sym_acik, "yon": yon_acik, "kar": kar,
+                if kar_acik >= ROTASYON_MIN_KAR and puan_dusus >= 3:
+                    rotasyon_adaylari.append({"symbol": sym_acik, "yon": yon_acik, "kar": kar_acik,
                                               "eski_puan": giris_puan, "yeni_puan": yeni_puan})
             
             if ROTASYON_AKTIF and rotasyon_adaylari and adaylar:
@@ -1246,7 +1228,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         
         mesaj = (
-            f"📊 *TREND BOT (v30.0)*\n\n"
+            f"📊 *TREND BOT (v31.0)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1254,8 +1236,8 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📋 *Coin Havuzu:*\n{liste_str}\n\n"
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
             f"📈 Başarı: `%{oran:.1f}`\n"
-            f"⭐ Min Puan: `{MIN_PUAN}` | Erken Çıkış: `AKTİF`\n"
-            f"🚀 Quick Pump: `%{QUICK_PUMP_ROE} ROE / {QUICK_PUMP_SURE//60} dk`\n"
+            f"⭐ Min Puan: `{MIN_PUAN}`\n"
+            f"🚀 Ani Pump: `%{QUICK_PUMP_ROE} ROE + %{QUICK_PUMP_ARTIS} artış`\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | SL: `%{SL_YUZDE}` | TP: `%{TP_YUZDE}`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
@@ -1271,7 +1253,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Trend Bot (v30.0) aktif!")
+    await update.message.reply_text("🟢 Trend Bot (v31.0) aktif!")
 
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
