@@ -85,12 +85,12 @@ MAX_FIYAT = 300.0
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
 
-# ✅ Risk yönetimi (GÜNCELLENDİ)
+# Risk yönetimi
 KALDIRAC = 5
 POZISYON_MARJ = 0.10
 MAKS_POZISYON = 2
-SL_YUZDE = 1.2              # ✅ 1.2
-TP_YUZDE = 2.0              # ✅ 2.0
+SL_YUZDE = 1.2              
+TP_YUZDE = 2.0              
 TOPLAM_ZARAR_LIMIT = 2.0
 
 # Formasyon ayarları
@@ -120,13 +120,13 @@ GEREKLI_SINYAL = 6
 MIN_PUAN = 10
 TOP_N_ADAY = 3
 
-# ✅ ROTASYON KAPALI
+# ROTASYON KAPALI
 ROTASYON_AKTIF = False
 ROTASYON_MIN_KAR = 0.12
 ROTASYON_MIN_YENI_PUAN = 12
 ROTASYON_PUAN_FARK = 7
 
-# ✅ ERKEN ÇIKIŞ KAPALI
+# ERKEN ÇIKIŞ KAPALI
 ERKEN_CIKIS_AKTIF = False
 ERKEN_CIKIS_MIN_KAR = 0.15
 ERKEN_CIKIS_PUAN_ESIK = 2
@@ -662,21 +662,37 @@ def coin_puan_hesapla(symbol):
         return None, {"hata": str(e)}, 0
 
 
-# ==================== TELEGRAM ====================
+# ==================== TELEGRAM (GÜNCELLENDİ) ====================
 def telegram_direkt_gonder(mesaj, deneme=3):
-    if not TELEGRAM_TOKEN or not CHAT_ID: return False
+    if not TELEGRAM_TOKEN or not CHAT_ID: 
+        print("⚠️ Telegram token eksik", flush=True)
+        return False
+    
     for i in range(deneme):
+        # 1. Deneme: Markdown
         try:
             r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                              json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}, timeout=15)
-            if r.status_code == 200: return True
-        except: pass
+                              json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}, timeout=10)
+            if r.status_code == 200: 
+                return True
+            else:
+                print(f"⚠️ Telegram MD Hatası ({r.status_code}): {r.text[:100]}", flush=True)
+        except Exception as e:
+            print(f"⚠️ Telegram MD Exception: {e}", flush=True)
+
+        # 2. Deneme: Düz Metin (Markdown hata verirse garantili gönderim)
         try:
             r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                              json={"chat_id": CHAT_ID, "text": mesaj}, timeout=15)
-            if r.status_code == 200: return True
-        except: pass
+                              json={"chat_id": CHAT_ID, "text": mesaj}, timeout=10)
+            if r.status_code == 200: 
+                print(f"✅ Telegram Düz Metin Gönderildi", flush=True)
+                return True
+        except Exception as e:
+            print(f"⚠️ Telegram Düz Metin Exception: {e}", flush=True)
+        
         time.sleep(2)
+    
+    print(f"🚨 Telegram Gönderilemedi: {mesaj[:50]}...", flush=True)
     return False
 
 
@@ -941,6 +957,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
             continue
 
 
+# ==================== KAPANAN POZİSYONLAR (GÜNCELLENDİ) ====================
 def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
     global AKTIF_SISTEMLER
     try:
@@ -961,7 +978,9 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
                     if y == "LONG": pnl = (cikis - g) * miktar * cs
                     else: pnl = (g - cikis) * miktar * cs
                     karli = pnl > 0
-                except: karli = True
+                except Exception as ex: 
+                    print(f"⚠️ Kapanış PnL hesaplama hatası ({eski}): {ex}", flush=True)
+                    karli = True
                 
                 sayaci_artir(karli)
                 with state_lock:
@@ -969,9 +988,11 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
                     if eski in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[eski]
                 hafizayi_kaydet()
                 
+                # Bildirimler Markdown'sız düz metin olarak gidecek (hata vermemesi için)
                 if karli: telegram_kritik(f"✅ TP (Borsa)\n📌 {eski} {y}\n💵 +{pnl:.4f} USDT")
                 else: telegram_kritik(f"❌ SL (Borsa)\n📌 {eski} {y}\n💵 {pnl:.4f} USDT")
-    except: pass
+    except Exception as e:
+        print(f"⚠️ Kapanış kontrol hatası: {e}", flush=True)
 
 
 # ==================== ANA DÖNGÜ ====================
