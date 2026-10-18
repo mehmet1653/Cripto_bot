@@ -132,10 +132,14 @@ ERKEN_CIKIS_MIN_KAR = 0.15
 ERKEN_CIKIS_PUAN_ESIK = 2
 ERKEN_CIKIS_MIN_SURE = 30 * 60
 
-# Quick Pump (Ani Pump)
-QUICK_PUMP_AKTIF = True
+# ✅ ANİ PUMP KAPATILDI
+QUICK_PUMP_AKTIF = False
 QUICK_PUMP_ROE = 5.0
 QUICK_PUMP_ARTIS = 3.0
+
+# ✅ Anlık BTC Dönüş Kalkanı (Pozisyon koruması için)
+BTC_DONUS_KALKANI_AKTIF = True
+BTC_ANLIK_DEGISIM_ESIK = 0.8  # %0.8 anlık değişim (5 dakikalık)
 
 # Kill-switch
 GUNLUK_BASLANGIC_BAKIYE = None
@@ -416,17 +420,37 @@ def likidite_avi_tespit(symbol, df_15m, destekler, direncler):
         return None
 
 
+# ✅ BTC Çift Zaman Dilimi (5m ve 15m)
 def btc_bias():
     try:
-        ohlcv = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=50)
-        df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
-        ema20 = ta.trend.ema_indicator(df['c'], window=20).iloc[-1]
-        ema50 = ta.trend.ema_indicator(df['c'], window=50).iloc[-1]
-        fiyat = df['c'].iloc[-1]
-        if fiyat > ema20 > ema50: return "LONG"
-        elif fiyat < ema20 < ema50: return "SHORT"
-        else: return "KARISIK"
-    except: return "KARISIK"
+        ohlcv_5m = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='5m', limit=50)
+        df_5m = pd.DataFrame(ohlcv_5m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        ema20_5m = ta.trend.ema_indicator(df_5m['c'], window=20).iloc[-1]
+        ema50_5m = ta.trend.ema_indicator(df_5m['c'], window=50).iloc[-1]
+        fiyat_5m = df_5m['c'].iloc[-1]
+        
+        trend_5m = "YATAY"
+        if fiyat_5m > ema20_5m > ema50_5m: trend_5m = "LONG"
+        elif fiyat_5m < ema20_5m < ema50_5m: trend_5m = "SHORT"
+
+        ohlcv_15m = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=50)
+        df_15m = pd.DataFrame(ohlcv_15m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        ema20_15m = ta.trend.ema_indicator(df_15m['c'], window=20).iloc[-1]
+        ema50_15m = ta.trend.ema_indicator(df_15m['c'], window=50).iloc[-1]
+        fiyat_15m = df_15m['c'].iloc[-1]
+        
+        trend_15m = "YATAY"
+        if fiyat_15m > ema20_15m > ema50_15m: trend_15m = "LONG"
+        elif fiyat_15m < ema20_15m < ema50_15m: trend_15m = "SHORT"
+
+        if trend_5m == "LONG" and trend_15m == "LONG":
+            return "LONG"
+        elif trend_5m == "SHORT" and trend_15m == "SHORT":
+            return "SHORT"
+        else:
+            return "KARISIK"
+    except: 
+        return "KARISIK"
 
 
 def pivot_noktalari_bul(df, lookback=5):
@@ -556,7 +580,7 @@ def coin_puan_hesapla(symbol):
         likidite = likidite_avi_tespit(symbol, df_15m, destekler, direncler)
         
         detay = {"mfi": round(mfi, 1), "cmf": round(cmf, 3), "hacim_oran": round(hacim_oran, 2),
-                 "formasyon": formasyon_sebep, "trend": trend_tip, "mum_yapisi": mum_sebep}
+                 "formasyon": formasyon_sebep, "trend": trend_tip, "mum_yapisi": mum_sebep, "btc_yon": btc_yon}
         
         if mfi < MFI_ASIRI_SATIM:
             detay["sebep"] = f"MFI DIP ({mfi:.0f})"
@@ -636,10 +660,16 @@ def coin_puan_hesapla(symbol):
             elif likidite['yon'] == "SHORT":
                 short_puan += 4; short_sebep.append("🎣 Likidite avı")
         
-        if btc_yon == "SHORT": long_puan -= 2
-        elif btc_yon == "LONG": short_puan -= 2
         if asiri_uzak_long: long_puan -= 3
         if asiri_uzak_short: short_puan -= 3
+
+        # BTC Mutlak Kural (5m + 15m)
+        if btc_yon == "LONG":
+            short_puan = 0  
+            short_sebep.append("(BTC LONG - İşlem İptal)")
+        elif btc_yon == "SHORT":
+            long_puan = 0   
+            long_sebep.append("(BTC SHORT - İşlem İptal)")
         
         detay["long_puan"] = long_puan
         detay["short_puan"] = short_puan
@@ -662,34 +692,27 @@ def coin_puan_hesapla(symbol):
         return None, {"hata": str(e)}, 0
 
 
-# ==================== TELEGRAM (GÜNCELLENDİ) ====================
+# ==================== TELEGRAM ====================
 def telegram_direkt_gonder(mesaj, deneme=3):
     if not TELEGRAM_TOKEN or not CHAT_ID: 
         print("⚠️ Telegram token eksik", flush=True)
         return False
     
     for i in range(deneme):
-        # 1. Deneme: Markdown
         try:
             r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                               json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}, timeout=10)
-            if r.status_code == 200: 
-                return True
-            else:
-                print(f"⚠️ Telegram MD Hatası ({r.status_code}): {r.text[:100]}", flush=True)
-        except Exception as e:
-            print(f"⚠️ Telegram MD Exception: {e}", flush=True)
+            if r.status_code == 200: return True
+            else: print(f"⚠️ Telegram MD Hatası ({r.status_code}): {r.text[:100]}", flush=True)
+        except Exception as e: print(f"⚠️ Telegram MD Exception: {e}", flush=True)
 
-        # 2. Deneme: Düz Metin (Markdown hata verirse garantili gönderim)
         try:
             r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                               json={"chat_id": CHAT_ID, "text": mesaj}, timeout=10)
             if r.status_code == 200: 
                 print(f"✅ Telegram Düz Metin Gönderildi", flush=True)
                 return True
-        except Exception as e:
-            print(f"⚠️ Telegram Düz Metin Exception: {e}", flush=True)
-        
+        except Exception as e: print(f"⚠️ Telegram Düz Metin Exception: {e}", flush=True)
         time.sleep(2)
     
     print(f"🚨 Telegram Gönderilemedi: {mesaj[:50]}...", flush=True)
@@ -775,9 +798,9 @@ def baslangic_temizligi():
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
         if mevcut:
-            telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v32.1)\n\nMevcut pozisyonlar:\n{mevcut}")
+            telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v32.5)\n\nBTC Kalkanı Aktif\nMevcut pozisyonlar:\n{mevcut}")
         else:
-            telegram_kritik("🟢 BOT BAŞLATILDI (v32.1)\n\nMin Puan: 10\nTP: %2.0 | SL: %1.2\nRotasyon: KAPALI\nErken Çıkış: KAPALI")
+            telegram_kritik("🟢 BOT BAŞLATILDI (v32.5)\n\nSadece SL/TP ve BTC Kalkanı Aktif\nMin Puan: 10\nTP: %2.0 | SL: %1.2")
     except: pass
 
 
@@ -867,12 +890,23 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama=""):
         return False
 
 
-# ==================== SL/TP + ANİ PUMP ====================
+# ==================== SL/TP + BTC ANLIK KALKANI ====================
 def manuel_sl_tp_kontrol(aktif_borsa_map):
     global AKTIF_SISTEMLER
     with state_lock:
         kopya = list(AKTIF_SISTEMLER.items())
     
+    btc_anlik_degisim = 0.0
+    if BTC_DONUS_KALKANI_AKTIF and kopya:
+        try:
+            btc_ohlcv_5m = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='5m', limit=2)
+            if len(btc_ohlcv_5m) >= 2:
+                btc_onceki = btc_ohlcv_5m[-2][4]
+                btc_son = btc_ohlcv_5m[-1][4]
+                btc_anlik_degisim = ((btc_son - btc_onceki) / btc_onceki) * 100
+        except:
+            btc_anlik_degisim = 0.0
+
     for symbol, bilgi in kopya:
         if symbol not in aktif_borsa_map: continue
         try:
@@ -886,10 +920,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
         miktar = float(bilgi.get("miktar", 0))
         giris = float(bilgi.get("giris_fiyati", 0))
         contract_size = float(bilgi.get("contract_size", 1.0))
-        giris_puan = bilgi.get("sinyal_skoru", 0)
-        onceki_roe = float(bilgi.get("onceki_roe", 0.0))
         
-        # Borsanın gerçek PnL'si
         kar = 0
         try:
             positions = exchange.fetch_positions([symbol])
@@ -901,34 +932,31 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
             if yon == "LONG": kar = (anlik - giris) * miktar * contract_size
             else: kar = (giris - anlik) * miktar * contract_size
         
-        # ROE hesabı
-        if yon == "LONG": roe = ((anlik - giris) / giris) * 100 * KALDIRAC
-        else: roe = ((giris - anlik) / giris) * 100 * KALDIRAC
-        
-        roe_artis = roe - onceki_roe
-        
-        with state_lock:
-            if symbol in AKTIF_SISTEMLER:
-                AKTIF_SISTEMLER[symbol]["onceki_roe"] = roe
-        
-        # ========== ANİ PUMP ==========
-        if QUICK_PUMP_AKTIF and roe >= QUICK_PUMP_ROE and roe_artis >= QUICK_PUMP_ARTIS:
-            print(f"  🚀 [ANİ PUMP] {symbol} | ROE: +{roe:.2f}% | Artış: +{roe_artis:.2f}% | Kâr: {kar:+.4f} | KAPATILIYOR", flush=True)
-            tum_emirleri_iptal(symbol)
-            if market_kapat(symbol, miktar, yon):
-                with state_lock:
-                    if symbol in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[symbol]
-                    COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_TP), "son_yon": yon}
-                sayaci_artir(True)
-                hafizayi_kaydet()
-                telegram_kritik(
-                    f"🚀 ANİ PUMP ÇIKIŞI\n"
-                    f"📌 {symbol} {yon}\n"
-                    f"💵 Kâr: +{kar:.4f} USDT\n"
-                    f"📊 ROE: %{roe:.2f} | Artış: +{roe_artis:.2f}%"
-                )
-            continue
-        
+        # ========== ✅ ANLIK BTC DÖNÜŞ KALKANI ==========
+        if BTC_DONUS_KALKANI_AKTIF:
+            btc_ters_donus = False
+            if yon == "SHORT" and btc_anlik_degisim >= BTC_ANLIK_DEGISIM_ESIK:
+                btc_ters_donus = True
+            elif yon == "LONG" and btc_anlik_degisim <= -BTC_ANLIK_DEGISIM_ESIK:
+                btc_ters_donus = True
+                
+            if btc_ters_donus:
+                print(f"  🛡️ [BTC ANLIK KALKAN] {symbol} | BTC Değişim: %{btc_anlik_degisim:.2f} | Kâr: {kar:+.4f}", flush=True)
+                tum_emirleri_iptal(symbol)
+                if market_kapat(symbol, miktar, yon):
+                    with state_lock:
+                        if symbol in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[symbol]
+                        COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_TP), "son_yon": yon}
+                    sayaci_artir(kar > 0)
+                    hafizayi_kaydet()
+                    telegram_kritik(
+                        f"🛡️ BTC ANLIK KALKAN ÇIKIŞI\n"
+                        f"📌 {symbol} {yon}\n"
+                        f"💵 PnL: {kar:+.4f} USDT\n"
+                        f"📊 BTC 5m Değişim: %{btc_anlik_degisim:.2f}"
+                    )
+                continue
+
         # ========== SL ==========
         sl_tetiklendi = (yon == "LONG" and anlik <= sl) or (yon == "SHORT" and anlik >= sl)
         if sl_tetiklendi:
@@ -957,7 +985,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
             continue
 
 
-# ==================== KAPANAN POZİSYONLAR (GÜNCELLENDİ) ====================
+# ==================== KAPANAN POZİSYONLAR ====================
 def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
     global AKTIF_SISTEMLER
     try:
@@ -988,7 +1016,6 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
                     if eski in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[eski]
                 hafizayi_kaydet()
                 
-                # Bildirimler Markdown'sız düz metin olarak gidecek (hata vermemesi için)
                 if karli: telegram_kritik(f"✅ TP (Borsa)\n📌 {eski} {y}\n💵 +{pnl:.4f} USDT")
                 else: telegram_kritik(f"❌ SL (Borsa)\n📌 {eski} {y}\n💵 {pnl:.4f} USDT")
     except Exception as e:
@@ -999,7 +1026,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
     
-    print("🚀 [BAŞLANGIÇ] v32.1 - TP %2.0 / SL %1.2 / Rotasyon Kapalı", flush=True)
+    print("🚀 [BAŞLANGIÇ] v32.5 - Sadece SL/TP ve BTC Kalkanları", flush=True)
     
     try:
         exchange.load_markets()
@@ -1074,7 +1101,7 @@ def ana_dongu():
                     adaylar.append((symbol, karar, detay, puan))
                     print(f"  ✅ {sym_kisa}: {karar} | Puan: {puan}", flush=True)
                 else:
-                    print(f"  ⏭️  {sym_kisa}: Puan {puan}/{MIN_PUAN} | {detay.get('sebep', '')[:60]}", flush=True)
+                    print(f"  ⏭️  {sym_kisa}: Puan {puan}/{MIN_PUAN} | BTC: {detay.get('btc_yon','?')} | {detay.get('sebep', '')[:60]}", flush=True)
             
             limit_dolu = len(aktif_semboller_seti) >= MAKS_POZISYON
             
@@ -1159,7 +1186,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         
         mesaj = (
-            f"📊 *TREND BOT (v32.1)*\n\n"
+            f"📊 *TREND BOT (v32.5)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1168,7 +1195,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
             f"📈 Başarı: `%{oran:.1f}`\n"
             f"⭐ Min Puan: `{MIN_PUAN}` | TP: `%{TP_YUZDE}` | SL: `%{SL_YUZDE}`\n"
-            f"🚀 Ani Pump: `%{QUICK_PUMP_ROE} ROE + %{QUICK_PUMP_ARTIS} artış`\n"
+            f"🛡️ BTC Kalkanı: `AKTİF` (Ani Pump: KAPALI)\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
@@ -1184,7 +1211,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Trend Bot (v32.1) aktif!")
+    await update.message.reply_text("🟢 Trend Bot (v32.5) aktif!")
 
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
