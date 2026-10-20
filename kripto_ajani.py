@@ -90,7 +90,7 @@ KALDIRAC = 5
 POZISYON_MARJ = 0.10
 MAKS_POZISYON = 2
 SL_YUZDE = 1.6              
-TP_YUZDE = 2.5              
+TP_YUZDE = 2.5              # Varsayılan TP (Direnç bulunamazsa kullanılır)
 TOPLAM_ZARAR_LIMIT = 2.0
 
 # Formasyon ve Trend ayarları
@@ -479,6 +479,10 @@ def coin_puan_hesapla(symbol):
         
         en_yakin_destek = min(destekler, key=lambda x: abs(x - anlik_fiyat)) if destekler else None
         en_yakin_direnc = min(direncler, key=lambda x: abs(x - anlik_fiyat)) if direncler else None
+        
+        # TP Hesaplaması için direnç/destek seviyelerini detaya ekle
+        detay = {"en_yakin_destek": en_yakin_destek, "en_yakin_direnc": en_yakin_direnc}
+
         destek_mesafe = ((anlik_fiyat - en_yakin_destek) / anlik_fiyat * 100) if en_yakin_destek else 999
         direnc_mesafe = ((en_yakin_direnc - anlik_fiyat) / anlik_fiyat * 100) if en_yakin_direnc else 999
         destege_yakin = 0 <= destek_mesafe < DESTEK_DIRENC_MESAFE
@@ -502,7 +506,7 @@ def coin_puan_hesapla(symbol):
         mtf = mtf_analiz(symbol)
         likidite = likidite_avi_tespit(symbol, df_15m, destekler, direncler)
         
-        detay = {"mfi": round(mfi, 1), "hacim_oran": round(hacim_oran, 2), "btc_yon": btc_yon, "adx": round(adx_1h, 1)}
+        detay.update({"mfi": round(mfi, 1), "hacim_oran": round(hacim_oran, 2), "btc_yon": btc_yon, "adx": round(adx_1h, 1)})
         
         if mfi < MFI_ASIRI_SATIM or mfi > MFI_ASIRI_ALIM: return None, {"sebep": f"MFI Aşırı"}, 0
         if hacim_oran < HACIM_ESIK: return None, {"sebep": f"Hacim Zayıf"}, 0
@@ -683,18 +687,18 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v33.2)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v33.2)\n\nMin Puan: {MIN_PUAN}\nADX Sınırı: {ADX_ESIK_DEGERI}\nBTC Kalkanı: KAPALI")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v33.3)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v33.3)\n\nMin Puan: {MIN_PUAN}\nADX Sınırı: {ADX_ESIK_DEGERI}\nBTC Kalkanı: KAPALI\nDinamik TP: AKTİF")
     except: pass
 
 
 # ==================== POZİSYON AÇMA ====================
-def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama=""):
+def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", detay={}):
     global AKTIF_SISTEMLER
     try:
         bakiye = exchange.fetch_balance()
         toplam_bakiye = float(bakiye['total'].get('USDT', 0))
-        serbest = float(bakiye.get('free', {}).get('USDT', 0) or 0)
+        serbest = float(bakiye.get('free', {}).get('USDT', 0))
         
         exchange.set_leverage(KALDIRAC, symbol)
         market = exchange.market(symbol)
@@ -714,12 +718,30 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama=""):
         gercek_marj = (miktar * anlik_fiyat * contract_size) / KALDIRAC
         if gercek_marj > hedef_marj * 1.5: return False
         
+        # ✅ DİNAMİK TP HESAPLAMASI
         if yon == "LONG":
-            tp = anlik_fiyat * (1 + TP_YUZDE / 100)
+            hedef_direnc = detay.get("en_yakin_direnc")
+            if hedef_direnc and hedef_direnc > anlik_fiyat:
+                mesafe = (hedef_direnc - anlik_fiyat) / anlik_fiyat * 100
+                # Eğer direnç çok yakın değilse (min %0.5) ve çok uzak değilse (max %4), TP'yi dirence koy
+                if 0.5 <= mesafe <= 4.0:
+                    tp = hedef_direnc * 0.999 # Direncin hemen bir tık altı
+                else:
+                    tp = anlik_fiyat * (1 + TP_YUZDE / 100)
+            else:
+                tp = anlik_fiyat * (1 + TP_YUZDE / 100)
             sl = anlik_fiyat * (1 - SL_YUZDE / 100)
             kapat_yon = 'sell'
         else:
-            tp = anlik_fiyat * (1 - TP_YUZDE / 100)
+            hedef_destek = detay.get("en_yakin_destek")
+            if hedef_destek and hedef_destek < anlik_fiyat:
+                mesafe = (anlik_fiyat - hedef_destek) / anlik_fiyat * 100
+                if 0.5 <= mesafe <= 4.0:
+                    tp = hedef_destek * 1.001 # Desteğin hemen bir tık üstü
+                else:
+                    tp = anlik_fiyat * (1 - TP_YUZDE / 100)
+            else:
+                tp = anlik_fiyat * (1 - TP_YUZDE / 100)
             sl = anlik_fiyat * (1 + SL_YUZDE / 100)
             kapat_yon = 'buy'
         
@@ -744,6 +766,9 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama=""):
             except: pass
             return False
         
+        # Dinamik TP'nin mesafesini loglamak için hesapla
+        tp_mesafe_yuzde = abs(tp - anlik_fiyat) / anlik_fiyat * 100
+        
         with state_lock:
             AKTIF_SISTEMLER[symbol] = {
                 "giris_fiyati": anlik_fiyat, "yon": yon, "giris_zamani": time.time(),
@@ -762,15 +787,14 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama=""):
             f"⭐ Puan: {sinyal_skoru}\n"
             f"📋 {aciklama}\n"
             f"🎯 Giriş: {anlik_fiyat:.6f}\n"
-            f"💰 TP: {tp:.6f} (%{TP_YUZDE})\n"
+            f"💰 TP: {tp:.6f} (%{tp_mesafe_yuzde:.2f} Mesafe)\n"
             f"🛑 SL: {sl:.6f} (%{SL_YUZDE})\n"
             f"💵 Marj: {gercek_marj:.2f} | Kaldıraç: {KALDIRAC}x\n"
             f"📌 Açık: {islem_no}/{MAKS_POZISYON}"
         )
         telegram_kritik(mesaj)
         
-        # ✅ YENİ: İşleme girildiğini loglara da yazdır
-        print(f"  🚀 [İŞLEM AÇILDI] {symbol} | {yon} | Giriş: {anlik_fiyat:.6f} | Puan: {sinyal_skoru}", flush=True)
+        print(f"  🚀 [İŞLEM AÇILDI] {symbol} | {yon} | Giriş: {anlik_fiyat:.6f} | TP: {tp:.6f} (%{tp_mesafe_yuzde:.2f}) | Puan: {sinyal_skoru}", flush=True)
         
         return True
     except Exception as e:
@@ -873,7 +897,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v33.2 - Min Puan: {MIN_PUAN} | ADX: {ADX_ESIK_DEGERI} | Kalkan: KAPALI | Canlı Takip: AKTİF", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v33.3 - Min Puan: {MIN_PUAN} | ADX: {ADX_ESIK_DEGERI} | Kalkan: KAPALI | Dinamik TP: AKTİF", flush=True)
     
     try:
         exchange.load_markets()
@@ -914,7 +938,6 @@ def ana_dongu():
                         aktif_borsa_map[p['symbol']] = p
                         aktif_semboller_seti.add(p['symbol'])
                 
-                # ✅ YENİ: Açık pozisyonların anlık durumunu loglara yazdır
                 if aktif_semboller_seti:
                     print(f"📌 Açık Pozisyonlar: {list(aktif_semboller_seti)}", flush=True)
                     for sym in list(aktif_semboller_seti):
@@ -945,7 +968,6 @@ def ana_dongu():
                 manuel_sl_tp_kontrol(aktif_borsa_map)
                 kapanan_pozisyonlari_kontrol(aktif_semboller_seti)
             
-            # Eğer maksimum pozisyona ulaştıysak tarama yapma, direkt bekle
             limit_dolu = len(aktif_semboller_seti) >= MAKS_POZISYON
             if limit_dolu:
                 print(f"  ⛔ Limit dolu ({len(aktif_semboller_seti)}/{MAKS_POZISYON}), yeni sinyal aranmıyor.", flush=True)
@@ -995,7 +1017,7 @@ def ana_dongu():
                     ticker = exchange.fetch_ticker(sym)
                     anlik_fiyat = float(ticker['last'])
                     
-                    if pozisyon_ac(sym, karar, anlik_fiyat, detay.get('sebep', ''), puan, detay.get('aciklama', '')):
+                    if pozisyon_ac(sym, karar, anlik_fiyat, detay.get('sebep', ''), puan, detay.get('aciklama', ''), detay):
                         aktif_semboller_seti.add(sym)
             else:
                 print(f"  ⛔ Limit dolu, izleme modu", flush=True)
@@ -1054,7 +1076,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         
         mesaj = (
-            f"📊 *TREND BOT (v33.2)*\n\n"
+            f"📊 *TREND BOT (v33.3)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1062,7 +1084,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📋 *Coin Havuzu:*\n{liste_str}\n\n"
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
             f"📈 Başarı: `%{oran:.1f}`\n"
-            f"⭐ Min Puan: `{MIN_PUAN}` | TP: `%{TP_YUZDE}` | SL: `%{SL_YUZDE}`\n"
+            f"⭐ Min Puan: `{MIN_PUAN}` | TP: `DİNAMİK`\n"
             f"🛡️ BTC Kalkanı: `KAPALI` (ADX: {ADX_ESIK_DEGERI})\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
@@ -1079,7 +1101,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Trend Bot (v33.2) aktif!")
+    await update.message.reply_text("🟢 Trend Bot (v33.3) aktif! Dinamik TP devrede.")
 
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
