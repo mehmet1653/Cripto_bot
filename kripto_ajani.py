@@ -89,14 +89,14 @@ state_lock = threading.Lock()
 KALDIRAC = 5
 POZISYON_MARJ = 0.10
 MAKS_POZISYON = 2
-SL_YUZDE = 1.6              # Fitil koruması
-TP_YUZDE = 2.5              # Risk/Ödül dengesi
+SL_YUZDE = 1.6              
+TP_YUZDE = 2.5              
 TOPLAM_ZARAR_LIMIT = 2.0
 
 # Formasyon ve Trend ayarları
 PIVOT_LOOKBACK = 50
 DESTEK_DIRENC_MESAFE = 1.0
-ADX_ESIK_DEGERI = 14.0      # ✅ YENİ: ADX 14 altındaysa yatay piyasa, işlem yok.
+ADX_ESIK_DEGERI = 14.0      # ✅ Senin isteğinle 14.0 yapıldı
 
 # Modül ayarları
 ORDERBOOK_WALL_ORANI = 2.0
@@ -118,7 +118,7 @@ MFI_ASIRI_SATIM = 10
 MFI_ASIRI_ALIM = 90
 
 GEREKLI_SINYAL = 6
-MIN_PUAN = 11               # ✅ GÜNCELLENDİ: 10'dan 12'ye çıkarıldı (Daha kaliteli sinyaller)
+MIN_PUAN = 11               # ✅ Senin isteğinle 11 yapıldı
 TOP_N_ADAY = 3
 
 # ROTASYON KAPALI
@@ -127,7 +127,7 @@ QUICK_PUMP_AKTIF = False
 ERKEN_CIKIS_AKTIF = False
 
 # BTC Dönüş Kalkanı 
-BTC_DONUS_KALKANI_AKTIF = True
+BTC_DONUS_KALKANI_AKTIF = False  # ✅ Senin isteğinle KAPATILDI
 BTC_ANLIK_DEGISIM_ESIK = 0.8  
 
 # Kill-switch
@@ -193,7 +193,6 @@ def hizli_on_puan(symbol):
         
         df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         
-        # ✅ YENİ: ADX Yatay Piyasa Filtresi
         adx = ta.trend.adx(df['h'], df['l'], df['c'], window=14).iloc[-1]
         if adx < ADX_ESIK_DEGERI:
             return 0, {"sebep": f"ADX Düşük ({adx:.0f})"}
@@ -551,7 +550,7 @@ def coin_puan_hesapla(symbol):
             elif mtf['uyum'] == "GUCLU_SHORT": short_puan += 3; short_sebep.append("MTF güçlü SHORT")
             elif mtf['uyum'] == "ZAYIF_LONG": long_puan += 1; long_sebep.append("MTF zayıf LONG")
             elif mtf['uyum'] == "ZAYIF_SHORT": short_puan += 1; short_sebep.append("MTF zayıf SHORT")
-            elif mtf['uyum'] == "KARISIK": # ✅ YENİ: MTF Karışıksa Ceza
+            elif mtf['uyum'] == "KARISIK": 
                 long_puan -= 2; short_puan -= 2
                 long_sebep.append("MTF Karışık(-2)"); short_sebep.append("MTF Karışık(-2)")
         
@@ -562,7 +561,7 @@ def coin_puan_hesapla(symbol):
         if fiyat_ema9_fark > 2.0: long_puan -= 3
         if fiyat_ema9_fark < -2.0: short_puan -= 3
 
-        # ✅ GÜNCELLENDİ: BTC Kararsızsa Ceza, Ters Yönse İptal
+        # BTC Kararsızsa Ceza, Ters Yönse İptal
         if btc_yon == "LONG":
             short_puan = 0  
             short_sebep.append("(BTC LONG)")
@@ -684,8 +683,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v33.0)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v33.0)\n\nMin Puan: 12\nADX Filtreli")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v33.1)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v33.1)\n\nMin Puan: {MIN_PUAN}\nADX Sınırı: {ADX_ESIK_DEGERI}\nBTC Kalkanı: KAPALI")
     except: pass
 
 
@@ -775,21 +774,11 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama=""):
         return False
 
 
-# ==================== SL/TP + BTC ANLIK KALKANI ====================
+# ==================== SL/TP KONTROLÜ ====================
 def manuel_sl_tp_kontrol(aktif_borsa_map):
     global AKTIF_SISTEMLER
     with state_lock: kopya = list(AKTIF_SISTEMLER.items())
     
-    btc_anlik_degisim = 0.0
-    if BTC_DONUS_KALKANI_AKTIF and kopya:
-        try:
-            btc_ohlcv_5m = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='5m', limit=2)
-            if len(btc_ohlcv_5m) >= 2:
-                btc_onceki = btc_ohlcv_5m[-2][4]
-                btc_son = btc_ohlcv_5m[-1][4]
-                btc_anlik_degisim = ((btc_son - btc_onceki) / btc_onceki) * 100
-        except: pass
-
     for symbol, bilgi in kopya:
         if symbol not in aktif_borsa_map: continue
         try:
@@ -815,22 +804,6 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
             if yon == "LONG": kar = (anlik - giris) * miktar * contract_size
             else: kar = (giris - anlik) * miktar * contract_size
         
-        if BTC_DONUS_KALKANI_AKTIF:
-            btc_ters_donus = False
-            if yon == "SHORT" and btc_anlik_degisim >= BTC_ANLIK_DEGISIM_ESIK: btc_ters_donus = True
-            elif yon == "LONG" and btc_anlik_degisim <= -BTC_ANLIK_DEGISIM_ESIK: btc_ters_donus = True
-                
-            if btc_ters_donus:
-                tum_emirleri_iptal(symbol)
-                if market_kapat(symbol, miktar, yon):
-                    with state_lock:
-                        if symbol in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[symbol]
-                        COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_TP), "son_yon": yon}
-                    sayaci_artir(kar > 0)
-                    hafizayi_kaydet()
-                    telegram_kritik(f"🛡️ BTC KALKAN ÇIKIŞI\n📌 {symbol} {yon}\n💵 PnL: {kar:+.4f} USDT")
-                continue
-
         sl_tetiklendi = (yon == "LONG" and anlik <= sl) or (yon == "SHORT" and anlik >= sl)
         if sl_tetiklendi:
             tum_emirleri_iptal(symbol)
@@ -894,7 +867,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print("🚀 [BAŞLANGIÇ] v33.0 - Min Puan 12 ve ADX Aktif", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v33.1 - Min Puan: {MIN_PUAN} | ADX: {ADX_ESIK_DEGERI} | Kalkan: KAPALI", flush=True)
     
     try:
         exchange.load_markets()
@@ -1046,7 +1019,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         
         mesaj = (
-            f"📊 *TREND BOT (v33.0)*\n\n"
+            f"📊 *TREND BOT (v33.1)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1055,7 +1028,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
             f"📈 Başarı: `%{oran:.1f}`\n"
             f"⭐ Min Puan: `{MIN_PUAN}` | TP: `%{TP_YUZDE}` | SL: `%{SL_YUZDE}`\n"
-            f"🛡️ BTC Kalkanı: `AKTİF` (ADX: {ADX_ESIK_DEGERI})\n"
+            f"🛡️ BTC Kalkanı: `KAPALI` (ADX: {ADX_ESIK_DEGERI})\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
@@ -1071,7 +1044,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Trend Bot (v33.0) aktif!")
+    await update.message.reply_text("🟢 Trend Bot (v33.1) aktif!")
 
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
