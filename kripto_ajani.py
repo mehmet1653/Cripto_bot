@@ -89,14 +89,21 @@ state_lock = threading.Lock()
 KALDIRAC = 5
 POZISYON_MARJ = 0.10
 MAKS_POZISYON = 2
+
+# Trend Modu Ayarları
 SL_YUZDE = 1.6              
-TP_YUZDE = 2.5              # Varsayılan TP (Direnç bulunamazsa kullanılır)
+TP_YUZDE = 2.5              
+ADX_ESIK_DEGERI = 18.0       # ADX 18'in altındaysa Testere Moduna geçer
+
+# Testere Modu Ayarları
+TESTERE_TP_YUZDE = 0.8      # Vur-kaç için küçük TP
+TESTERE_SL_YUZDE = 0.8      # Vur-kaç için küçük SL
+
 TOPLAM_ZARAR_LIMIT = 2.0
 
 # Formasyon ve Trend ayarları
 PIVOT_LOOKBACK = 50
 DESTEK_DIRENC_MESAFE = 1.0
-ADX_ESIK_DEGERI = 14.0      
 
 # Modül ayarları
 ORDERBOOK_WALL_ORANI = 2.0
@@ -121,14 +128,8 @@ GEREKLI_SINYAL = 6
 MIN_PUAN = 11               
 TOP_N_ADAY = 3
 
-# ROTASYON KAPALI
-ROTASYON_AKTIF = False
-QUICK_PUMP_AKTIF = False
-ERKEN_CIKIS_AKTIF = False
-
 # BTC Dönüş Kalkanı 
 BTC_DONUS_KALKANI_AKTIF = False  
-BTC_ANLIK_DEGISIM_ESIK = 0.8  
 
 # Kill-switch
 GUNLUK_BASLANGIC_BAKIYE = None
@@ -193,10 +194,9 @@ def hizli_on_puan(symbol):
         
         df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         
-        adx = ta.trend.adx(df['h'], df['l'], df['c'], window=14).iloc[-1]
-        if adx < ADX_ESIK_DEGERI:
-            return 0, {"sebep": f"ADX Düşük ({adx:.0f})"}
-
+        # Artık hızlı ön puanda ADX'i filtre olarak kullanmıyoruz. 
+        # Çünkü ADX düşükse bile Testere Modunda işlem açacağız.
+        
         mfi = ta.volume.money_flow_index(high=df['h'], low=df['l'], close=df['c'], volume=df['v'], window=14).iloc[-1]
         if mfi < MFI_ASIRI_SATIM or mfi > MFI_ASIRI_ALIM: return 0, {"sebep": f"MFI aşırı ({mfi:.0f})"}
         
@@ -221,7 +221,7 @@ def hizli_on_puan(symbol):
         bb_genislik = ((bb_ust - bb_alt) / df['c']) * 100
         if bb_genislik.iloc[-1] < bb_genislik.iloc[-20:].mean() * 0.8: puan += 2
         
-        return puan, {"mfi": round(mfi, 1), "hacim_oran": round(hacim_oran, 2), "adx": round(adx, 1)}
+        return puan, {"mfi": round(mfi, 1), "hacim_oran": round(hacim_oran, 2)}
     except: return 0, {}
 
 
@@ -455,7 +455,7 @@ def mum_yapisi(df):
     return None, ""
 
 
-# ==================== COİN PUAN HESAPLA ====================
+# ==================== COİN PUAN HESAPLA (MODLAR BURADA) ====================
 def coin_puan_hesapla(symbol):
     try:
         ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=PIVOT_LOOKBACK)
@@ -471,16 +471,61 @@ def coin_puan_hesapla(symbol):
         mum_kirmizi = son_kapanan_15m['c'] < son_kapanan_15m['o']
 
         adx_1h = ta.trend.adx(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
-        if adx_1h < ADX_ESIK_DEGERI:
-            return None, {"sebep": f"ADX Yatay ({adx_1h:.0f})"}, 0
+        
+        # ==================== MOD BELİRLEME ====================
+        if adx_1h >= ADX_ESIK_DEGERI:
+            mod = "TREND"
+        else:
+            mod = "TESTERE"
+            
+        detay = {"mod": mod, "adx": round(adx_1h, 1)}
 
+        # ==================== TESTERE MODU (MEAN REVERSION) ====================
+        if mod == "TESTERE":
+            rsi_15m = ta.momentum.rsi(df_15m['c'], window=14).iloc[-1]
+            bb_ust = ta.volatility.bollinger_hband(df_15m['c'], window=20).iloc[-1]
+            bb_alt = ta.volatility.bollinger_lband(df_15m['c'], window=20).iloc[-1]
+            bb_orta = ta.volatility.bollinger_mavg(df_15m['c'], window=20).iloc[-1]
+            
+            detay["rsi"] = round(rsi_15m, 1)
+            
+            long_puan = 0; short_puan = 0
+            long_sebep = []; short_sebep = []
+            
+            if rsi_15m < 30: 
+                long_puan += 10; long_sebep.append(f"RSI Aşırı Satım ({rsi_15m:.0f})")
+            if rsi_15m > 70: 
+                short_puan += 10; short_sebep.append(f"RSI Aşırı Alım ({rsi_15m:.0f})")
+                
+            if anlik_fiyat <= bb_alt: 
+                long_puan += 5; long_sebep.append("BB Alt Bandı")
+            if anlik_fiyat >= bb_ust: 
+                short_puan += 5; short_sebep.append("BB Üst Bandı")
+                
+            # Fiyat orta banda çok yakınsa (SMA20) işlem yapma, ortada kalma
+            if abs(anlik_fiyat - bb_orta) / bb_orta < 0.005:
+                return None, {"sebep": "Testere: Fiyat Ortada (Bekle)"}, 0
+                
+            if long_puan >= 10 and long_puan > short_puan:
+                detay["sebep"] = f"TESTERE LONG | {', '.join(long_sebep)}"
+                detay["aciklama"] = " + ".join(long_sebep)
+                return "LONG", detay, long_puan
+                
+            if short_puan >= 10 and short_puan > long_puan:
+                detay["sebep"] = f"TESTERE SHORT | {', '.join(short_sebep)}"
+                detay["aciklama"] = " + ".join(short_sebep)
+                return "SHORT", detay, short_puan
+                
+            return None, {"sebep": "Testere: Sinyal Yok"}, 0
+
+        # ==================== TREND MODU (MEVCUT MANTIK) ====================
         formasyon_yon, formasyon_sebep = formasyon_tespit(df_1h)
         destekler, direncler = destek_direnc_seviyeleri(df_1h)
         
         en_yakin_destek = min(destekler, key=lambda x: abs(x - anlik_fiyat)) if destekler else None
         en_yakin_direnc = min(direncler, key=lambda x: abs(x - anlik_fiyat)) if direncler else None
         
-        detay = {"en_yakin_destek": en_yakin_destek, "en_yakin_direnc": en_yakin_direnc}
+        detay.update({"en_yakin_destek": en_yakin_destek, "en_yakin_direnc": en_yakin_direnc})
 
         destek_mesafe = ((anlik_fiyat - en_yakin_destek) / anlik_fiyat * 100) if en_yakin_destek else 999
         direnc_mesafe = ((en_yakin_direnc - anlik_fiyat) / anlik_fiyat * 100) if en_yakin_direnc else 999
@@ -505,7 +550,7 @@ def coin_puan_hesapla(symbol):
         mtf = mtf_analiz(symbol)
         likidite = likidite_avi_tespit(symbol, df_15m, destekler, direncler)
         
-        detay.update({"mfi": round(mfi, 1), "hacim_oran": round(hacim_oran, 2), "btc_yon": btc_yon, "adx": round(adx_1h, 1)})
+        detay.update({"mfi": round(mfi, 1), "hacim_oran": round(hacim_oran, 2), "btc_yon": btc_yon})
         
         if mfi < MFI_ASIRI_SATIM or mfi > MFI_ASIRI_ALIM: return None, {"sebep": f"MFI Aşırı"}, 0
         if hacim_oran < HACIM_ESIK: return None, {"sebep": f"Hacim Zayıf"}, 0
@@ -564,7 +609,7 @@ def coin_puan_hesapla(symbol):
         if fiyat_ema9_fark > 2.0: long_puan -= 3
         if fiyat_ema9_fark < -2.0: short_puan -= 3
 
-        # BTC Kararsızsa Ceza, Ters Yönse İptal
+        # Trend Modunda BTC Kararsızsa Ceza, Ters Yönse İptal
         if btc_yon == "LONG":
             short_puan = 0  
             short_sebep.append("(BTC LONG)")
@@ -582,7 +627,7 @@ def coin_puan_hesapla(symbol):
             if mum_yesil:
                 detay["sinyal_skoru"] = long_puan
                 detay["aciklama"] = " + ".join(long_sebep) + " + Mum Onayı"
-                detay["sebep"] = f"L:{long_puan} S:{short_puan} | {detay['aciklama'][:100]}"
+                detay["sebep"] = f"TREND LONG | L:{long_puan} S:{short_puan}"
                 return "LONG", detay, long_puan
             else:
                 detay["sebep"] = f"L:{long_puan} (Mum Onayı Bekleniyor)"
@@ -592,7 +637,7 @@ def coin_puan_hesapla(symbol):
             if mum_kirmizi:
                 detay["sinyal_skoru"] = short_puan
                 detay["aciklama"] = " + ".join(short_sebep) + " + Mum Onayı"
-                detay["sebep"] = f"L:{long_puan} S:{short_puan} | {detay['aciklama'][:100]}"
+                detay["sebep"] = f"TREND SHORT | L:{long_puan} S:{short_puan}"
                 return "SHORT", detay, short_puan
             else:
                 detay["sebep"] = f"S:{short_puan} (Mum Onayı Bekleniyor)"
@@ -686,8 +731,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v33.4)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v33.4)\n\nMin Puan: {MIN_PUAN}\nADX Sınırı: {ADX_ESIK_DEGERI}\nBTC Kalkanı: KAPALI\nAkıllı SL & TP: AKTİF")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v34.0 - Hibrit Mod)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v34.0 - Hibrit Mod)\n\nMod 1: Trend Takip (ADX>{ADX_ESIK_DEGERI})\nMod 2: Testere/Mean Reversion (ADX<{ADX_ESIK_DEGERI})")
     except: pass
 
 
@@ -717,52 +762,51 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         gercek_marj = (miktar * anlik_fiyat * contract_size) / KALDIRAC
         if gercek_marj > hedef_marj * 1.5: return False
         
-        # ✅ AKILLI SL ve TP HESAPLAMASI
-        if yon == "LONG":
-            hedef_direnc = detay.get("en_yakin_direnc")
-            if hedef_direnc and hedef_direnc > anlik_fiyat:
-                mesafe_tp = (hedef_direnc - anlik_fiyat) / anlik_fiyat * 100
-                if 0.5 <= mesafe_tp <= 4.0:
-                    tp = hedef_direnc * 0.999 
-                else:
-                    tp = anlik_fiyat * (1 + TP_YUZDE / 100)
+        # ✅ MODA GÖRE TP ve SL HESAPLAMASI
+        is_testere = detay.get("mod") == "TESTERE"
+        
+        if is_testere:
+            # Testere Modu: Vur-Kaç (Sabit küçük TP ve SL)
+            if yon == "LONG":
+                tp = anlik_fiyat * (1 + TESTERE_TP_YUZDE / 100)
+                sl = anlik_fiyat * (1 - TESTERE_SL_YUZDE / 100)
+                kapat_yon = 'sell'
             else:
-                tp = anlik_fiyat * (1 + TP_YUZDE / 100)
-            
-            hedef_destek = detay.get("en_yakin_destek")
-            if hedef_destek and hedef_destek < anlik_fiyat:
-                mesafe_sl = (anlik_fiyat - hedef_destek) / anlik_fiyat * 100
-                # Destek %0.8 ile %1.8 arasındaysa SL'yi desteğin altına koy, değilse sabit SL
-                if 0.8 <= mesafe_sl <= 1.8:
-                    sl = hedef_destek * 0.998 
-                else:
-                    sl = anlik_fiyat * (1 - SL_YUZDE / 100)
-            else:
-                sl = anlik_fiyat * (1 - SL_YUZDE / 100)
-                
-            kapat_yon = 'sell'
+                tp = anlik_fiyat * (1 - TESTERE_TP_YUZDE / 100)
+                sl = anlik_fiyat * (1 + TESTERE_SL_YUZDE / 100)
+                kapat_yon = 'buy'
         else:
-            hedef_destek = detay.get("en_yakin_destek")
-            if hedef_destek and hedef_destek < anlik_fiyat:
-                mesafe_tp = (anlik_fiyat - hedef_destek) / anlik_fiyat * 100
-                if 0.5 <= mesafe_tp <= 4.0:
-                    tp = hedef_destek * 1.001 
-                else:
-                    tp = anlik_fiyat * (1 - TP_YUZDE / 100)
-            else:
-                tp = anlik_fiyat * (1 - TP_YUZDE / 100)
-            
-            hedef_direnc = detay.get("en_yakin_direnc")
-            if hedef_direnc and hedef_direnc > anlik_fiyat:
-                mesafe_sl = (hedef_direnc - anlik_fiyat) / anlik_fiyat * 100
-                if 0.8 <= mesafe_sl <= 1.8:
-                    sl = hedef_direnc * 1.002 
-                else:
-                    sl = anlik_fiyat * (1 + SL_YUZDE / 100)
-            else:
-                sl = anlik_fiyat * (1 + SL_YUZDE / 100)
+            # Trend Modu: Mevcut Akıllı TP ve Akıllı SL
+            if yon == "LONG":
+                hedef_direnc = detay.get("en_yakin_direnc")
+                if hedef_direnc and hedef_direnc > anlik_fiyat:
+                    mesafe_tp = (hedef_direnc - anlik_fiyat) / anlik_fiyat * 100
+                    if 0.5 <= mesafe_tp <= 4.0: tp = hedef_direnc * 0.999 
+                    else: tp = anlik_fiyat * (1 + TP_YUZDE / 100)
+                else: tp = anlik_fiyat * (1 + TP_YUZDE / 100)
                 
-            kapat_yon = 'buy'
+                hedef_destek = detay.get("en_yakin_destek")
+                if hedef_destek and hedef_destek < anlik_fiyat:
+                    mesafe_sl = (anlik_fiyat - hedef_destek) / anlik_fiyat * 100
+                    if 0.8 <= mesafe_sl <= 1.8: sl = hedef_destek * 0.998 
+                    else: sl = anlik_fiyat * (1 - SL_YUZDE / 100)
+                else: sl = anlik_fiyat * (1 - SL_YUZDE / 100)
+                kapat_yon = 'sell'
+            else:
+                hedef_destek = detay.get("en_yakin_destek")
+                if hedef_destek and hedef_destek < anlik_fiyat:
+                    mesafe_tp = (anlik_fiyat - hedef_destek) / anlik_fiyat * 100
+                    if 0.5 <= mesafe_tp <= 4.0: tp = hedef_destek * 1.001 
+                    else: tp = anlik_fiyat * (1 - TP_YUZDE / 100)
+                else: tp = anlik_fiyat * (1 - TP_YUZDE / 100)
+                
+                hedef_direnc = detay.get("en_yakin_direnc")
+                if hedef_direnc and hedef_direnc > anlik_fiyat:
+                    mesafe_sl = (hedef_direnc - anlik_fiyat) / anlik_fiyat * 100
+                    if 0.8 <= mesafe_sl <= 1.8: sl = hedef_direnc * 1.002 
+                    else: sl = anlik_fiyat * (1 + SL_YUZDE / 100)
+                else: sl = anlik_fiyat * (1 + SL_YUZDE / 100)
+                kapat_yon = 'buy'
         
         islem_y = 'buy' if yon == 'LONG' else 'sell'
         exchange.create_order(symbol, 'market', islem_y, miktar)
@@ -800,8 +844,9 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         hafizayi_kaydet()
         islem_no = len(AKTIF_SISTEMLER)
         
+        mod_str = "TESTERE" if is_testere else "TREND"
         mesaj = (
-            f"🏆 EN İYİ SİNYAL ({islem_no}. İşlem)\n"
+            f"🏆 EN İYİ SİNYAL ({islem_no}. İşlem) [{mod_str}]\n"
             f"📌 {symbol} | {yon}\n"
             f"⭐ Puan: {sinyal_skoru}\n"
             f"📋 {aciklama}\n"
@@ -813,7 +858,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         )
         telegram_kritik(mesaj)
         
-        print(f"  🚀 [İŞLEM AÇILDI] {symbol} | {yon} | Giriş: {anlik_fiyat:.6f} | TP: {tp:.6f} (%{tp_mesafe_yuzde:.2f}) | SL: {sl:.6f} (%{sl_mesafe_yuzde:.2f}) | Puan: {sinyal_skoru}", flush=True)
+        print(f"  🚀 [İŞLEM AÇILDI] [{mod_str}] {symbol} | {yon} | Giriş: {anlik_fiyat:.6f} | TP: {tp:.6f} (%{tp_mesafe_yuzde:.2f}) | SL: {sl:.6f} (%{sl_mesafe_yuzde:.2f})", flush=True)
         
         return True
     except Exception as e:
@@ -916,7 +961,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v33.4 - Min Puan: {MIN_PUAN} | ADX: {ADX_ESIK_DEGERI} | Akıllı SL & TP: AKTİF", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v34.0 - Hibrit Mod (Trend & Testere) Aktif", flush=True)
     
     try:
         exchange.load_markets()
@@ -1011,9 +1056,9 @@ def ana_dongu():
                 
                 if karar is not None and puan >= MIN_PUAN:
                     adaylar.append((symbol, karar, detay, puan))
-                    print(f"  ✅ {sym_kisa}: {karar} | Puan: {puan}", flush=True)
+                    print(f"  ✅ {sym_kisa}: {karar} | Puan: {puan} | Mod: {detay.get('mod','?')}", flush=True)
                 else:
-                    print(f"  ⏭️  {sym_kisa}: Puan {puan}/{MIN_PUAN} | BTC: {detay.get('btc_yon','?')} | {detay.get('sebep', '')[:60]}", flush=True)
+                    print(f"  ⏭️  {sym_kisa}: Puan {puan}/{MIN_PUAN} | {detay.get('sebep', '')[:60]}", flush=True)
             
             if not adaylar:
                 print(f"  📭 Uygun aday yok", flush=True)
@@ -1026,7 +1071,7 @@ def ana_dongu():
             print(f"\n🏆 2. AŞAMA: EN İYİ ADAYLAR", flush=True)
             for i, (sym, karar, detay, puan) in enumerate(en_iyiler, 1):
                 durum = "👀 İZLE" if limit_dolu else "🚀 AÇILACAK"
-                print(f"     {i}. {sym.replace('/USDT:USDT','')}: {karar} | Puan: {puan} | {durum}", flush=True)
+                print(f"     {i}. {sym.replace('/USDT:USDT','')}: {karar} | Puan: {puan} | Mod: {detay.get('mod')} | {durum}", flush=True)
             
             if not limit_dolu:
                 for sym, karar, detay, puan in en_iyiler:
@@ -1095,7 +1140,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         
         mesaj = (
-            f"📊 *TREND BOT (v33.4)*\n\n"
+            f"📊 *TREND BOT (v34.0 - Hibrit)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1103,8 +1148,8 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📋 *Coin Havuzu:*\n{liste_str}\n\n"
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
             f"📈 Başarı: `%{oran:.1f}`\n"
-            f"⭐ Min Puan: `{MIN_PUAN}` | TP & SL: `DİNAMİK`\n"
-            f"🛡️ BTC Kalkanı: `KAPALI` (ADX: {ADX_ESIK_DEGERI})\n"
+            f"⭐ Min Puan: `{MIN_PUAN}`\n"
+            f"⚙️ Mod: `Trend (ADX>{ADX_ESIK_DEGERI})` | `Testere (ADX<{ADX_ESIK_DEGERI})`\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
@@ -1120,7 +1165,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Trend Bot (v33.4) aktif! Akıllı SL & TP devrede.")
+    await update.message.reply_text("🟢 Trend Bot (v34.0 - Hibrit) aktif!")
 
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1158,7 +1203,6 @@ async def liste_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, s in enumerate(DINAMIK_LISTE, 1):
         liste_str += f"{i}. `{s.replace('/USDT:USDT','')}`\n"
     await update.message.reply_text(liste_str, parse_mode='Markdown')
-
 
 async def kuyruk_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
