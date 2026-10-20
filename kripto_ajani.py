@@ -87,7 +87,7 @@ state_lock = threading.Lock()
 
 # Risk yönetimi 
 KALDIRAC = 5
-POZISYON_MARJ = 0.10
+POZISYON_MARJ = 0.20
 MAKS_POZISYON = 2
 
 # Trend Modu Ayarları
