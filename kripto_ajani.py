@@ -96,7 +96,7 @@ TOPLAM_ZARAR_LIMIT = 2.0
 # Formasyon ve Trend ayarları
 PIVOT_LOOKBACK = 50
 DESTEK_DIRENC_MESAFE = 1.0
-ADX_ESIK_DEGERI = 16.0      # ✅ YENİ: ADX 16 altındaysa yatay piyasa, işlem yok.
+ADX_ESIK_DEGERI = 14.0      # ✅ YENİ: ADX 14 altındaysa yatay piyasa, işlem yok.
 
 # Modül ayarları
 ORDERBOOK_WALL_ORANI = 2.0
@@ -118,7 +118,7 @@ MFI_ASIRI_SATIM = 10
 MFI_ASIRI_ALIM = 90
 
 GEREKLI_SINYAL = 6
-MIN_PUAN = 12               # ✅ GÜNCELLENDİ: 10'dan 12'ye çıkarıldı (Daha kaliteli sinyaller)
+MIN_PUAN = 11               # ✅ GÜNCELLENDİ: 10'dan 12'ye çıkarıldı (Daha kaliteli sinyaller)
 TOP_N_ADAY = 3
 
 # ROTASYON KAPALI
