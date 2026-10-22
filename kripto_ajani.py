@@ -87,17 +87,22 @@ state_lock = threading.Lock()
 
 # Risk yönetimi 
 KALDIRAC = 5
-POZISYON_MARJ = 0.20
+POZISYON_MARJ = 0.10
 MAKS_POZISYON = 2
 
 # Trend Modu Ayarları
 SL_YUZDE = 1.6              
 TP_YUZDE = 2.5              
-ADX_ESIK_DEGERI = 18.0       # ADX 18'in altındaysa Testere Moduna geçer
+ADX_ESIK_DEGERI = 18.0       
 
 # Testere Modu Ayarları
-TESTERE_TP_YUZDE = 0.8      # Vur-kaç için küçük TP
-TESTERE_SL_YUZDE = 0.8      # Vur-kaç için küçük SL
+TESTERE_TP_YUZDE = 0.8      
+TESTERE_SL_YUZDE = 0.8      
+
+# ✅ YENİ: Kâr Takipçisi (Trailing Stop) Ayarları
+TRAILING_STOP_AKTIF = True
+TRAILING_BASLANGIC_ROE = 4.0   # Kâr %4 ROE'ye ulaşınca takip başlar
+TRAILING_DUSUS_YUZDE = 1.5     # Zirveden %1.5 düşerse kârı cebe indir
 
 TOPLAM_ZARAR_LIMIT = 2.0
 
@@ -128,10 +133,8 @@ GEREKLI_SINYAL = 6
 MIN_PUAN = 11               
 TOP_N_ADAY = 3
 
-# BTC Dönüş Kalkanı 
 BTC_DONUS_KALKANI_AKTIF = False  
 
-# Kill-switch
 GUNLUK_BASLANGIC_BAKIYE = None
 GUNLUK_ZARAR_LIMIT = 0.03
 
@@ -193,9 +196,6 @@ def hizli_on_puan(symbol):
         if len(ohlcv) < 30: return 0, {}
         
         df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
-        
-        # Artık hızlı ön puanda ADX'i filtre olarak kullanmıyoruz. 
-        # Çünkü ADX düşükse bile Testere Modunda işlem açacağız.
         
         mfi = ta.volume.money_flow_index(high=df['h'], low=df['l'], close=df['c'], volume=df['v'], window=14).iloc[-1]
         if mfi < MFI_ASIRI_SATIM or mfi > MFI_ASIRI_ALIM: return 0, {"sebep": f"MFI aşırı ({mfi:.0f})"}
@@ -455,7 +455,7 @@ def mum_yapisi(df):
     return None, ""
 
 
-# ==================== COİN PUAN HESAPLA (MODLAR BURADA) ====================
+# ==================== COİN PUAN HESAPLA ====================
 def coin_puan_hesapla(symbol):
     try:
         ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=PIVOT_LOOKBACK)
@@ -487,6 +487,10 @@ def coin_puan_hesapla(symbol):
             bb_alt = ta.volatility.bollinger_lband(df_15m['c'], window=20).iloc[-1]
             bb_orta = ta.volatility.bollinger_mavg(df_15m['c'], window=20).iloc[-1]
             
+            # ✅ YENİ: TESTERE MODU TREND FİLTRESİ (Düşen bıçağı tutma engeli)
+            ema50_1h = ta.trend.ema_indicator(df_1h['c'], window=50).iloc[-1]
+            trend_asagi = anlik_fiyat < ema50_1h
+            
             detay["rsi"] = round(rsi_15m, 1)
             
             long_puan = 0; short_puan = 0
@@ -507,6 +511,8 @@ def coin_puan_hesapla(symbol):
                 return None, {"sebep": "Testere: Fiyat Ortada (Bekle)"}, 0
                 
             if long_puan >= 10 and long_puan > short_puan:
+                if trend_asagi:
+                    return None, {"sebep": "Testere Long İptal (Trend Aşağı)"}, 0
                 detay["sebep"] = f"TESTERE LONG | {', '.join(long_sebep)}"
                 detay["aciklama"] = " + ".join(long_sebep)
                 return "LONG", detay, long_puan
@@ -731,8 +737,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v34.0 - Hibrit Mod)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v34.0 - Hibrit Mod)\n\nMod 1: Trend Takip (ADX>{ADX_ESIK_DEGERI})\nMod 2: Testere/Mean Reversion (ADX<{ADX_ESIK_DEGERI})")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v34.1 - Hibrit + Trailing)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v34.1 - Hibrit + Trailing)\n\nTrend Modu: {ADX_ESIK_DEGERI}+ ADX\nTestere Modu: {ADX_ESIK_DEGERI}- ADX\nTrailing Stop: AKTİF")
     except: pass
 
 
@@ -838,7 +844,8 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
                 "sebep": sebep, "tp": tp, "sl": sl, "marj": gercek_marj,
                 "miktar": miktar, "tp_order": tp_ok, "sl_order": sl_ok,
                 "contract_size": contract_size, "sinyal_skoru": sinyal_skoru,
-                "onceki_roe": 0.0
+                "onceki_roe": 0.0,
+                "en_yuksek_roe": 0.0 # ✅ YENİ: Kâr takibi için zirve noktası
             }
         
         hafizayi_kaydet()
@@ -896,6 +903,35 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
             if yon == "LONG": kar = (anlik - giris) * miktar * contract_size
             else: kar = (giris - anlik) * miktar * contract_size
         
+        # ✅ YENİ: TRAILING STOP (KÂR TAKİPÇİSİ) MANTIĞI
+        if TRAILING_STOP_AKTIF:
+            # Anlık ROE hesapla (Kaldıraçsız kâr * Kaldıraç)
+            if yon == "LONG": anlik_roe = ((anlik - giris) / giris) * 100 * KALDIRAC
+            else: anlik_roe = ((giris - anlik) / giris) * 100 * KALDIRAC
+            
+            # Eğer zirve ROE daha önce kaydedilmemişse veya anlık ROE zirveyi geçtiyse, zirveyi güncelle
+            if anlik_roe > bilgi.get("en_yuksek_roe", 0.0):
+                with state_lock:
+                    AKTIF_SISTEMLER[symbol]["en_yuksek_roe"] = anlik_roe
+            
+            zirve_roe = bilgi.get("en_yuksek_roe", 0.0)
+            
+            # Kâr takibi başladı mı? (Örn: %4'ü geçtiyse)
+            if zirve_roe >= TRAILING_BASLANGIC_ROE:
+                # Zirveden ne kadar düştük?
+                dusus = zirve_roe - anlik_roe
+                if dusus >= TRAILING_DUSUS_YUZDE:
+                    print(f"  🛡️ [TRAILING STOP] {symbol} | Zirve ROE: %{zirve_roe:.2f} -> Düşüş: %{anlik_roe:.2f}", flush=True)
+                    tum_emirleri_iptal(symbol)
+                    if market_kapat(symbol, miktar, yon):
+                        with state_lock:
+                            if symbol in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[symbol]
+                            COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_TP), "son_yon": yon}
+                        sayaci_artir(True)
+                        telegram_kritik(f"💰 TRAILING STOP (Kâr Korundu)\n📌 {symbol} {yon}\n📈 Zirve ROE: %{zirve_roe:.2f}\n💵 PnL: +{kar:.4f} USDT")
+                    continue
+
+        # Normal SL
         sl_tetiklendi = (yon == "LONG" and anlik <= sl) or (yon == "SHORT" and anlik >= sl)
         if sl_tetiklendi:
             tum_emirleri_iptal(symbol)
@@ -909,6 +945,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
                 print(f"  🛑 [SL TETİKLENDİ] {symbol} | PnL: {kar:.4f}", flush=True)
             continue
         
+        # Normal TP
         if tp > 0:
             tp_tetiklendi = (yon == "LONG" and anlik >= tp) or (yon == "SHORT" and anlik <= tp)
             if tp_tetiklendi:
@@ -961,7 +998,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v34.0 - Hibrit Mod (Trend & Testere) Aktif", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v34.1 - Hibrit (Trend & Testere) + Trailing Stop Aktif", flush=True)
     
     try:
         exchange.load_markets()
@@ -1140,7 +1177,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         
         mesaj = (
-            f"📊 *TREND BOT (v34.0 - Hibrit)*\n\n"
+            f"📊 *TREND BOT (v34.1 - Hibrit + Trailing)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1150,6 +1187,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📈 Başarı: `%{oran:.1f}`\n"
             f"⭐ Min Puan: `{MIN_PUAN}`\n"
             f"⚙️ Mod: `Trend (ADX>{ADX_ESIK_DEGERI})` | `Testere (ADX<{ADX_ESIK_DEGERI})`\n"
+            f"🛡️ Trailing Stop: `{TRAILING_BASLANGIC_ROE}% ROE`\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
@@ -1165,7 +1203,7 @@ async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = await asyncio.to_thread(exchange.fetch_balance)
         GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
     except: pass
-    await update.message.reply_text("🟢 Trend Bot (v34.0 - Hibrit) aktif!")
+    await update.message.reply_text("🟢 Trend Bot (v34.1 - Hibrit) aktif!")
 
 
 async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
