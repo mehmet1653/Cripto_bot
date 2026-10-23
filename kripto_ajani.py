@@ -93,12 +93,19 @@ MAKS_POZISYON = 2
 # Trend Modu Ayarları
 SL_YUZDE = 1.6              
 TP_YUZDE = 2.5              
-ADX_ESIK_DEGERI = 18.0       # ADX 18'in altındaysa işlem açılmaz
+MIN_TP_MESAFE = 1.5  
+ADX_ESIK_DEGERI = 18.0       
+
+# Dinamik Puan Barajı Ayarları
+MIN_PUAN = 11               # Normal Baraj (Başlangıç)
+BARAJ_ARTIS_1 = 14          # 3 Ardışık kazançtan sonraki baraj
+BARAJ_ARTIS_2 = 16          # 5 Ardışık kazançtan sonraki baraj
+BARAJ_ARTIS_3 = 18          # 7 Ardışık kazançtan sonraki baraj
 
 # Kâr Takipçisi (Trailing Stop) Ayarları
 TRAILING_STOP_AKTIF = True
-TRAILING_BASLANGIC_ROE = 4.0   # Kâr %4 ROE'ye ulaşınca takip başlar
-TRAILING_DUSUS_YUZDE = 1.5     # Zirveden %1.5 düşerse kârı cebe indir
+TRAILING_BASLANGIC_ROE = 4.0   
+TRAILING_DUSUS_YUZDE = 1.5     
 
 TOPLAM_ZARAR_LIMIT = 2.0
 
@@ -122,7 +129,6 @@ MFI_ASIRI_SATIM = 10
 MFI_ASIRI_ALIM = 90
 
 GEREKLI_SINYAL = 6
-MIN_PUAN = 11               
 TOP_N_ADAY = 3
 
 BTC_DONUS_KALKANI_AKTIF = False  
@@ -139,13 +145,13 @@ def hafizayi_yukle():
             print("💾 Hafıza yüklendi.", flush=True)
             return {
                 "aktif_sistemler": veri.get("aktif_sistemler", {}),
-                "analitik": veri.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []}),
+                "analitik": veri.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "ardisik_kazanc": 0, "egitim_verileri": []}),
                 "cooldownlar": veri.get("cooldownlar", {})
             }
     except Exception as e:
         print(f"⚠️ Hafıza: {e}", flush=True)
     
-    return {"aktif_sistemler": {}, "analitik": {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []}, "cooldownlar": {}}
+    return {"aktif_sistemler": {}, "analitik": {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "ardisik_kazanc": 0, "egitim_verileri": []}, "cooldownlar": {}}
 
 def hafizayi_kaydet():
     with state_lock:
@@ -153,6 +159,7 @@ def hafizayi_kaydet():
             payload = {
                 "basarili_islem_sayisi": int(ANALITIK.get("basarili_islem_sayisi", 0)),
                 "basarisiz_islem_sayisi": int(ANALITIK.get("basarisiz_islem_sayisi", 0)),
+                "ardisik_kazanc": int(ANALITIK.get("ardisik_kazanc", 0)),
                 "egitim_verileri": ANALITIK.get("egitim_verileri", [])
             }
             clean_cd = {}
@@ -168,8 +175,15 @@ def hafizayi_kaydet():
 
 kalici = hafizayi_yukle()
 AKTIF_SISTEMLER = kalici.get("aktif_sistemler", {})
-ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "egitim_verileri": []})
+ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "ardisik_kazanc": 0, "egitim_verileri": []})
 COIN_COOLDOWNLAR = kalici.get("cooldownlar", {})
+
+def get_dinamik_min_puan():
+    ardisik = ANALITIK.get("ardisik_kazanc", 0)
+    if ardisik >= 7: return BARAJ_ARTIS_3
+    elif ardisik >= 5: return BARAJ_ARTIS_2
+    elif ardisik >= 3: return BARAJ_ARTIS_1
+    return MIN_PUAN
 
 def hizli_on_puan(symbol):
     try:
@@ -361,7 +375,6 @@ def mum_yapisi(df):
     if (o['c'] > o['o'] and s['c'] < s['o'] and s['c'] < o['o']): return "SHORT", "Engulfing"
     return None, ""
 
-
 # ==================== COİN PUAN HESAPLA (SADECE TREND) ====================
 def coin_puan_hesapla(symbol):
     try:
@@ -378,14 +391,13 @@ def coin_puan_hesapla(symbol):
         mum_kirmizi = son_kapanan_15m['c'] < son_kapanan_15m['o']
 
         adx_1h = ta.trend.adx(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
+        ema50_1h = ta.trend.ema_indicator(df_1h['c'], window=50).iloc[-1] # 1 SAATLİK EMA 50
         
-        # ✅ Testere Modu Tamamen Kapatıldı. Sadece Trend Var.
         if adx_1h < ADX_ESIK_DEGERI:
             return None, {"sebep": f"ADX Yatay ({adx_1h:.0f}) - İşlem Yok"}, 0
             
         detay = {"mod": "TREND", "adx": round(adx_1h, 1)}
 
-        # ==================== TREND MODU ====================
         formasyon_yon, formasyon_sebep = formasyon_tespit(df_1h)
         destekler, direncler = destek_direnc_seviyeleri(df_1h)
         
@@ -474,40 +486,43 @@ def coin_puan_hesapla(symbol):
         if fiyat_ema9_fark > 2.0: long_puan -= 3
         if fiyat_ema9_fark < -2.0: short_puan -= 3
 
-        if btc_yon == "LONG":
-            short_puan = 0  
-            short_sebep.append("(BTC LONG)")
-        elif btc_yon == "SHORT":
-            long_puan = 0   
-            long_sebep.append("(BTC SHORT)")
-        elif btc_yon == "KARISIK":
-            long_puan -= 2; short_puan -= 2
-            long_sebep.append("BTC Kararsız(-2)"); short_sebep.append("BTC Kararsız(-2)")
+        # ✅ FİYATIN 1 SAATLİK EMA 50'YE GÖRE KONUMU (İnatlaşmayı önler)
+        fiyat_ema50_ustunde = anlik_fiyat > ema50_1h
+        
+        if fiyat_ema50_ustunde:
+            short_puan = 0 # Fiyat EMA50 üzerindeyse Short açma
+            short_sebep.append("(Fiyat EMA50 Üstü - Short İptal)")
+        else:
+            long_puan = 0 # Fiyat EMA50 altındaysa Long açma
+            long_sebep.append("(Fiyat EMA50 Altı - Long İptal)")
         
         detay["long_puan"] = long_puan
         detay["short_puan"] = short_puan
         
-        if long_puan >= MIN_PUAN and long_puan > short_puan:
+        # ✅ DİNAMİK BARAJ KONTROLÜ
+        anlik_baraj = get_dinamik_min_puan()
+        
+        if long_puan >= anlik_baraj and long_puan > short_puan:
             if mum_yesil:
                 detay["sinyal_skoru"] = long_puan
                 detay["aciklama"] = " + ".join(long_sebep) + " + Mum Onayı"
-                detay["sebep"] = f"TREND LONG | L:{long_puan} S:{short_puan}"
+                detay["sebep"] = f"TREND LONG | L:{long_puan} S:{short_puan} (Baraj:{anlik_baraj})"
                 return "LONG", detay, long_puan
             else:
                 detay["sebep"] = f"L:{long_puan} (Mum Onayı Bekleniyor)"
                 return None, detay, 0
         
-        if short_puan >= MIN_PUAN and short_puan > long_puan:
+        if short_puan >= anlik_baraj and short_puan > long_puan:
             if mum_kirmizi:
                 detay["sinyal_skoru"] = short_puan
                 detay["aciklama"] = " + ".join(short_sebep) + " + Mum Onayı"
-                detay["sebep"] = f"TREND SHORT | L:{long_puan} S:{short_puan}"
+                detay["sebep"] = f"TREND SHORT | L:{long_puan} S:{short_puan} (Baraj:{anlik_baraj})"
                 return "SHORT", detay, short_puan
             else:
                 detay["sebep"] = f"S:{short_puan} (Mum Onayı Bekleniyor)"
                 return None, detay, 0
         
-        detay["sebep"] = f"L:{long_puan} S:{short_puan}"
+        detay["sebep"] = f"L:{long_puan} S:{short_puan} (Baraj:{anlik_baraj})"
         return None, detay, 0
     except Exception as e:
         return None, {"hata": str(e)}, 0
@@ -586,8 +601,12 @@ def tum_emirleri_iptal(symbol):
 
 def sayaci_artir(basarili_mi):
     with state_lock:
-        if basarili_mi: ANALITIK["basarili_islem_sayisi"] = int(ANALITIK.get("basarili_islem_sayisi", 0)) + 1
-        else: ANALITIK["basarisiz_islem_sayisi"] = int(ANALITIK.get("basarisiz_islem_sayisi", 0)) + 1
+        if basarili_mi: 
+            ANALITIK["basarili_islem_sayisi"] = int(ANALITIK.get("basarili_islem_sayisi", 0)) + 1
+            ANALITIK["ardisik_kazanc"] = int(ANALITIK.get("ardisik_kazanc", 0)) + 1
+        else: 
+            ANALITIK["basarisiz_islem_sayisi"] = int(ANALITIK.get("basarisiz_islem_sayisi", 0)) + 1
+            ANALITIK["ardisik_kazanc"] = 0 # Kayıpta sıfırla
     hafizayi_kaydet()
 
 def baslangic_temizligi():
@@ -595,8 +614,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v35.0 - Sadece Trend)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v35.0)\n\nTestere Modu: KAPALI\nSadece Trend Modu Aktif\nTrailing Stop: AKTİF")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v35.6 - EMA50 Korumalı)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v35.6)\n\nSadece Trend Modu Aktif\nDinamik Baraj Aktif (Taban: 11)\nEMA50 Yön Koruması: AKTİF\nTrailing Stop: AKTİF")
     except: pass
 
 
@@ -626,13 +645,17 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         gercek_marj = (miktar * anlik_fiyat * contract_size) / KALDIRAC
         if gercek_marj > hedef_marj * 1.5: return False
         
+        # ✅ RİSK/ÖDÜL KORUMALI SL & TP HESAPLAMASI
         if yon == "LONG":
             hedef_direnc = detay.get("en_yakin_direnc")
             if hedef_direnc and hedef_direnc > anlik_fiyat:
                 mesafe_tp = (hedef_direnc - anlik_fiyat) / anlik_fiyat * 100
-                if 0.5 <= mesafe_tp <= 4.0: tp = hedef_direnc * 0.999 
-                else: tp = anlik_fiyat * (1 + TP_YUZDE / 100)
-            else: tp = anlik_fiyat * (1 + TP_YUZDE / 100)
+                if mesafe_tp >= MIN_TP_MESAFE and mesafe_tp <= 4.0: 
+                    tp = hedef_direnc * 0.999 
+                else: 
+                    tp = anlik_fiyat * (1 + TP_YUZDE / 100)
+            else: 
+                tp = anlik_fiyat * (1 + TP_YUZDE / 100)
             
             hedef_destek = detay.get("en_yakin_destek")
             if hedef_destek and hedef_destek < anlik_fiyat:
@@ -645,9 +668,12 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
             hedef_destek = detay.get("en_yakin_destek")
             if hedef_destek and hedef_destek < anlik_fiyat:
                 mesafe_tp = (anlik_fiyat - hedef_destek) / anlik_fiyat * 100
-                if 0.5 <= mesafe_tp <= 4.0: tp = hedef_destek * 1.001 
-                else: tp = anlik_fiyat * (1 - TP_YUZDE / 100)
-            else: tp = anlik_fiyat * (1 - TP_YUZDE / 100)
+                if mesafe_tp >= MIN_TP_MESAFE and mesafe_tp <= 4.0: 
+                    tp = hedef_destek * 1.001 
+                else: 
+                    tp = anlik_fiyat * (1 - TP_YUZDE / 100)
+            else: 
+                tp = anlik_fiyat * (1 - TP_YUZDE / 100)
             
             hedef_direnc = detay.get("en_yakin_direnc")
             if hedef_direnc and hedef_direnc > anlik_fiyat:
@@ -706,7 +732,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         )
         telegram_kritik(mesaj)
         
-        print(f"  🚀 [İŞLEM AÇILDI] [TREND] {symbol} | {yon} | Giriş: {anlik_fiyat:.6f} | TP: {tp:.6f} | SL: {sl:.6f}", flush=True)
+        print(f"  🚀 [İŞLEM AÇILDI] [TREND] {symbol} | {yon} | Giriş: {anlik_fiyat:.6f} | TP: {tp:.6f} (%{tp_mesafe_yuzde:.2f}) | SL: {sl:.6f} (%{sl_mesafe_yuzde:.2f})", flush=True)
         
         return True
     except Exception as e:
@@ -832,7 +858,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v35.0 - Sadece Trend Modu Aktif", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v35.6 - EMA50 Korumalı Sadece Trend", flush=True)
     
     try:
         exchange.load_markets()
@@ -911,6 +937,8 @@ def ana_dongu():
 
             print(f"\n🔍 1. AŞAMA: TÜM COİNLERİ TARA VE PUANLA", flush=True)
             adaylar = []
+            anlik_baraj = get_dinamik_min_puan()
+            print(f"  ⚖️  Anlık Puan Barajı: {anlik_baraj} (Ardışık Kazanç: {ANALITIK.get('ardisik_kazanc', 0)})", flush=True)
             
             for symbol in DINAMIK_LISTE:
                 if not BOT_CALISIYOR_MU: break
@@ -925,11 +953,11 @@ def ana_dongu():
                 karar, detay, puan = coin_puan_hesapla(symbol)
                 sym_kisa = symbol.replace('/USDT:USDT', '')
                 
-                if karar is not None and puan >= MIN_PUAN:
+                if karar is not None and puan >= anlik_baraj:
                     adaylar.append((symbol, karar, detay, puan))
                     print(f"  ✅ {sym_kisa}: {karar} | Puan: {puan} | Mod: {detay.get('mod','?')}", flush=True)
                 else:
-                    print(f"  ⏭️  {sym_kisa}: Puan {puan}/{MIN_PUAN} | {detay.get('sebep', '')[:60]}", flush=True)
+                    print(f"  ⏭️  {sym_kisa}: Puan {puan}/{anlik_baraj} | {detay.get('sebep', '')[:60]}", flush=True)
             
             if not adaylar:
                 print(f"  📭 Uygun aday yok", flush=True)
@@ -976,6 +1004,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         bas = int(ANALITIK.get("basarili_islem_sayisi", 0))
         basz = int(ANALITIK.get("basarisiz_islem_sayisi", 0))
+        ardisik = int(ANALITIK.get("ardisik_kazanc", 0))
         top = bas + basz
         oran = (bas / top * 100) if top > 0 else 0
         
@@ -1009,9 +1038,10 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else: pos_detay = "\n\n📌 Açık pozisyon yok."
         
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
+        anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v35.0 - Sadece Trend)*\n\n"
+            f"📊 *TREND BOT (v35.6 - EMA50 Korumalı)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1019,7 +1049,8 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📋 *Coin Havuzu:*\n{liste_str}\n\n"
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
             f"📈 Başarı: `%{oran:.1f}`\n"
-            f"⭐ Min Puan: `{MIN_PUAN}`\n"
+            f"🔥 Ardışık Kâr: `{ardisik}`\n"
+            f"⭐ Anlık Baraj: `{anlik_baraj}` (Taban: {MIN_PUAN})\n"
             f"⚙️ Mod: `Sadece Trend (ADX>{ADX_ESIK_DEGERI})`\n"
             f"🛡️ Trailing Stop: `{TRAILING_BASLANGIC_ROE}% ROE`\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
