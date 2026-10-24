@@ -103,8 +103,8 @@ BARAJ_ARTIS_2 = 16          # 5 Ardışık kazançtan sonraki baraj
 BARAJ_ARTIS_3 = 18          # 7 Ardışık kazançtan sonraki baraj
 
 # ✅ YENİ: Sıkışma Çözücü (Zaman Aşımı) Ayarları
-ZAMAN_ASIMI_1 = 2 * 60 * 60 # 2 saat (16 puanı göremezse 14'e düşür)
-ZAMAN_ASIMI_2 = 4 * 60 * 60 # 4 saat (14 puanı göremezse 11'e düşür)
+ZAMAN_ASIMI_1 = 2 * 60 * 60 # 2 saat
+ZAMAN_ASIMI_2 = 4 * 60 * 60 # 4 saat
 
 # Kâr Takipçisi (Trailing Stop) Ayarları
 TRAILING_STOP_AKTIF = True
@@ -187,14 +187,12 @@ def get_dinamik_min_puan():
     ardisik = ANALITIK.get("ardisik_kazanc", 0)
     son_islem = ANALITIK.get("son_islem_zamani", 0)
     
-    # ✅ YENİ: ZAMAN AŞIMI KONTROLÜ (Sıkışma Çözücü)
     if son_islem > 0:
         gecen_sure = time.time() - son_islem
         if ardisik >= 7 and gecen_sure > ZAMAN_ASIMI_2: return MIN_PUAN
         if ardisik >= 5 and gecen_sure > ZAMAN_ASIMI_1: return BARAJ_ARTIS_1
         if ardisik >= 3 and gecen_sure > ZAMAN_ASIMI_2: return MIN_PUAN
         
-    # Normal Dinamik Baraj
     if ardisik >= 7: return BARAJ_ARTIS_3
     elif ardisik >= 5: return BARAJ_ARTIS_2
     elif ardisik >= 3: return BARAJ_ARTIS_1
@@ -501,20 +499,18 @@ def coin_puan_hesapla(symbol):
         if fiyat_ema9_fark > 2.0: long_puan -= 3
         if fiyat_ema9_fark < -2.0: short_puan -= 3
 
-        # ✅ FİYATIN 1 SAATLİK EMA 50'YE GÖRE KONUMU (İnatlaşmayı önler)
         fiyat_ema50_ustunde = anlik_fiyat > ema50_1h
         
         if fiyat_ema50_ustunde:
-            short_puan = 0 # Fiyat EMA50 üzerindeyse Short açma
+            short_puan = 0 
             short_sebep.append("(Fiyat EMA50 Üstü - Short İptal)")
         else:
-            long_puan = 0 # Fiyat EMA50 altındaysa Long açma
+            long_puan = 0 
             long_sebep.append("(Fiyat EMA50 Altı - Long İptal)")
         
         detay["long_puan"] = long_puan
         detay["short_puan"] = short_puan
         
-        # ✅ DİNAMİK BARAJ KONTROLÜ
         anlik_baraj = get_dinamik_min_puan()
         
         if long_puan >= anlik_baraj and long_puan > short_puan:
@@ -621,9 +617,8 @@ def sayaci_artir(basarili_mi):
             ANALITIK["ardisik_kazanc"] = int(ANALITIK.get("ardisik_kazanc", 0)) + 1
         else: 
             ANALITIK["basarisiz_islem_sayisi"] = int(ANALITIK.get("basarisiz_islem_sayisi", 0)) + 1
-            ANALITIK["ardisik_kazanc"] = 0 # Kayıpta sıfırla
+            ANALITIK["ardisik_kazanc"] = 0
             
-        # ✅ YENİ: ZAMAN AŞIMI SAYACINI İŞLEM KAPANDIĞINDA BAŞLAT
         ANALITIK["son_islem_zamani"] = time.time()
     hafizayi_kaydet()
 
@@ -632,8 +627,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v35.8 - Kapanış Zamanlı)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v35.8)\n\nSadece Trend Modu Aktif\nSıkışma Çözücü: KAPANIŞA GÖRE AKTİF\nTrailing Stop: AKTİF")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v35.9 - Başlangıç Sayaçlı)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v35.9)\n\nSadece Trend Modu Aktif\nSıkışma Çözücü: BAŞLANGIÇTA AKTİF\nTrailing Stop: AKTİF")
     except: pass
 
 
@@ -663,7 +658,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         gercek_marj = (miktar * anlik_fiyat * contract_size) / KALDIRAC
         if gercek_marj > hedef_marj * 1.5: return False
         
-        # ✅ RİSK/ÖDÜL KORUMALI SL & TP HESAPLAMASI
         if yon == "LONG":
             hedef_direnc = detay.get("en_yakin_direnc")
             if hedef_direnc and hedef_direnc > anlik_fiyat:
@@ -876,12 +870,17 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v35.8 - Kapanış Zamanlı Sıkışma Çözücü", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v35.9 - Başlangıç Sayaçlı", flush=True)
     
     try:
         exchange.load_markets()
         GUNLUK_BASLANGIC_BAKIYE = float(exchange.fetch_balance()['total'].get('USDT', 0))
     except: pass
+    
+    # ✅ YENİ: Bot başladığında açık işlem yoksa sayacı hemen başlat
+    if not AKTIF_SISTEMLER:
+        ANALITIK["son_islem_zamani"] = time.time()
+        hafizayi_kaydet()
     
     baslangic_temizligi()
     dinamik_liste_guncelle(zorla=True)
@@ -1059,7 +1058,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v35.8 - Kapanış Zamanlı)*\n\n"
+            f"📊 *TREND BOT (v35.9 - Başlangıç Sayaçlı)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
