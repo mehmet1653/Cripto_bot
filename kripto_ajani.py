@@ -622,6 +622,9 @@ def sayaci_artir(basarili_mi):
         else: 
             ANALITIK["basarisiz_islem_sayisi"] = int(ANALITIK.get("basarisiz_islem_sayisi", 0)) + 1
             ANALITIK["ardisik_kazanc"] = 0 # Kayıpta sıfırla
+            
+        # ✅ YENİ: ZAMAN AŞIMI SAYACINI İŞLEM KAPANDIĞINDA BAŞLAT
+        ANALITIK["son_islem_zamani"] = time.time()
     hafizayi_kaydet()
 
 def baslangic_temizligi():
@@ -629,8 +632,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v35.7 - Sıkışma Çözücü)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v35.7)\n\nSadece Trend Modu Aktif\nDinamik Baraj Aktif (Taban: 11)\nSıkışma Çözücü: AKTİF\nTrailing Stop: AKTİF")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v35.8 - Kapanış Zamanlı)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v35.8)\n\nSadece Trend Modu Aktif\nSıkışma Çözücü: KAPANIŞA GÖRE AKTİF\nTrailing Stop: AKTİF")
     except: pass
 
 
@@ -730,9 +733,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
                 "contract_size": contract_size, "sinyal_skoru": sinyal_skoru,
                 "onceki_roe": 0.0, "en_yuksek_roe": 0.0
             }
-        
-        # ✅ İşlem açıldığında zamanı kaydet (Sıkışma Çözücü için)
-        ANALITIK["son_islem_zamani"] = time.time()
         
         hafizayi_kaydet()
         islem_no = len(AKTIF_SISTEMLER)
@@ -876,7 +876,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v35.7 - Sıkışma Çözücü Aktif", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v35.8 - Kapanış Zamanlı Sıkışma Çözücü", flush=True)
     
     try:
         exchange.load_markets()
@@ -1059,7 +1059,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v35.7 - Sıkışma Çözücü)*\n\n"
+            f"📊 *TREND BOT (v35.8 - Kapanış Zamanlı)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
