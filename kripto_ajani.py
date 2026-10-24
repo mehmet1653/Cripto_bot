@@ -102,6 +102,10 @@ BARAJ_ARTIS_1 = 14          # 3 Ardışık kazançtan sonraki baraj
 BARAJ_ARTIS_2 = 16          # 5 Ardışık kazançtan sonraki baraj
 BARAJ_ARTIS_3 = 18          # 7 Ardışık kazançtan sonraki baraj
 
+# ✅ YENİ: Sıkışma Çözücü (Zaman Aşımı) Ayarları
+ZAMAN_ASIMI_1 = 2 * 60 * 60 # 2 saat (16 puanı göremezse 14'e düşür)
+ZAMAN_ASIMI_2 = 4 * 60 * 60 # 4 saat (14 puanı göremezse 11'e düşür)
+
 # Kâr Takipçisi (Trailing Stop) Ayarları
 TRAILING_STOP_AKTIF = True
 TRAILING_BASLANGIC_ROE = 4.0   
@@ -145,13 +149,13 @@ def hafizayi_yukle():
             print("💾 Hafıza yüklendi.", flush=True)
             return {
                 "aktif_sistemler": veri.get("aktif_sistemler", {}),
-                "analitik": veri.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "ardisik_kazanc": 0, "egitim_verileri": []}),
+                "analitik": veri.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "ardisik_kazanc": 0, "son_islem_zamani": 0, "egitim_verileri": []}),
                 "cooldownlar": veri.get("cooldownlar", {})
             }
     except Exception as e:
         print(f"⚠️ Hafıza: {e}", flush=True)
     
-    return {"aktif_sistemler": {}, "analitik": {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "ardisik_kazanc": 0, "egitim_verileri": []}, "cooldownlar": {}}
+    return {"aktif_sistemler": {}, "analitik": {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "ardisik_kazanc": 0, "son_islem_zamani": 0, "egitim_verileri": []}, "cooldownlar": {}}
 
 def hafizayi_kaydet():
     with state_lock:
@@ -160,6 +164,7 @@ def hafizayi_kaydet():
                 "basarili_islem_sayisi": int(ANALITIK.get("basarili_islem_sayisi", 0)),
                 "basarisiz_islem_sayisi": int(ANALITIK.get("basarisiz_islem_sayisi", 0)),
                 "ardisik_kazanc": int(ANALITIK.get("ardisik_kazanc", 0)),
+                "son_islem_zamani": float(ANALITIK.get("son_islem_zamani", 0)),
                 "egitim_verileri": ANALITIK.get("egitim_verileri", [])
             }
             clean_cd = {}
@@ -175,11 +180,21 @@ def hafizayi_kaydet():
 
 kalici = hafizayi_yukle()
 AKTIF_SISTEMLER = kalici.get("aktif_sistemler", {})
-ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "ardisik_kazanc": 0, "egitim_verileri": []})
+ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "ardisik_kazanc": 0, "son_islem_zamani": 0, "egitim_verileri": []})
 COIN_COOLDOWNLAR = kalici.get("cooldownlar", {})
 
 def get_dinamik_min_puan():
     ardisik = ANALITIK.get("ardisik_kazanc", 0)
+    son_islem = ANALITIK.get("son_islem_zamani", 0)
+    
+    # ✅ YENİ: ZAMAN AŞIMI KONTROLÜ (Sıkışma Çözücü)
+    if son_islem > 0:
+        gecen_sure = time.time() - son_islem
+        if ardisik >= 7 and gecen_sure > ZAMAN_ASIMI_2: return MIN_PUAN
+        if ardisik >= 5 and gecen_sure > ZAMAN_ASIMI_1: return BARAJ_ARTIS_1
+        if ardisik >= 3 and gecen_sure > ZAMAN_ASIMI_2: return MIN_PUAN
+        
+    # Normal Dinamik Baraj
     if ardisik >= 7: return BARAJ_ARTIS_3
     elif ardisik >= 5: return BARAJ_ARTIS_2
     elif ardisik >= 3: return BARAJ_ARTIS_1
@@ -614,8 +629,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v35.6 - EMA50 Korumalı)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v35.6)\n\nSadece Trend Modu Aktif\nDinamik Baraj Aktif (Taban: 11)\nEMA50 Yön Koruması: AKTİF\nTrailing Stop: AKTİF")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v35.7 - Sıkışma Çözücü)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v35.7)\n\nSadece Trend Modu Aktif\nDinamik Baraj Aktif (Taban: 11)\nSıkışma Çözücü: AKTİF\nTrailing Stop: AKTİF")
     except: pass
 
 
@@ -715,6 +730,9 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
                 "contract_size": contract_size, "sinyal_skoru": sinyal_skoru,
                 "onceki_roe": 0.0, "en_yuksek_roe": 0.0
             }
+        
+        # ✅ İşlem açıldığında zamanı kaydet (Sıkışma Çözücü için)
+        ANALITIK["son_islem_zamani"] = time.time()
         
         hafizayi_kaydet()
         islem_no = len(AKTIF_SISTEMLER)
@@ -858,7 +876,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v35.6 - EMA50 Korumalı Sadece Trend", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v35.7 - Sıkışma Çözücü Aktif", flush=True)
     
     try:
         exchange.load_markets()
@@ -1041,7 +1059,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v35.6 - EMA50 Korumalı)*\n\n"
+            f"📊 *TREND BOT (v35.7 - Sıkışma Çözücü)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
