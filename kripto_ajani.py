@@ -102,7 +102,7 @@ BARAJ_ARTIS_1 = 14          # 3 Ardışık kazançtan sonraki baraj
 BARAJ_ARTIS_2 = 16          # 5 Ardışık kazançtan sonraki baraj
 BARAJ_ARTIS_3 = 18          # 7 Ardışık kazançtan sonraki baraj
 
-# ✅ YENİ: Sıkışma Çözücü (Zaman Aşımı) Ayarları
+# Sıkışma Çözücü (Zaman Aşımı) Ayarları
 ZAMAN_ASIMI_1 = 2 * 60 * 60 # 2 saat
 ZAMAN_ASIMI_2 = 4 * 60 * 60 # 4 saat
 
@@ -190,9 +190,8 @@ def get_dinamik_min_puan():
     if son_islem > 0:
         gecen_sure = time.time() - son_islem
         
-        # ✅ v36.0 DÜZELTME: 5 ve 7 kazançta 4 saat sonra 11'e düşme kuralı eklendi
         if ardisik >= 7 and gecen_sure > ZAMAN_ASIMI_2: return MIN_PUAN
-        if ardisik >= 5 and gecen_sure > ZAMAN_ASIMI_2: return MIN_PUAN # <--- BURASI EKLENDİ
+        if ardisik >= 5 and gecen_sure > ZAMAN_ASIMI_2: return MIN_PUAN 
         if ardisik >= 5 and gecen_sure > ZAMAN_ASIMI_1: return BARAJ_ARTIS_1
         if ardisik >= 3 and gecen_sure > ZAMAN_ASIMI_2: return MIN_PUAN
         
@@ -630,8 +629,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v36.0 - Tam Kademeli)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v36.0)\n\nSadece Trend Modu Aktif\nSıkışma Çözücü: TAM KADEMELİ AKTİF\nTrailing Stop: AKTİF")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v36.1 - Her Başlangıçta 11 Baraj)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v36.1)\n\nSadece Trend Modu Aktif\nSıkışma Çözücü: AKTİF\nYeni Başlangıç Barajı: 11")
     except: pass
 
 
@@ -873,14 +872,16 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v36.0 - Tam Kademeli Sıkışma Çözücü", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v36.1 - Her Başlangıçta 11 Baraj", flush=True)
     
     try:
         exchange.load_markets()
         GUNLUK_BASLANGIC_BAKIYE = float(exchange.fetch_balance()['total'].get('USDT', 0))
     except: pass
     
+    # ✅ YENİ: Bot deploy edildiğinde (başladığında) baraj 11 olsun diye ardışık kazancı sıfırla
     if not AKTIF_SISTEMLER:
+        ANALITIK["ardisik_kazanc"] = 0  # Barajın 11'e düşmesi için sıfırla
         ANALITIK["son_islem_zamani"] = time.time()
         hafizayi_kaydet()
     
@@ -1060,7 +1061,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v36.0 - Tam Kademeli)*\n\n"
+            f"📊 *TREND BOT (v36.1 - Başlangıç 11)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
