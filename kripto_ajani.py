@@ -55,6 +55,7 @@ if not GATE_API_KEY or not GATE_SECRET: sys.exit(1)
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# Normal (Testnet) Exchange - İşlemler için
 exchange = ccxt.gate({
     'apiKey': GATE_API_KEY,
     'secret': GATE_SECRET,
@@ -63,6 +64,14 @@ exchange = ccxt.gate({
     'options': {'defaultType': 'swap'}
 })
 exchange.set_sandbox_mode(True) # Canlıya geçerken burayı False yap!
+
+# ✅ YENİ: Gerçek Piyasa (Mainnet) Exchange - Sadece Hacim/Fiyat Okumak İçin (API Key gerektirmez)
+real_exchange = ccxt.gate({
+    'enableRateLimit': True,
+    'timeout': 30000,
+    'options': {'defaultType': 'swap'}
+})
+real_exchange.set_sandbox_mode(False) # Her zaman gerçek veriyi çeker
 
 # ==================== AYARLAR ====================
 DINAMIK_LISTE = []
@@ -81,6 +90,7 @@ MIN_HACIM_24S = 5_000_000
 MIN_DEGISIM_YUZDE = 0.5
 MIN_FIYAT = 0.01
 MAX_FIYAT = 300.0
+MAKS_SPREAD_YUZDE = 0.15 # ✅ YENİ: Alış-Satış farkı %0.15'ten büyükse işlem açma (Slippage koruması)
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
@@ -97,14 +107,14 @@ MIN_TP_MESAFE = 1.5
 ADX_ESIK_DEGERI = 18.0       
 
 # Dinamik Puan Barajı Ayarları
-MIN_PUAN = 11               # Normal Baraj (Başlangıç)
-BARAJ_ARTIS_1 = 14          # 3 Ardışık kazançtan sonraki baraj
-BARAJ_ARTIS_2 = 16          # 5 Ardışık kazançtan sonraki baraj
-BARAJ_ARTIS_3 = 18          # 7 Ardışık kazançtan sonraki baraj
+MIN_PUAN = 11               
+BARAJ_ARTIS_1 = 14          
+BARAJ_ARTIS_2 = 16          
+BARAJ_ARTIS_3 = 18          
 
 # Sıkışma Çözücü (Zaman Aşımı) Ayarları
-ZAMAN_ASIMI_1 = 2 * 60 * 60 # 2 saat
-ZAMAN_ASIMI_2 = 4 * 60 * 60 # 4 saat
+ZAMAN_ASIMI_1 = 2 * 60 * 60 
+ZAMAN_ASIMI_2 = 4 * 60 * 60 
 
 # Kâr Takipçisi (Trailing Stop) Ayarları
 TRAILING_STOP_AKTIF = True
@@ -224,10 +234,11 @@ def hizli_on_puan(symbol):
 def dinamik_liste_guncelle(zorla=False):
     global DINAMIK_LISTE, SON_LISTE_GUNCELLEME
     if not zorla and (time.time() - SON_LISTE_GUNCELLEME < LISTE_GUNCELLEME_SURESI): return
-    print(f"\n🔄 [DİNAMİK LİSTE] Güncelleniyor...", flush=True)
+    print(f"\n🔄 [DİNAMİK LİSTE] Güncelleniyor (Gerçek Mainnet Verisi)...", flush=True)
     SON_LISTE_GUNCELLEME = time.time()
     try:
-        tickers = exchange.fetch_tickers()
+        # ✅ GÜNCELLENDİ: Testnet yerine gerçek borsanın hacimlerini çekiyoruz
+        tickers = real_exchange.fetch_tickers()
         adaylar = []
         tum_semboller = [s for s in tickers.keys() if ':USDT' in s and s not in KARA_LISTE]
         for sym in tum_semboller:
@@ -245,7 +256,8 @@ def dinamik_liste_guncelle(zorla=False):
             except: continue
         adaylar.sort(key=lambda x: x['hizli_puan'], reverse=True)
         if adaylar: DINAMIK_LISTE = [a['symbol'] for a in adaylar[:LISTE_BOYUT]]
-    except: pass
+    except Exception as e:
+        print(f"⚠️ [DİNAMİK] Hata: {e}", flush=True)
 
 def orderbook_analiz(symbol):
     try:
@@ -331,14 +343,14 @@ def likidite_avi_tespit(symbol, df_15m, destekler, direncler):
 
 def btc_bias():
     try:
-        ohlcv_5m = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='5m', limit=50)
+        ohlcv_5m = real_exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='5m', limit=50)
         df_5m = pd.DataFrame(ohlcv_5m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         ema20_5m = ta.trend.ema_indicator(df_5m['c'], window=20).iloc[-1]
         ema50_5m = ta.trend.ema_indicator(df_5m['c'], window=50).iloc[-1]
         fiyat_5m = df_5m['c'].iloc[-1]
         trend_5m = "LONG" if fiyat_5m > ema20_5m > ema50_5m else ("SHORT" if fiyat_5m < ema20_5m < ema50_5m else "YATAY")
 
-        ohlcv_15m = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=50)
+        ohlcv_15m = real_exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=50)
         df_15m = pd.DataFrame(ohlcv_15m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         ema20_15m = ta.trend.ema_indicator(df_15m['c'], window=20).iloc[-1]
         ema50_15m = ta.trend.ema_indicator(df_15m['c'], window=50).iloc[-1]
@@ -629,8 +641,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v36.1 - Her Başlangıçta 11 Baraj)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v36.1)\n\nSadece Trend Modu Aktif\nSıkışma Çözücü: AKTİF\nYeni Başlangıç Barajı: 11")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v36.2 - Slippage Korumalı)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v36.2)\n\nSadece Trend Modu Aktif\nGerçek Hacim Kontrolü: AKTİF\nSpread (Slippage) Koruması: AKTİF")
     except: pass
 
 
@@ -638,6 +650,19 @@ def baslangic_temizligi():
 def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", detay={}):
     global AKTIF_SISTEMLER
     try:
+        # ✅ YENİ: İşlem öncesi son bir kez Spread kontrolü (Anlık slippage koruması)
+        try:
+            ob = exchange.fetch_order_book(symbol, limit=5)
+            en_iyi_alis = ob['bids'][0][0]
+            en_iyi_satis = ob['asks'][0][0]
+            spread_yuzde = ((en_iyi_satis - en_iyi_alis) / en_iyi_alis) * 100
+            if spread_yuzde > MAKS_SPREAD_YUZDE:
+                print(f"  ⏭️  {symbol} İptal: Spread çok yüksek (%{spread_yuzde:.3f})", flush=True)
+                return False
+        except Exception as e:
+            print(f"  ⚠️ Spread kontrol hatası ({symbol}): {e}", flush=True)
+            return False
+            
         bakiye = exchange.fetch_balance()
         toplam_bakiye = float(bakiye['total'].get('USDT', 0))
         serbest = float(bakiye.get('free', {}).get('USDT', 0))
@@ -872,16 +897,16 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v36.1 - Her Başlangıçta 11 Baraj", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v36.2 - Slippage Korumalı", flush=True)
     
     try:
         exchange.load_markets()
+        real_exchange.load_markets()
         GUNLUK_BASLANGIC_BAKIYE = float(exchange.fetch_balance()['total'].get('USDT', 0))
     except: pass
     
-    # ✅ YENİ: Bot deploy edildiğinde (başladığında) baraj 11 olsun diye ardışık kazancı sıfırla
     if not AKTIF_SISTEMLER:
-        ANALITIK["ardisik_kazanc"] = 0  # Barajın 11'e düşmesi için sıfırla
+        ANALITIK["ardisik_kazanc"] = 0 
         ANALITIK["son_islem_zamani"] = time.time()
         hafizayi_kaydet()
     
@@ -1061,7 +1086,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v36.1 - Başlangıç 11)*\n\n"
+            f"📊 *TREND BOT (v36.2 - Slippage Korumalı)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
