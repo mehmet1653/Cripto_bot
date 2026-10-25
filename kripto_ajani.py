@@ -189,7 +189,10 @@ def get_dinamik_min_puan():
     
     if son_islem > 0:
         gecen_sure = time.time() - son_islem
+        
+        # ✅ v36.0 DÜZELTME: 5 ve 7 kazançta 4 saat sonra 11'e düşme kuralı eklendi
         if ardisik >= 7 and gecen_sure > ZAMAN_ASIMI_2: return MIN_PUAN
+        if ardisik >= 5 and gecen_sure > ZAMAN_ASIMI_2: return MIN_PUAN # <--- BURASI EKLENDİ
         if ardisik >= 5 and gecen_sure > ZAMAN_ASIMI_1: return BARAJ_ARTIS_1
         if ardisik >= 3 and gecen_sure > ZAMAN_ASIMI_2: return MIN_PUAN
         
@@ -404,7 +407,7 @@ def coin_puan_hesapla(symbol):
         mum_kirmizi = son_kapanan_15m['c'] < son_kapanan_15m['o']
 
         adx_1h = ta.trend.adx(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
-        ema50_1h = ta.trend.ema_indicator(df_1h['c'], window=50).iloc[-1] # 1 SAATLİK EMA 50
+        ema50_1h = ta.trend.ema_indicator(df_1h['c'], window=50).iloc[-1]
         
         if adx_1h < ADX_ESIK_DEGERI:
             return None, {"sebep": f"ADX Yatay ({adx_1h:.0f}) - İşlem Yok"}, 0
@@ -627,8 +630,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v35.9 - Başlangıç Sayaçlı)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v35.9)\n\nSadece Trend Modu Aktif\nSıkışma Çözücü: BAŞLANGIÇTA AKTİF\nTrailing Stop: AKTİF")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v36.0 - Tam Kademeli)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v36.0)\n\nSadece Trend Modu Aktif\nSıkışma Çözücü: TAM KADEMELİ AKTİF\nTrailing Stop: AKTİF")
     except: pass
 
 
@@ -870,14 +873,13 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v35.9 - Başlangıç Sayaçlı", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v36.0 - Tam Kademeli Sıkışma Çözücü", flush=True)
     
     try:
         exchange.load_markets()
         GUNLUK_BASLANGIC_BAKIYE = float(exchange.fetch_balance()['total'].get('USDT', 0))
     except: pass
     
-    # ✅ YENİ: Bot başladığında açık işlem yoksa sayacı hemen başlat
     if not AKTIF_SISTEMLER:
         ANALITIK["son_islem_zamani"] = time.time()
         hafizayi_kaydet()
@@ -1058,7 +1060,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v35.9 - Başlangıç Sayaçlı)*\n\n"
+            f"📊 *TREND BOT (v36.0 - Tam Kademeli)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
