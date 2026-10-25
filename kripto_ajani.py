@@ -65,7 +65,7 @@ exchange = ccxt.gate({
 })
 exchange.set_sandbox_mode(True) # Canlıya geçerken burayı False yap!
 
-# ✅ YENİ: Gerçek Piyasa (Mainnet) Exchange - Sadece Hacim/Fiyat Okumak İçin (API Key gerektirmez)
+# Gerçek Piyasa (Mainnet) Exchange - Sadece Hacim/Fiyat Okumak İçin
 real_exchange = ccxt.gate({
     'enableRateLimit': True,
     'timeout': 30000,
@@ -90,7 +90,7 @@ MIN_HACIM_24S = 5_000_000
 MIN_DEGISIM_YUZDE = 0.5
 MIN_FIYAT = 0.01
 MAX_FIYAT = 300.0
-MAKS_SPREAD_YUZDE = 0.15 # ✅ YENİ: Alış-Satış farkı %0.15'ten büyükse işlem açma (Slippage koruması)
+MAKS_SPREAD_YUZDE = 0.15 
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
@@ -193,21 +193,32 @@ AKTIF_SISTEMLER = kalici.get("aktif_sistemler", {})
 ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "ardisik_kazanc": 0, "son_islem_zamani": 0, "egitim_verileri": []})
 COIN_COOLDOWNLAR = kalici.get("cooldownlar", {})
 
+# ✅ GÜNCELLENDİ: Zaman aşımı artık 11'e değil, en fazla 14'e düşürür
 def get_dinamik_min_puan():
     ardisik = ANALITIK.get("ardisik_kazanc", 0)
     son_islem = ANALITIK.get("son_islem_zamani", 0)
     
+    # Eğer hiç ardışık kazanç yoksa (yani SL yenmişse), taban baraj 11'dir.
+    if ardisik == 0:
+        return MIN_PUAN # 11
+
+    # Ardışık kazanç varsa, zaman aşımı barajı en fazla 14'e kadar düşürür (11'e düşürmez)
     if son_islem > 0:
         gecen_sure = time.time() - son_islem
         
-        if ardisik >= 7 and gecen_sure > ZAMAN_ASIMI_2: return MIN_PUAN
-        if ardisik >= 5 and gecen_sure > ZAMAN_ASIMI_2: return MIN_PUAN 
-        if ardisik >= 5 and gecen_sure > ZAMAN_ASIMI_1: return BARAJ_ARTIS_1
-        if ardisik >= 3 and gecen_sure > ZAMAN_ASIMI_2: return MIN_PUAN
-        
-    if ardisik >= 7: return BARAJ_ARTIS_3
-    elif ardisik >= 5: return BARAJ_ARTIS_2
-    elif ardisik >= 3: return BARAJ_ARTIS_1
+        if ardisik >= 7:
+            if gecen_sure > ZAMAN_ASIMI_2: return BARAJ_ARTIS_1 # 14 (4 saat sonra)
+            if gecen_sure > ZAMAN_ASIMI_1: return BARAJ_ARTIS_2 # 16 (2 saat sonra)
+            return BARAJ_ARTIS_3 # 18 (İlk 2 saat)
+            
+        if ardisik >= 5:
+            if gecen_sure > ZAMAN_ASIMI_2: return BARAJ_ARTIS_1 # 14 (4 saat sonra)
+            if gecen_sure > ZAMAN_ASIMI_1: return BARAJ_ARTIS_1 # 14 (2 saat sonra)
+            return BARAJ_ARTIS_2 # 16 (İlk 2 saat)
+            
+        if ardisik >= 3:
+            return BARAJ_ARTIS_1 # 14 (Hem ilk 2 saat hem sonrası 14)
+            
     return MIN_PUAN
 
 def hizli_on_puan(symbol):
@@ -237,7 +248,6 @@ def dinamik_liste_guncelle(zorla=False):
     print(f"\n🔄 [DİNAMİK LİSTE] Güncelleniyor (Gerçek Mainnet Verisi)...", flush=True)
     SON_LISTE_GUNCELLEME = time.time()
     try:
-        # ✅ GÜNCELLENDİ: Testnet yerine gerçek borsanın hacimlerini çekiyoruz
         tickers = real_exchange.fetch_tickers()
         adaylar = []
         tum_semboller = [s for s in tickers.keys() if ':USDT' in s and s not in KARA_LISTE]
@@ -641,8 +651,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v36.2 - Slippage Korumalı)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v36.2)\n\nSadece Trend Modu Aktif\nGerçek Hacim Kontrolü: AKTİF\nSpread (Slippage) Koruması: AKTİF")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v36.3 - 14 Tabanlı)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v36.3)\n\nSadece Trend Modu Aktif\nZaman Aşımı Taban Barajı: 14\nSpread Koruması: AKTİF")
     except: pass
 
 
@@ -650,7 +660,6 @@ def baslangic_temizligi():
 def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", detay={}):
     global AKTIF_SISTEMLER
     try:
-        # ✅ YENİ: İşlem öncesi son bir kez Spread kontrolü (Anlık slippage koruması)
         try:
             ob = exchange.fetch_order_book(symbol, limit=5)
             en_iyi_alis = ob['bids'][0][0]
@@ -897,7 +906,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v36.2 - Slippage Korumalı", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v36.3 - Zaman Aşımı Taban Baraj 14", flush=True)
     
     try:
         exchange.load_markets()
@@ -1086,7 +1095,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v36.2 - Slippage Korumalı)*\n\n"
+            f"📊 *TREND BOT (v36.3 - 14 Tabanlı)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
