@@ -55,7 +55,6 @@ if not GATE_API_KEY or not GATE_SECRET: sys.exit(1)
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Normal (Testnet) Exchange - İşlemler için
 exchange = ccxt.gate({
     'apiKey': GATE_API_KEY,
     'secret': GATE_SECRET,
@@ -65,7 +64,6 @@ exchange = ccxt.gate({
 })
 exchange.set_sandbox_mode(True) # Canlıya geçerken burayı False yap!
 
-# Gerçek Piyasa (Mainnet) Exchange - Sadece Hacim/Fiyat Okumak İçin
 real_exchange = ccxt.gate({
     'enableRateLimit': True,
     'timeout': 30000,
@@ -116,10 +114,10 @@ BARAJ_ARTIS_3 = 18
 ZAMAN_ASIMI_1 = 2 * 60 * 60 
 ZAMAN_ASIMI_2 = 4 * 60 * 60 
 
-# ✅ GÜNCELLENDİ: Kâr Takipçisi Artık Daha Rahat (Trendi Kaçırmamak İçin)
+# Kâr Takipçisi (Trailing Stop) Ayarları
 TRAILING_STOP_AKTIF = True
-TRAILING_BASLANGIC_ROE = 6.0   # Kâr %6'ya ulaşmadan takip başlamaz (Eskiden 4.0'dı)
-TRAILING_DUSUS_YUZDE = 2.5     # Zirveden %2.5 düşerse kârı alır (Eskiden 1.5'ti)
+TRAILING_BASLANGIC_ROE = 6.0   
+TRAILING_DUSUS_YUZDE = 2.5     
 
 TOPLAM_ZARAR_LIMIT = 2.0
 
@@ -130,6 +128,10 @@ ORDERBOOK_WALL_ORANI = 2.0
 FUNDING_RATE_ASIRI = 0.05
 VOLUME_PROFILE_BINS = 30
 LIKIDITE_AVI_HACIM_ORANI = 0.7
+
+# BTC Yapısal Kalkan Toleransları
+BTC_15M_TOLERANS = 0.2 
+BTC_1H_TOLERANS = 0.5  
 
 COOLDOWN_TP = 15 * 60
 COOLDOWN_SL = 30 * 60
@@ -165,7 +167,7 @@ def hafizayi_yukle():
     except Exception as e:
         print(f"⚠️ Hafıza: {e}", flush=True)
     
-    return {"aktif_sistemler": {}, "analitik": {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "ardisik_kazanc": 0, "son_islem_zamani": 0, "egitim_verileri": []}, "cooldownlar": {}}
+    return {"aktif_sistemler": {}, "analitik": {"basarisiz_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "ardisik_kazanc": 0, "son_islem_zamani": 0, "egitim_verileri": []}, "cooldownlar": {}}
 
 def hafizayi_kaydet():
     with state_lock:
@@ -348,23 +350,50 @@ def likidite_avi_tespit(symbol, df_15m, destekler, direncler):
         return None
     except: return None
 
+# ✅ GÜNCELLENDİ: Asimetrik BTC Kalkanı (Sadece Destek kontrolü)
 def btc_bias():
     try:
-        ohlcv_5m = real_exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='5m', limit=50)
-        df_5m = pd.DataFrame(ohlcv_5m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        ticker = real_exchange.fetch_ticker('BTC/USDT:USDT')
+        anlik_fiyat = float(ticker['last'])
+        
+        # 15m Pivotlar
+        ohlcv_15m = real_exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=50)
+        df_15m = pd.DataFrame(ohlcv_15m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        ph_15m, pl_15m = pivot_noktalari_bul(df_15m, lookback=5)
+        destekler_15m = [p[1] for p in pl_15m[-3:]] if pl_15m else []
+        
+        en_yakin_destek_15m = min(destekler_15m, key=lambda x: abs(x - anlik_fiyat)) if destekler_15m else None
+        destek_mesafe_15m = ((anlik_fiyat - en_yakin_destek_15m) / anlik_fiyat * 100) if en_yakin_destek_15m else 999
+
+        # 1h Pivotlar
+        ohlcv_1h = real_exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=100)
+        df_1h = pd.DataFrame(ohlcv_1h, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        ph_1h, pl_1h = pivot_noktalari_bul(df_1h, lookback=5)
+        destekler_1h = [p[1] for p in pl_1h[-3:]] if pl_1h else []
+        
+        en_yakin_destek_1h = min(destekler_1h, key=lambda x: abs(x - anlik_fiyat)) if destekler_1h else None
+        destek_mesafe_1h = ((anlik_fiyat - en_yakin_destek_1h) / anlik_fiyat * 100) if en_yakin_destek_1h else 999
+
+        # EMA/RSI Hesaplamaları
+        df_5m = pd.DataFrame(real_exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='5m', limit=50), columns=['t', 'o', 'h', 'l', 'c', 'v'])
         ema20_5m = ta.trend.ema_indicator(df_5m['c'], window=20).iloc[-1]
         ema50_5m = ta.trend.ema_indicator(df_5m['c'], window=50).iloc[-1]
         fiyat_5m = df_5m['c'].iloc[-1]
         trend_5m = "LONG" if fiyat_5m > ema20_5m > ema50_5m else ("SHORT" if fiyat_5m < ema20_5m < ema50_5m else "YATAY")
 
-        ohlcv_15m = real_exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=50)
-        df_15m = pd.DataFrame(ohlcv_15m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         ema20_15m = ta.trend.ema_indicator(df_15m['c'], window=20).iloc[-1]
         ema50_15m = ta.trend.ema_indicator(df_15m['c'], window=50).iloc[-1]
         fiyat_15m = df_15m['c'].iloc[-1]
         rsi_15m = ta.momentum.rsi(df_15m['c'], window=14).iloc[-1]
         trend_15m = "LONG" if fiyat_15m > ema20_15m > ema50_15m else ("SHORT" if fiyat_15m < ema20_15m < ema50_15m else "YATAY")
 
+        # DESTEK KALKANI (Short'ları engelle)
+        if destek_mesafe_15m < BTC_15M_TOLERANS:
+            return "LONG" # Destekteyse Short açma
+        if destek_mesafe_1h < BTC_1H_TOLERANS:
+            return "LONG" # Destekteyse Short açma
+
+        # Standart Trend Mantığı
         if trend_5m == "LONG" and trend_15m == "LONG":
             if rsi_15m > 70: return "KARISIK" 
             return "LONG"
@@ -648,8 +677,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v36.4 - Trailing Gevşetildi)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v36.4)\n\nSadece Trend Modu Aktif\nTrailing Stop: %6 Kâr / %2.5 Düşüş\nSpread Koruması: AKTİF")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v36.7 - Asimetrik Kalkan)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v36.7)\n\nSadece Trend Modu Aktif\nBTC Destek Kalkanı: AKTİF (Long Serbest)\nTrailing Stop: AKTİF")
     except: pass
 
 
@@ -825,7 +854,6 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
             
             zirve_roe = bilgi.get("en_yuksek_roe", 0.0)
             
-            # Artık zirve %6'yı geçmeden kâr koruma devreye girmeyecek
             if zirve_roe >= TRAILING_BASLANGIC_ROE:
                 dusus = zirve_roe - anlik_roe
                 if dusus >= TRAILING_DUSUS_YUZDE:
@@ -904,7 +932,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v36.4 - Trailing Gevşetildi", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v36.7 - Asimetrik Kalkan", flush=True)
     
     try:
         exchange.load_markets()
@@ -1093,7 +1121,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v36.4 - Gevşetilmiş Trailing)*\n\n"
+            f"📊 *TREND BOT (v36.7 - Asimetrik)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1104,7 +1132,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔥 Ardışık Kâr: `{ardisik}`\n"
             f"⭐ Anlık Baraj: `{anlik_baraj}` (Taban: {MIN_PUAN})\n"
             f"⚙️ Mod: `Sadece Trend (ADX>{ADX_ESIK_DEGERI})`\n"
-            f"🛡️ Trailing Stop: `%{TRAILING_BASLANGIC_ROE} Kâr / %{TRAILING_DUSUS_YUZDE} Düşüş`\n"
+            f"🛡️ BTC Destek Kalkanı: `AKTİF` (Long Serbest)\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
