@@ -71,7 +71,7 @@ real_exchange = ccxt.gate({
     'timeout': 30000,
     'options': {'defaultType': 'swap'}
 })
-real_exchange.set_sandbox_mode(False) # Her zaman gerçek veriyi çeker
+real_exchange.set_sandbox_mode(False) 
 
 # ==================== AYARLAR ====================
 DINAMIK_LISTE = []
@@ -116,10 +116,10 @@ BARAJ_ARTIS_3 = 18
 ZAMAN_ASIMI_1 = 2 * 60 * 60 
 ZAMAN_ASIMI_2 = 4 * 60 * 60 
 
-# Kâr Takipçisi (Trailing Stop) Ayarları
+# ✅ GÜNCELLENDİ: Kâr Takipçisi Artık Daha Rahat (Trendi Kaçırmamak İçin)
 TRAILING_STOP_AKTIF = True
-TRAILING_BASLANGIC_ROE = 4.0   
-TRAILING_DUSUS_YUZDE = 1.5     
+TRAILING_BASLANGIC_ROE = 6.0   # Kâr %6'ya ulaşmadan takip başlamaz (Eskiden 4.0'dı)
+TRAILING_DUSUS_YUZDE = 2.5     # Zirveden %2.5 düşerse kârı alır (Eskiden 1.5'ti)
 
 TOPLAM_ZARAR_LIMIT = 2.0
 
@@ -193,31 +193,28 @@ AKTIF_SISTEMLER = kalici.get("aktif_sistemler", {})
 ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "ardisik_kazanc": 0, "son_islem_zamani": 0, "egitim_verileri": []})
 COIN_COOLDOWNLAR = kalici.get("cooldownlar", {})
 
-# ✅ GÜNCELLENDİ: Zaman aşımı artık 11'e değil, en fazla 14'e düşürür
 def get_dinamik_min_puan():
     ardisik = ANALITIK.get("ardisik_kazanc", 0)
     son_islem = ANALITIK.get("son_islem_zamani", 0)
     
-    # Eğer hiç ardışık kazanç yoksa (yani SL yenmişse), taban baraj 11'dir.
     if ardisik == 0:
-        return MIN_PUAN # 11
+        return MIN_PUAN 
 
-    # Ardışık kazanç varsa, zaman aşımı barajı en fazla 14'e kadar düşürür (11'e düşürmez)
     if son_islem > 0:
         gecen_sure = time.time() - son_islem
         
         if ardisik >= 7:
-            if gecen_sure > ZAMAN_ASIMI_2: return BARAJ_ARTIS_1 # 14 (4 saat sonra)
-            if gecen_sure > ZAMAN_ASIMI_1: return BARAJ_ARTIS_2 # 16 (2 saat sonra)
-            return BARAJ_ARTIS_3 # 18 (İlk 2 saat)
+            if gecen_sure > ZAMAN_ASIMI_2: return BARAJ_ARTIS_1 
+            if gecen_sure > ZAMAN_ASIMI_1: return BARAJ_ARTIS_2 
+            return BARAJ_ARTIS_3 
             
         if ardisik >= 5:
-            if gecen_sure > ZAMAN_ASIMI_2: return BARAJ_ARTIS_1 # 14 (4 saat sonra)
-            if gecen_sure > ZAMAN_ASIMI_1: return BARAJ_ARTIS_1 # 14 (2 saat sonra)
-            return BARAJ_ARTIS_2 # 16 (İlk 2 saat)
+            if gecen_sure > ZAMAN_ASIMI_2: return BARAJ_ARTIS_1 
+            if gecen_sure > ZAMAN_ASIMI_1: return BARAJ_ARTIS_1 
+            return BARAJ_ARTIS_2 
             
         if ardisik >= 3:
-            return BARAJ_ARTIS_1 # 14 (Hem ilk 2 saat hem sonrası 14)
+            return BARAJ_ARTIS_1 
             
     return MIN_PUAN
 
@@ -651,8 +648,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v36.3 - 14 Tabanlı)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v36.3)\n\nSadece Trend Modu Aktif\nZaman Aşımı Taban Barajı: 14\nSpread Koruması: AKTİF")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v36.4 - Trailing Gevşetildi)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v36.4)\n\nSadece Trend Modu Aktif\nTrailing Stop: %6 Kâr / %2.5 Düşüş\nSpread Koruması: AKTİF")
     except: pass
 
 
@@ -828,6 +825,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
             
             zirve_roe = bilgi.get("en_yuksek_roe", 0.0)
             
+            # Artık zirve %6'yı geçmeden kâr koruma devreye girmeyecek
             if zirve_roe >= TRAILING_BASLANGIC_ROE:
                 dusus = zirve_roe - anlik_roe
                 if dusus >= TRAILING_DUSUS_YUZDE:
@@ -906,7 +904,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v36.3 - Zaman Aşımı Taban Baraj 14", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v36.4 - Trailing Gevşetildi", flush=True)
     
     try:
         exchange.load_markets()
@@ -1095,7 +1093,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v36.3 - 14 Tabanlı)*\n\n"
+            f"📊 *TREND BOT (v36.4 - Gevşetilmiş Trailing)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1106,7 +1104,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔥 Ardışık Kâr: `{ardisik}`\n"
             f"⭐ Anlık Baraj: `{anlik_baraj}` (Taban: {MIN_PUAN})\n"
             f"⚙️ Mod: `Sadece Trend (ADX>{ADX_ESIK_DEGERI})`\n"
-            f"🛡️ Trailing Stop: `{TRAILING_BASLANGIC_ROE}% ROE`\n"
+            f"🛡️ Trailing Stop: `%{TRAILING_BASLANGIC_ROE} Kâr / %{TRAILING_DUSUS_YUZDE} Düşüş`\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
