@@ -88,7 +88,7 @@ MIN_HACIM_24S = 5_000_000
 MIN_DEGISIM_YUZDE = 0.5
 MIN_FIYAT = 0.01
 MAX_FIYAT = 300.0
-MAKS_SPREAD_YUZDE = 0.15 
+MAKS_SPREAD_YUZDE = 0.50 # ✅ DÜZELTİLDİ: Testnette işlem açabilmesi için 0.15'ten 0.50'ye çıkarıldı
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
@@ -224,7 +224,6 @@ def get_dinamik_min_puan():
             
     return MIN_PUAN
 
-# ✅ GÜNCELLENDİ: Hızlı Ön Puan artık gerçek piyasa verisini kullanıyor
 def hizli_on_puan(symbol):
     try:
         ohlcv = real_exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
@@ -232,8 +231,14 @@ def hizli_on_puan(symbol):
         df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         mfi = ta.volume.money_flow_index(high=df['h'], low=df['l'], close=df['c'], volume=df['v'], window=14).iloc[-1]
         if mfi < MFI_ASIRI_SATIM or mfi > MFI_ASIRI_ALIM: return 0, {"sebep": f"MFI aşırı"}
-        hacim_oran = df['v'].iloc[-3:].mean() / df['v'].iloc[-20:].mean()
+        
+        son3_hacim = df['v'].iloc[-3:].mean()
+        ort20_hacim = df['v'].iloc[-20:].mean()
+        # ✅ DÜZELTİLDİ: Sıfıra bölünme hatası engellendi
+        hacim_oran = son3_hacim / ort20_hacim if ort20_hacim > 0 else 0
+        
         if hacim_oran < HACIM_ESIK: return 0, {"sebep": f"Hacim zayıf"}
+        
         puan = 0
         if 40 < mfi < 60: puan += 3
         elif 30 < mfi < 70: puan += 1
@@ -273,7 +278,6 @@ def dinamik_liste_guncelle(zorla=False):
     except Exception as e:
         print(f"⚠️ [DİNAMİK] Hata: {e}", flush=True)
 
-# ✅ GÜNCELLENDİ: Emir Defteri Duvarları gerçekten hesaplanıyor!
 def orderbook_analiz(symbol):
     try:
         ob = exchange.fetch_order_book(symbol, limit=50)
@@ -355,7 +359,12 @@ def likidite_avi_tespit(symbol, df_15m, destekler, direncler):
         if len(df_15m) < 10 or not destekler or not direncler: return None
         son3 = df_15m.iloc[-3:]
         anlik = df_15m['c'].iloc[-1]
-        hacim_oran = son3['v'].mean() / df_15m['v'].iloc[-20:].mean()
+        
+        hacim_son3 = son3['v'].mean()
+        hacim_ort20 = df_15m['v'].iloc[-20:].mean()
+        # ✅ DÜZELTİLDİ: Sıfıra bölünme hatası engellendi
+        hacim_oran = hacim_son3 / hacim_ort20 if hacim_ort20 > 0 else 1
+        
         yakin_destek = min(destekler, key=lambda x: abs(x - anlik)) if destekler else None
         yakin_direnc = min(direncler, key=lambda x: abs(x - anlik)) if direncler else None
         if yakin_destek:
@@ -403,7 +412,6 @@ def btc_bias():
         if destek_mesafe_15m < BTC_15M_TOLERANS: return "LONG" 
         if destek_mesafe_1h < BTC_1H_TOLERANS: return "LONG" 
 
-        # ✅ GÜNCELLENDİ: Yatay piyasada yön tayini iptal (ADX kontrolü)
         adx_15m = ta.trend.adx(df_15m['h'], df_15m['l'], df_15m['c'], window=14).iloc[-1]
         if adx_15m < 20:
             return "KARISIK" 
@@ -497,7 +505,11 @@ def coin_puan_hesapla(symbol):
         
         mfi = ta.volume.money_flow_index(high=df_1h['h'], low=df_1h['l'], close=df_1h['c'], volume=df_1h['v'], window=14).iloc[-1]
         cmf = ta.volume.chaikin_money_flow(high=df_1h['h'], low=df_1h['l'], close=df_1h['c'], volume=df_1h['v'], window=20).iloc[-1]
-        hacim_oran = df_1h['v'].iloc[-3:].mean() / df_1h['v'].iloc[-20:].mean()
+        
+        son3_hacim_1h = df_1h['v'].iloc[-3:].mean()
+        ort20_hacim_1h = df_1h['v'].iloc[-20:].mean()
+        # ✅ DÜZELTİLDİ: Sıfıra bölünme hatası engellendi
+        hacim_oran = son3_hacim_1h / ort20_hacim_1h if ort20_hacim_1h > 0 else 0
         
         ema9 = ta.trend.ema_indicator(df_1h['c'], window=9).iloc[-1]
         fiyat_ema9_fark = ((anlik_fiyat - ema9) / ema9) * 100
@@ -541,7 +553,6 @@ def coin_puan_hesapla(symbol):
         if ob_analiz:
             if ob_analiz['baski'] == "ALIM": long_puan += 2; long_sebep.append("OB Alım")
             elif ob_analiz['baski'] == "SATIM": short_puan += 2; short_sebep.append("OB Satım")
-            # ✅ GÜNCELLENDİ: Duvarlar artık puanlamada etkili!
             if ob_analiz['alim_duvari']: long_puan += 3; long_sebep.append("OB Alım Duvarı")
             if ob_analiz['satim_duvari']: short_puan += 3; short_sebep.append("OB Satım Duvarı")
         
@@ -699,8 +710,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v37.1 - Tamir Edilmiş)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v37.1)\n\nEmir Defteri Duvarları: AKTİF\nGerçek Coin Listesi: AKTİF\nYön Teyidi: AKTİF")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v37.2 - Spread & Hata Düzeltmeli)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v37.2)\n\nSpread Limiti: %0.50 (Testnet Uyumlu)\nSıfıra Bölünme Hatası: Çözüldü")
     except: pass
 
 
@@ -960,7 +971,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v37.1 - Tamir Edilmiş", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v37.2 - Spread & Hata Düzeltmeli", flush=True)
     
     try:
         exchange.load_markets()
@@ -1160,7 +1171,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v37.1 - Tamir Edilmiş)*\n\n"
+            f"📊 *TREND BOT (v37.2 - Hata Düzeltmeli)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1172,7 +1183,6 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"❄️ Ardışık Zarar: `{ardisikz}`\n"
             f"⭐ Anlık Baraj: `{anlik_baraj}`\n"
             f"⚙️ Mod: `Sadece Trend`\n"
-            f"🛡️ Yön Teyidi: `AKTİF`\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
