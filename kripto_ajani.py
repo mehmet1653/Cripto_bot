@@ -75,7 +75,7 @@ real_exchange.set_sandbox_mode(False)
 DINAMIK_LISTE = []
 SON_LISTE_GUNCELLEME = 0
 LISTE_GUNCELLEME_SURESI = 15 * 60
-LISTE_BOYUT = 15 # Fırsatları kaçırmamak için 15 coin
+LISTE_BOYUT = 15 
 
 KARA_LISTE = [
     'BTC/USDT:USDT', 'ETH/USDT:USDT', 'AVAX/USDT:USDT',
@@ -569,7 +569,6 @@ def coin_puan_hesapla(symbol):
             if vp_analiz['yakin_hacim_tip'] == "DESTEK" and vp_analiz['yakin_hacim_mesafe'] < 1.0: long_puan += 2; long_sebep.append("VP destek")
             elif vp_analiz['yakin_hacim_tip'] == "DIRENC" and vp_analiz['yakin_hacim_mesafe'] < 1.0: short_puan += 2; short_sebep.append("VP direnç")
         
-        # ✅ MTF Zayıf/Karışık artık iptal etmiyor, sadece puan vermiyor.
         if mtf:
             if mtf['uyum'] == "GUCLU_LONG": long_puan += 3; long_sebep.append("MTF güçlü LONG")
             elif mtf['uyum'] == "GUCLU_SHORT": short_puan += 3; short_sebep.append("MTF güçlü SHORT")
@@ -602,7 +601,6 @@ def coin_puan_hesapla(symbol):
         
         anlik_baraj = get_dinamik_min_puan()
         
-        # ✅ MUM ONAYI KALDIRILDI (Artık barajı geçen direkt işleme giriyor)
         if long_puan >= anlik_baraj and long_puan > short_puan:
             detay["sinyal_skoru"] = long_puan
             detay["aciklama"] = " + ".join(long_sebep) + (" + Mum Onayı" if mum_yesil else "")
@@ -705,8 +703,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v37.6 - Momentum & Esnek Filtre)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v37.6)\n\nHavuz: Momentum & Hacim Odaklı\nKatı Filtreler: Kaldırıldı")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v37.7 - /kapat Eklendi)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v37.7)\n\n/kapat komutu aktif edildi.")
     except: pass
 
 
@@ -966,7 +964,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v37.6 - Momentum & Esnek Filtre", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v37.7 - /kapat Komutu Aktif", flush=True)
     
     try:
         exchange.load_markets()
@@ -1169,7 +1167,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v37.6 - Esnek Filtre)*\n\n"
+            f"📊 *TREND BOT (v37.7 - Kapat Komutu Aktif)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1193,6 +1191,66 @@ async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     BOT_CALISIYOR_MU = False
     await update.message.reply_text("⏸️ Durduruldu.")
 
+async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != int(CHAT_ID): return
+    global AKTIF_SISTEMLER
+    
+    # Argüman var mı? (örn: /kapat BTC)
+    hedef_coin = context.args[0].upper() if context.args else None
+    
+    mesaj_bekle = await update.message.reply_text("⏳ Pozisyonlar kapatılıyor, işlemler iptal ediliyor. Lütfen bekleyin...")
+    
+    try:
+        positions = await asyncio.to_thread(exchange.fetch_positions)
+        aktif_pozisyonlar = [p for p in positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
+        
+        if not aktif_pozisyonlar:
+            await mesaj_bekle.edit_text("ℹ️ Kapatılacak açık pozisyon bulunmuyor.")
+            return
+
+        kapatilan = []
+        bulunamadi = []
+        
+        if hedef_coin:
+            # Sadece belirli bir coini kapat
+            hedef_sym = f"{hedef_coin}/USDT:USDT"
+            eslesenler = [p for p in aktif_pozisyonlar if hedef_coin in p['symbol'].upper()]
+            if not eslesenler:
+                await mesaj_bekle.edit_text(f"❌ `{hedef_coin}` için açık pozisyon bulunamadı.")
+                return
+            kapatilacaklar = eslesenler
+        else:
+            # Tümünü kapat
+            kapatilacaklar = aktif_pozisyonlar
+            
+        for p in kapatilacaklar:
+            symbol = p['symbol']
+            yon = str(p.get('side', '')).upper()
+            miktar = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+            
+            await asyncio.to_thread(tum_emirleri_iptal, symbol)
+            basarili = await asyncio.to_thread(market_kapat, symbol, miktar, yon)
+            
+            if basarili:
+                with state_lock:
+                    if symbol in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[symbol]
+                kapatilan.append(symbol.replace('/USDT:USDT', ''))
+            else:
+                bulunamadi.append(symbol.replace('/USDT:USDT', ''))
+                
+        hafizayi_kaydet()
+        
+        rapor = ""
+        if kapatilan:
+            rapor += "✅ *Başarıyla Kapatılanlar:*\n" + "\n".join([f"• `{s}`" for s in kapatilan]) + "\n\n"
+        if bulunamadi:
+            rapor += "⚠️ *Kapatılamayanlar (Hata):*\n" + "\n".join([f"• `{s}`" for s in bulunamadi])
+            
+        await mesaj_bekle.edit_text(rapor, parse_mode='Markdown')
+        
+    except Exception as e:
+        await mesaj_bekle.edit_text(f"❌ Kapatma Hatası: {e}")
+
 # ==================== MAIN ====================
 async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)
@@ -1202,7 +1260,7 @@ async def main():
     kuyruk_thread.start()
     
     print("⏳ Telegram bağlantısı için 5 saniye bekleniyor (Çakışma önlemi)...", flush=True)
-    await asyncio.sleep(5) # ✅ Telegram Çakışma Hatası Önlemi
+    await asyncio.sleep(5) 
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     try:
@@ -1211,6 +1269,7 @@ async def main():
     
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
+    app_tg.add_handler(CommandHandler("kapat", kapat_komutu)) # ✅ EKLENDİ
     
     await app_tg.initialize()
     await app_tg.start()
