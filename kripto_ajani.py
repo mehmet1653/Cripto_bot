@@ -88,7 +88,7 @@ MIN_HACIM_24S = 5_000_000
 MIN_DEGISIM_YUZDE = 0.5
 MIN_FIYAT = 0.01
 MAX_FIYAT = 300.0
-MAKS_SPREAD_YUZDE = 0.50 # ✅ DÜZELTİLDİ: Testnette işlem açabilmesi için 0.15'ten 0.50'ye çıkarıldı
+MAKS_SPREAD_YUZDE = 0.50 
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
@@ -119,7 +119,7 @@ YENILGI_SERISI_LIMIT = 3
 YENILGI_SERISI_BEKLEME = 60 * 60 
 
 # Kâr Takipçisi (Trailing Stop) Ayarları
-TRAILING_STOP_AKTIF = False
+TRAILING_STOP_AKTIF = False     # ✅ Trailing stop kapalı
 TRAILING_BASLANGIC_ROE = 6.0   
 TRAILING_DUSUS_YUZDE = 2.5     
 
@@ -226,28 +226,36 @@ def get_dinamik_min_puan():
 
 def hizli_on_puan(symbol):
     try:
-        ohlcv = real_exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
+        # ✅ DÜZELTME: 15m yerine asıl trendi belirleyen 1h grafiğine bakıyoruz
+        ohlcv = real_exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
         if len(ohlcv) < 30: return 0, {}
         df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
-        mfi = ta.volume.money_flow_index(high=df['h'], low=df['l'], close=df['c'], volume=df['v'], window=14).iloc[-1]
-        if mfi < MFI_ASIRI_SATIM or mfi > MFI_ASIRI_ALIM: return 0, {"sebep": f"MFI aşırı"}
+        
+        anlik_fiyat = df['c'].iloc[-1]
+        ema50 = ta.trend.ema_indicator(df['c'], window=50).iloc[-1]
+        adx = ta.trend.adx(df['h'], df['l'], df['c'], window=14).iloc[-1]
         
         son3_hacim = df['v'].iloc[-3:].mean()
         ort20_hacim = df['v'].iloc[-20:].mean()
-        # ✅ DÜZELTİLDİ: Sıfıra bölünme hatası engellendi
         hacim_oran = son3_hacim / ort20_hacim if ort20_hacim > 0 else 0
         
+        # Hacim çok zayıfsa hiç bulaşma
         if hacim_oran < HACIM_ESIK: return 0, {"sebep": f"Hacim zayıf"}
         
         puan = 0
-        if 40 < mfi < 60: puan += 3
-        elif 30 < mfi < 70: puan += 1
+        # 1. ADX Trend Gücü
+        if adx > 20: puan += 4
+        elif adx > ADX_ESIK_DEGERI: puan += 2
+        
+        # 2. Fiyatın EMA50'ye göre konumu (Ana trend yönü)
+        if anlik_fiyat > ema50: puan += 4  # Long potansiyeli
+        else: puan += 3                    # Short potansiyeli
+        
+        # 3. Hacim Artışı
         if hacim_oran > 1.5: puan += 3
         elif hacim_oran > 1.2: puan += 2
         elif hacim_oran > 1.0: puan += 1
-        ema9 = ta.trend.ema_indicator(df['c'], window=9).iloc[-1]
-        ema21 = ta.trend.ema_indicator(df['c'], window=21).iloc[-1]
-        if abs(ema9 - ema21) / ema21 > 0.005: puan += 2
+        
         return puan, {}
     except: return 0, {}
 
@@ -270,8 +278,10 @@ def dinamik_liste_guncelle(zorla=False):
                     market = exchange.market(sym)
                     if ((float(market['limits']['amount']['min'] or 1.0) * fiyat * float(market.get('contractSize', 1.0))) / KALDIRAC) > 15.0: continue
                 except: continue
+                
                 hizli_puan, _ = hizli_on_puan(sym)
                 if hizli_puan > 0: adaylar.append({"symbol": sym, "hizli_puan": hizli_puan})
+                
             except: continue
         adaylar.sort(key=lambda x: x['hizli_puan'], reverse=True)
         if adaylar: DINAMIK_LISTE = [a['symbol'] for a in adaylar[:LISTE_BOYUT]]
@@ -362,7 +372,6 @@ def likidite_avi_tespit(symbol, df_15m, destekler, direncler):
         
         hacim_son3 = son3['v'].mean()
         hacim_ort20 = df_15m['v'].iloc[-20:].mean()
-        # ✅ DÜZELTİLDİ: Sıfıra bölünme hatası engellendi
         hacim_oran = hacim_son3 / hacim_ort20 if hacim_ort20 > 0 else 1
         
         yakin_destek = min(destekler, key=lambda x: abs(x - anlik)) if destekler else None
@@ -508,7 +517,6 @@ def coin_puan_hesapla(symbol):
         
         son3_hacim_1h = df_1h['v'].iloc[-3:].mean()
         ort20_hacim_1h = df_1h['v'].iloc[-20:].mean()
-        # ✅ DÜZELTİLDİ: Sıfıra bölünme hatası engellendi
         hacim_oran = son3_hacim_1h / ort20_hacim_1h if ort20_hacim_1h > 0 else 0
         
         ema9 = ta.trend.ema_indicator(df_1h['c'], window=9).iloc[-1]
@@ -710,8 +718,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v37.2 - Spread & Hata Düzeltmeli)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v37.2)\n\nSpread Limiti: %0.50 (Testnet Uyumlu)\nSıfıra Bölünme Hatası: Çözüldü")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v37.4 - Trend Odaklı Havuz)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v37.4)\n\nHavuz Seçimi: 1H Trend Odaklı\nTrailing Stop: Kapalı")
     except: pass
 
 
@@ -971,7 +979,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v37.2 - Spread & Hata Düzeltmeli", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v37.4 - Trend Odaklı Havuz", flush=True)
     
     try:
         exchange.load_markets()
@@ -1018,6 +1026,7 @@ def ana_dongu():
                         continue
             except: pass
             
+            pozisyon_cekme_basarili = False
             try:
                 raw_pos = exchange.fetch_positions()
                 aktif_borsa_map = {}
@@ -1027,6 +1036,8 @@ def ana_dongu():
                     if k > 0:
                         aktif_borsa_map[p['symbol']] = p
                         aktif_semboller_seti.add(p['symbol'])
+                
+                pozisyon_cekme_basarili = True  
                 
                 if aktif_semboller_seti:
                     print(f"📌 Açık Pozisyonlar: {list(aktif_semboller_seti)}", flush=True)
@@ -1054,7 +1065,8 @@ def ana_dongu():
                 aktif_borsa_map = {}
                 aktif_semboller_seti = set()
             
-            if aktif_semboller_seti:
+            # ✅ DÜZELTME: Pozisyon çekme başarılı olduysa, açık pozisyon kalmasa bile kapanışları kontrol et!
+            if pozisyon_cekme_basarili:
                 manuel_sl_tp_kontrol(aktif_borsa_map)
                 kapanan_pozisyonlari_kontrol(aktif_semboller_seti)
             
@@ -1171,7 +1183,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v37.2 - Hata Düzeltmeli)*\n\n"
+            f"📊 *TREND BOT (v37.4 - Trend Odaklı Havuz)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
