@@ -75,7 +75,7 @@ real_exchange.set_sandbox_mode(False)
 DINAMIK_LISTE = []
 SON_LISTE_GUNCELLEME = 0
 LISTE_GUNCELLEME_SURESI = 15 * 60
-LISTE_BOYUT = 15 # ✅ GÜNCELLENDİ: 10 -> 15 (Fırsatları kaçırmamak için artırıldı)
+LISTE_BOYUT = 15 # Fırsatları kaçırmamak için 15 coin
 
 KARA_LISTE = [
     'BTC/USDT:USDT', 'ETH/USDT:USDT', 'AVAX/USDT:USDT',
@@ -84,7 +84,7 @@ KARA_LISTE = [
     'FDUSD/USDT:USDT', 'TUSD/USDT:USDT', 'BUSD/USDT:USDT'
 ]
 
-MIN_HACIM_24S = 2_000_000 # ✅ GÜNCELLENDİ: 5M -> 2M (Yeni pump olan coinler için)
+MIN_HACIM_24S = 2_000_000 
 MIN_DEGISIM_YUZDE = 0.5
 MIN_FIYAT = 0.01
 MAX_FIYAT = 300.0
@@ -119,7 +119,7 @@ YENILGI_SERISI_LIMIT = 3
 YENILGI_SERISI_BEKLEME = 60 * 60 
 
 # Kâr Takipçisi (Trailing Stop) Ayarları
-TRAILING_STOP_AKTIF = False     # ✅ Trailing stop kapalı
+TRAILING_STOP_AKTIF = False     
 TRAILING_BASLANGIC_ROE = 6.0   
 TRAILING_DUSUS_YUZDE = 2.5     
 
@@ -224,7 +224,6 @@ def get_dinamik_min_puan():
             
     return MIN_PUAN
 
-# ✅ HIZLI ÖN PUAN GÜNCELLENDİ: Momentum (Ani Fiyat ve Hacim Hareketleri) Eklendi
 def hizli_on_puan(symbol):
     try:
         ohlcv = real_exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
@@ -239,23 +238,19 @@ def hizli_on_puan(symbol):
         ort20_hacim = df['v'].iloc[-20:].mean()
         hacim_oran = son3_hacim / ort20_hacim if ort20_hacim > 0 else 0
         
-        # Hacim çok zayıfsa hiç bulaşma
         if hacim_oran < 0.3: return 0, {"sebep": f"Hacim çok zayıf"}
         
         puan = 0
         
-        # 1. MOMENTUM (Son 4 saatin fiyat değişimi - Pump/Dump yakalayıcı)
         fiyat_degisim = ((df['c'].iloc[-1] - df['c'].iloc[-5]) / df['c'].iloc[-5]) * 100
-        if abs(fiyat_degisim) > 10: puan += 15  # Sert hareket
-        elif abs(fiyat_degisim) > 5: puan += 10 # Güçlü hareket
-        elif abs(fiyat_degisim) > 2: puan += 5  # Normal hareket
+        if abs(fiyat_degisim) > 10: puan += 15
+        elif abs(fiyat_degisim) > 5: puan += 10
+        elif abs(fiyat_degisim) > 2: puan += 5
         
-        # 2. ANİ HACİM PATLAMASI
         if hacim_oran > 2.5: puan += 10
         elif hacim_oran > 1.8: puan += 6
         elif hacim_oran > 1.2: puan += 3
         
-        # 3. TREND DESTEĞİ (ADX ve EMA)
         if adx > 25: puan += 5
         elif adx > ADX_ESIK_DEGERI: puan += 2
         
@@ -537,7 +532,6 @@ def coin_puan_hesapla(symbol):
         
         detay.update({"mfi": round(mfi, 1), "hacim_oran": round(hacim_oran, 2), "btc_yon": btc_yon})
         
-        if mfi < MFI_ASIRI_SATIM or mfi > MFI_ASIRI_ALIM: return None, {"sebep": f"MFI Aşırı"}, 0
         if hacim_oran < HACIM_ESIK: return None, {"sebep": f"Hacim Zayıf"}, 0
 
         long_puan = 0; short_puan = 0
@@ -545,9 +539,6 @@ def coin_puan_hesapla(symbol):
         
         if formasyon_yon == "LONG": long_puan += 4; long_sebep.append(f"Formasyon: {formasyon_sebep}")
         elif formasyon_yon == "SHORT": short_puan += 4; short_sebep.append(f"Formasyon: {formasyon_sebep}")
-        elif formasyon_yon == "SIKISMA":
-            if trend_tip == "YUKSELEN": long_puan += 2
-            elif trend_tip == "ALCALAN": short_puan += 2
         
         if trend_tip == "YUKSELEN": long_puan += 2; long_sebep.append("Yükselen kanal")
         elif trend_tip == "ALCALAN": short_puan += 2; short_sebep.append("Alçalan kanal")
@@ -578,15 +569,12 @@ def coin_puan_hesapla(symbol):
             if vp_analiz['yakin_hacim_tip'] == "DESTEK" and vp_analiz['yakin_hacim_mesafe'] < 1.0: long_puan += 2; long_sebep.append("VP destek")
             elif vp_analiz['yakin_hacim_tip'] == "DIRENC" and vp_analiz['yakin_hacim_mesafe'] < 1.0: short_puan += 2; short_sebep.append("VP direnç")
         
+        # ✅ MTF Zayıf/Karışık artık iptal etmiyor, sadece puan vermiyor.
         if mtf:
             if mtf['uyum'] == "GUCLU_LONG": long_puan += 3; long_sebep.append("MTF güçlü LONG")
             elif mtf['uyum'] == "GUCLU_SHORT": short_puan += 3; short_sebep.append("MTF güçlü SHORT")
-            elif mtf['uyum'] == "ZAYIF_LONG": 
-                return None, {"sebep": "MTF Zayıf (Yön Belirsiz)"}, 0
-            elif mtf['uyum'] == "ZAYIF_SHORT": 
-                return None, {"sebep": "MTF Zayıf (Yön Belirsiz)"}, 0
-            elif mtf['uyum'] == "KARISIK": 
-                return None, {"sebep": "MTF Karışık (Yön Belirsiz)"}, 0
+            elif mtf['uyum'] == "ZAYIF_LONG": long_puan += 1
+            elif mtf['uyum'] == "ZAYIF_SHORT": short_puan += 1
         
         if likidite:
             if likidite['yon'] == "LONG": long_puan += 4; long_sebep.append("🎣 Likidite avı")
@@ -614,25 +602,18 @@ def coin_puan_hesapla(symbol):
         
         anlik_baraj = get_dinamik_min_puan()
         
+        # ✅ MUM ONAYI KALDIRILDI (Artık barajı geçen direkt işleme giriyor)
         if long_puan >= anlik_baraj and long_puan > short_puan:
-            if mum_yesil:
-                detay["sinyal_skoru"] = long_puan
-                detay["aciklama"] = " + ".join(long_sebep) + " + Mum Onayı"
-                detay["sebep"] = f"TREND LONG | L:{long_puan} S:{short_puan} (Baraj:{anlik_baraj})"
-                return "LONG", detay, long_puan
-            else:
-                detay["sebep"] = f"L:{long_puan} (Mum Onayı Bekleniyor)"
-                return None, detay, 0
+            detay["sinyal_skoru"] = long_puan
+            detay["aciklama"] = " + ".join(long_sebep) + (" + Mum Onayı" if mum_yesil else "")
+            detay["sebep"] = f"TREND LONG | L:{long_puan} S:{short_puan} (Baraj:{anlik_baraj})"
+            return "LONG", detay, long_puan
         
         if short_puan >= anlik_baraj and short_puan > long_puan:
-            if mum_kirmizi:
-                detay["sinyal_skoru"] = short_puan
-                detay["aciklama"] = " + ".join(short_sebep) + " + Mum Onayı"
-                detay["sebep"] = f"TREND SHORT | L:{long_puan} S:{short_puan} (Baraj:{anlik_baraj})"
-                return "SHORT", detay, short_puan
-            else:
-                detay["sebep"] = f"S:{short_puan} (Mum Onayı Bekleniyor)"
-                return None, detay, 0
+            detay["sinyal_skoru"] = short_puan
+            detay["aciklama"] = " + ".join(short_sebep) + (" + Mum Onayı" if mum_kirmizi else "")
+            detay["sebep"] = f"TREND SHORT | L:{long_puan} S:{short_puan} (Baraj:{anlik_baraj})"
+            return "SHORT", detay, short_puan
         
         detay["sebep"] = f"L:{long_puan} S:{short_puan} (Baraj:{anlik_baraj})"
         return None, detay, 0
@@ -724,8 +705,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v37.5 - Momentum Eklendi)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v37.5)\n\nHavuz: Momentum & Hacim Odaklı\nTrailing Stop: Kapalı")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v37.6 - Momentum & Esnek Filtre)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v37.6)\n\nHavuz: Momentum & Hacim Odaklı\nKatı Filtreler: Kaldırıldı")
     except: pass
 
 
@@ -985,7 +966,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v37.5 - Momentum Eklendi", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v37.6 - Momentum & Esnek Filtre", flush=True)
     
     try:
         exchange.load_markets()
@@ -1188,7 +1169,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v37.5 - Momentum)*\n\n"
+            f"📊 *TREND BOT (v37.6 - Esnek Filtre)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1219,6 +1200,9 @@ async def main():
     
     kuyruk_thread = threading.Thread(target=kuyruk_worker, daemon=True)
     kuyruk_thread.start()
+    
+    print("⏳ Telegram bağlantısı için 5 saniye bekleniyor (Çakışma önlemi)...", flush=True)
+    await asyncio.sleep(5) # ✅ Telegram Çakışma Hatası Önlemi
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     try:
