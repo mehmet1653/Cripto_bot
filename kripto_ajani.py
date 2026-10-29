@@ -102,7 +102,7 @@ MAKS_POZISYON = 2
 SL_YUZDE = 1.6              
 TP_YUZDE = 2.5              
 MIN_TP_MESAFE = 1.5  
-ADX_ESIK_DEGERI = 18.0       
+ADX_ESIK_DEGERI = 22.0  # ✅ GÜNCELLENDİ: 18 -> 22 (Yatay piyasada işlem yapmaz)
 
 # Dinamik Puan Barajı Ayarları
 MIN_PUAN = 11               
@@ -115,7 +115,7 @@ ZAMAN_ASIMI_1 = 2 * 60 * 60
 ZAMAN_ASIMI_2 = 4 * 60 * 60 
 
 # Yenilgi Serisi Freni (Ardışık SL Koruması)
-YENILGI_SERISI_LIMIT = 3         
+YENILGI_SERISI_LIMIT = 2  # ✅ GÜNCELLENDİ: 3 -> 2 (Kasa erimesini durdurmak için)
 YENILGI_SERISI_BEKLEME = 60 * 60 
 
 # Kâr Takipçisi (Trailing Stop) Ayarları
@@ -569,11 +569,12 @@ def coin_puan_hesapla(symbol):
             if vp_analiz['yakin_hacim_tip'] == "DESTEK" and vp_analiz['yakin_hacim_mesafe'] < 1.0: long_puan += 2; long_sebep.append("VP destek")
             elif vp_analiz['yakin_hacim_tip'] == "DIRENC" and vp_analiz['yakin_hacim_mesafe'] < 1.0: short_puan += 2; short_sebep.append("VP direnç")
         
+        # ✅ MTF SIKILAŞTIRILDI: Zayıf veya Karışık ise işleme girmeyecek
         if mtf:
             if mtf['uyum'] == "GUCLU_LONG": long_puan += 3; long_sebep.append("MTF güçlü LONG")
             elif mtf['uyum'] == "GUCLU_SHORT": short_puan += 3; short_sebep.append("MTF güçlü SHORT")
-            elif mtf['uyum'] == "ZAYIF_LONG": long_puan += 1
-            elif mtf['uyum'] == "ZAYIF_SHORT": short_puan += 1
+            else: 
+                return None, {"sebep": "MTF Yön Belirsiz"}, 0
         
         if likidite:
             if likidite['yon'] == "LONG": long_puan += 4; long_sebep.append("🎣 Likidite avı")
@@ -600,18 +601,30 @@ def coin_puan_hesapla(symbol):
         detay["short_puan"] = short_puan
         
         anlik_baraj = get_dinamik_min_puan()
+
+        # ✅ BTC YÖN ZORUNLULUĞU EKLENDİ
+        if btc_yon == "KARISIK": return None, {"sebep": "BTC Yönü Belirsiz"}, 0
         
+        # ✅ MUM ONAYI GERİ GETİRİLDİ
         if long_puan >= anlik_baraj and long_puan > short_puan:
-            detay["sinyal_skoru"] = long_puan
-            detay["aciklama"] = " + ".join(long_sebep) + (" + Mum Onayı" if mum_yesil else "")
-            detay["sebep"] = f"TREND LONG | L:{long_puan} S:{short_puan} (Baraj:{anlik_baraj})"
-            return "LONG", detay, long_puan
+            if btc_yon == "SHORT": return None, {"sebep": "BTC Short - LONG İptal"}, 0
+            if mum_yesil:
+                detay["sinyal_skoru"] = long_puan
+                detay["aciklama"] = " + ".join(long_sebep) + " + Mum Onayı"
+                detay["sebep"] = f"TREND LONG | L:{long_puan} S:{short_puan}"
+                return "LONG", detay, long_puan
+            else:
+                return None, {"sebep": "LONG - Mum Onayı Yok"}, 0
         
         if short_puan >= anlik_baraj and short_puan > long_puan:
-            detay["sinyal_skoru"] = short_puan
-            detay["aciklama"] = " + ".join(short_sebep) + (" + Mum Onayı" if mum_kirmizi else "")
-            detay["sebep"] = f"TREND SHORT | L:{long_puan} S:{short_puan} (Baraj:{anlik_baraj})"
-            return "SHORT", detay, short_puan
+            if btc_yon == "LONG": return None, {"sebep": "BTC Long - SHORT İptal"}, 0
+            if mum_kirmizi:
+                detay["sinyal_skoru"] = short_puan
+                detay["aciklama"] = " + ".join(short_sebep) + " + Mum Onayı"
+                detay["sebep"] = f"TREND SHORT | L:{long_puan} S:{short_puan}"
+                return "SHORT", detay, short_puan
+            else:
+                return None, {"sebep": "SHORT - Mum Onayı Yok"}, 0
         
         detay["sebep"] = f"L:{long_puan} S:{short_puan} (Baraj:{anlik_baraj})"
         return None, detay, 0
@@ -703,8 +716,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v37.7 - /kapat Eklendi)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v37.7)\n\n/kapat komutu aktif edildi.")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v37.8 - Sıkılaştırılmış Filtreler)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v37.8)\n\nBTC Bias & MTF Zorunlu\nMum Onayı Aktif")
     except: pass
 
 
@@ -964,7 +977,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v37.7 - /kapat Komutu Aktif", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v37.8 - Sıkılaştırılmış Filtreler", flush=True)
     
     try:
         exchange.load_markets()
@@ -1167,7 +1180,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v37.7 - Kapat Komutu Aktif)*\n\n"
+            f"📊 *TREND BOT (v37.8 - Sıkı Filtre)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1195,7 +1208,6 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global AKTIF_SISTEMLER
     
-    # Argüman var mı? (örn: /kapat BTC)
     hedef_coin = context.args[0].upper() if context.args else None
     
     mesaj_bekle = await update.message.reply_text("⏳ Pozisyonlar kapatılıyor, işlemler iptal ediliyor. Lütfen bekleyin...")
@@ -1212,15 +1224,12 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bulunamadi = []
         
         if hedef_coin:
-            # Sadece belirli bir coini kapat
-            hedef_sym = f"{hedef_coin}/USDT:USDT"
             eslesenler = [p for p in aktif_pozisyonlar if hedef_coin in p['symbol'].upper()]
             if not eslesenler:
                 await mesaj_bekle.edit_text(f"❌ `{hedef_coin}` için açık pozisyon bulunamadı.")
                 return
             kapatilacaklar = eslesenler
         else:
-            # Tümünü kapat
             kapatilacaklar = aktif_pozisyonlar
             
         for p in kapatilacaklar:
@@ -1269,7 +1278,7 @@ async def main():
     
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
-    app_tg.add_handler(CommandHandler("kapat", kapat_komutu)) # ✅ EKLENDİ
+    app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
     
     await app_tg.initialize()
     await app_tg.start()
