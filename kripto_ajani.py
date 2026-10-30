@@ -98,18 +98,18 @@ KALDIRAC = 5
 POZISYON_MARJ = 0.20
 MAKS_POZISYON = 2
 
-# Trend Modu Ayarları
-SL_YUZDE = 1.6              
-TP_YUZDE = 2.5              
-MIN_TP_MESAFE = 1.5  
+# ✅ RİSK/ÖDÜL ORANI DEĞİŞTİRİLDİ (Kazanma oranını artırmak için)
+SL_YUZDE = 2.5              
+TP_YUZDE = 1.5              
+MIN_TP_MESAFE = 1.0  
 ADX_ESIK_DEGERI = 15.0 
 
-# ✅ TESTERE MODU İÇİN YENİ DAR TP/SL AYARLARI
-TESTERE_SL_YUZDE = 1.0
-TESTERE_TP_YUZDE = 1.5
+# ✅ TESTERE MODU İÇİN DAR TP/SL AYARLARI
+TESTERE_SL_YUZDE = 2.0
+TESTERE_TP_YUZDE = 1.0
 
 # Dinamik Puan Barajı Ayarları
-MIN_PUAN = 6 # ✅ DÜŞÜRÜLDÜ
+MIN_PUAN = 6 
 BARAJ_ARTIS_1 = 8          
 BARAJ_ARTIS_2 = 10          
 BARAJ_ARTIS_3 = 12          
@@ -390,55 +390,6 @@ def likidite_avi_tespit(symbol, df_15m, destekler, direncler):
         return None
     except: return None
 
-def btc_bias():
-    try:
-        ticker = real_exchange.fetch_ticker('BTC/USDT:USDT')
-        anlik_fiyat = float(ticker['last'])
-        
-        df_5m = pd.DataFrame(real_exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='5m', limit=50), columns=['t', 'o', 'h', 'l', 'c', 'v'])
-        ema20_5m = ta.trend.ema_indicator(df_5m['c'], window=20).iloc[-1]
-        ema50_5m = ta.trend.ema_indicator(df_5m['c'], window=50).iloc[-1]
-        fiyat_5m = df_5m['c'].iloc[-1]
-        trend_5m = "LONG" if fiyat_5m > ema20_5m > ema50_5m else ("SHORT" if fiyat_5m < ema20_5m < ema50_5m else "YATAY")
-
-        df_15m = pd.DataFrame(real_exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=50), columns=['t', 'o', 'h', 'l', 'c', 'v'])
-        ema20_15m = ta.trend.ema_indicator(df_15m['c'], window=20).iloc[-1]
-        ema50_15m = ta.trend.ema_indicator(df_15m['c'], window=50).iloc[-1]
-        fiyat_15m = df_15m['c'].iloc[-1]
-        rsi_15m = ta.momentum.rsi(df_15m['c'], window=14).iloc[-1]
-        trend_15m = "LONG" if fiyat_15m > ema20_15m > ema50_15m else ("SHORT" if fiyat_15m < ema20_15m < ema50_15m else "YATAY")
-
-        df_1h = pd.DataFrame(real_exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=50), columns=['t', 'o', 'h', 'l', 'c', 'v'])
-        ema50_1h = ta.trend.ema_indicator(df_1h['c'], window=50).iloc[-1]
-        fiyat_1h = df_1h['c'].iloc[-1]
-        trend_1h = "LONG" if fiyat_1h > ema50_1h else "SHORT"
-
-        ph_15m, pl_15m = pivot_noktalari_bul(df_15m, lookback=5)
-        destekler_15m = [p[1] for p in pl_15m[-3:]] if pl_15m else []
-        en_yakin_destek_15m = min(destekler_15m, key=lambda x: abs(x - anlik_fiyat)) if destekler_15m else None
-        destek_mesafe_15m = ((anlik_fiyat - en_yakin_destek_15m) / anlik_fiyat * 100) if en_yakin_destek_15m else 999
-
-        ph_1h, pl_1h = pivot_noktalari_bul(df_1h, lookback=5)
-        destekler_1h = [p[1] for p in pl_1h[-3:]] if pl_1h else []
-        en_yakin_destek_1h = min(destekler_1h, key=lambda x: abs(x - anlik_fiyat)) if destekler_1h else None
-        destek_mesafe_1h = ((anlik_fiyat - en_yakin_destek_1h) / anlik_fiyat * 100) if en_yakin_destek_1h else 999
-
-        if destek_mesafe_15m < BTC_15M_TOLERANS: return "LONG" 
-        if destek_mesafe_1h < BTC_1H_TOLERANS: return "LONG" 
-
-        adx_15m = ta.trend.adx(df_15m['h'], df_15m['l'], df_15m['c'], window=14).iloc[-1]
-        if adx_15m < 15: 
-            return "KARISIK" 
-
-        if trend_5m == "LONG" and trend_15m == "LONG" and trend_1h == "LONG":
-            if rsi_15m > 70: return "KARISIK" 
-            return "LONG"
-        elif trend_5m == "SHORT" and trend_15m == "SHORT" and trend_1h == "SHORT":
-            if rsi_15m < 30: return "KARISIK" 
-            return "SHORT"
-        else: return "KARISIK"
-    except: return "KARISIK"
-
 def pivot_noktalari_bul(df, lookback=5):
     ph, pl = [], []
     for i in range(lookback, len(df) - lookback):
@@ -549,14 +500,13 @@ def coin_puan_hesapla(symbol):
         ema9 = ta.trend.ema_indicator(df_1h['c'], window=9).iloc[-1]
         fiyat_ema9_fark = ((anlik_fiyat - ema9) / ema9) * 100
         
-        btc_yon = btc_bias()
         ob_analiz = orderbook_analiz(symbol)
         funding_sonuc = funding_analiz(symbol)
         vp_analiz = volume_profile_analiz(df_1h)
         mtf = mtf_analiz(symbol)
         likidite = likidite_avi_tespit(symbol, df_15m, destekler, direncler)
         
-        detay.update({"mfi": round(mfi, 1), "hacim_oran": round(hacim_oran, 2), "btc_yon": btc_yon})
+        detay.update({"mfi": round(mfi, 1), "hacim_oran": round(hacim_oran, 2)})
         
         if hacim_oran < HACIM_ESIK: return None, {"sebep": f"Hacim Zayıf"}, 0
 
@@ -630,7 +580,8 @@ def coin_puan_hesapla(symbol):
         testere = testere_piyasasi_mi(df_15m)
         detay["testere_modu"] = testere
         
-        # TERS İŞLEM MANTIĞI (Testere Modunda BTC'yi dinlemeden direkt tersini yapar)
+        # ✅ BTC BİAS FİLTRESİ TAMAMEN KALDIRILDI
+        # Ters işlem mantığı
         if testere:
             if long_puan >= anlik_baraj and long_puan > short_puan:
                 detay["sinyal_skoru"] = long_puan
@@ -644,12 +595,8 @@ def coin_puan_hesapla(symbol):
                 return "LONG", detay, short_puan
             return None, {"sebep": "Testere Modu - Puan Yetersiz"}, 0
 
-        # NORMAL TREND MANTIĞI
-        if btc_yon == "KARISIK": return None, {"sebep": "BTC Yönü Belirsiz"}, 0
-        
+        # Normal trend mantığı
         if long_puan >= anlik_baraj and long_puan > short_puan:
-            if btc_yon == "SHORT": return None, {"sebep": "BTC Short - LONG İptal"}, 0
-            
             if mum_yesil:
                 detay["sinyal_skoru"] = long_puan
                 detay["aciklama"] = " + ".join(long_sebep) + " + Mum Onayı"
@@ -659,8 +606,6 @@ def coin_puan_hesapla(symbol):
                 return None, {"sebep": "LONG - Mum Onayı Yok"}, 0
         
         if short_puan >= anlik_baraj and short_puan > long_puan:
-            if btc_yon == "LONG": return None, {"sebep": "BTC Long - SHORT İptal"}, 0
-            
             if mum_kirmizi:
                 detay["sinyal_skoru"] = short_puan
                 detay["aciklama"] = " + ".join(short_sebep) + " + Mum Onayı"
@@ -757,8 +702,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v38.3 - Yazı Düzeltmeli)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v38.3)\n\nMod: Dinamik (Trend + Ters)")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v39.0 - Kontra Modu)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v39.0)\n\nBTC Filtresi Kaldırıldı\nTP Kısaltıldı, SL Genişletildi.")
     except: pass
 
 # ==================== POZİSYON AÇMA ====================
@@ -1024,7 +969,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v38.3 - Yazı Düzeltmeli", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v39.0 - Kontra Modu", flush=True)
     
     try:
         exchange.load_markets()
@@ -1228,7 +1173,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v38.3 - Dinamik)*\n\n"
+            f"📊 *TREND BOT (v39.0 - Kontra)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1239,7 +1184,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔥 Ardışık Kâr: `{ardisik}`\n"
             f"❄️ Ardışık Zarar: `{ardisikz}`\n"
             f"⭐ Anlık Baraj: `{anlik_baraj}`\n"
-            f"⚙️ Mod: `Dinamik (Trend + Ters)`\n"
+            f"⚙️ Mod: `Kontra (Yön Bağımsız)`\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
