@@ -98,13 +98,12 @@ KALDIRAC = 5
 POZISYON_MARJ = 0.20
 MAKS_POZISYON = 2
 
-# ✅ RİSK/ÖDÜL ORANI DEĞİŞTİRİLDİ (Kazanma oranını artırmak için)
+# ✅ SABİT TP/SL AYARLARI (Dinamik hesaplama iptal edildi)
 SL_YUZDE = 2.5              
 TP_YUZDE = 1.5              
-MIN_TP_MESAFE = 1.0  
 ADX_ESIK_DEGERI = 15.0 
 
-# ✅ TESTERE MODU İÇİN DAR TP/SL AYARLARI
+# ✅ TESTERE MODU İÇİN SABİT DAR TP/SL AYARLARI
 TESTERE_SL_YUZDE = 2.0
 TESTERE_TP_YUZDE = 1.0
 
@@ -702,8 +701,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v39.0 - Kontra Modu)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v39.0)\n\nBTC Filtresi Kaldırıldı\nTP Kısaltıldı, SL Genişletildi.")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v39.1 - Sabit TP/SL)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v39.1)\n\nTP: Sabit %1.5 | SL: Sabit %2.5")
     except: pass
 
 # ==================== POZİSYON AÇMA ====================
@@ -746,49 +745,22 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         
         is_testere = detay.get("testere_modu", False)
         
+        # ✅ DİNAMİK DESTEK/DİRENÇ İPTAL EDİLDİ - SADECE SABİT YÜZDELER
         if yon == "LONG":
             if is_testere:
                 tp = anlik_fiyat * (1 + TESTERE_TP_YUZDE / 100)
                 sl = anlik_fiyat * (1 - TESTERE_SL_YUZDE / 100)
             else:
-                hedef_direnc = detay.get("en_yakin_direnc")
-                if hedef_direnc and hedef_direnc > anlik_fiyat:
-                    mesafe_tp = (hedef_direnc - anlik_fiyat) / anlik_fiyat * 100
-                    if mesafe_tp >= MIN_TP_MESAFE and mesafe_tp <= 4.0: 
-                        tp = hedef_direnc * 0.999 
-                    else: 
-                        tp = anlik_fiyat * (1 + TP_YUZDE / 100)
-                else: 
-                    tp = anlik_fiyat * (1 + TP_YUZDE / 100)
-                
-                hedef_destek = detay.get("en_yakin_destek")
-                if hedef_destek and hedef_destek < anlik_fiyat:
-                    mesafe_sl = (anlik_fiyat - hedef_destek) / anlik_fiyat * 100
-                    if 0.8 <= mesafe_sl <= 1.8: sl = hedef_destek * 0.998 
-                    else: sl = anlik_fiyat * (1 - SL_YUZDE / 100)
-                else: sl = anlik_fiyat * (1 - SL_YUZDE / 100)
+                tp = anlik_fiyat * (1 + TP_YUZDE / 100)
+                sl = anlik_fiyat * (1 - SL_YUZDE / 100)
             kapat_yon = 'sell'
         else:
             if is_testere:
                 tp = anlik_fiyat * (1 - TESTERE_TP_YUZDE / 100)
                 sl = anlik_fiyat * (1 + TESTERE_SL_YUZDE / 100)
             else:
-                hedef_destek = detay.get("en_yakin_destek")
-                if hedef_destek and hedef_destek < anlik_fiyat:
-                    mesafe_tp = (anlik_fiyat - hedef_destek) / anlik_fiyat * 100
-                    if mesafe_tp >= MIN_TP_MESAFE and mesafe_tp <= 4.0: 
-                        tp = hedef_destek * 1.001 
-                    else: 
-                        tp = anlik_fiyat * (1 - TP_YUZDE / 100)
-                else: 
-                    tp = anlik_fiyat * (1 - TP_YUZDE / 100)
-                
-                hedef_direnc = detay.get("en_yakin_direnc")
-                if hedef_direnc and hedef_direnc > anlik_fiyat:
-                    mesafe_sl = (hedef_direnc - anlik_fiyat) / anlik_fiyat * 100
-                    if 0.8 <= mesafe_sl <= 1.8: sl = hedef_direnc * 1.002 
-                    else: sl = anlik_fiyat * (1 + SL_YUZDE / 100)
-                else: sl = anlik_fiyat * (1 + SL_YUZDE / 100)
+                tp = anlik_fiyat * (1 - TP_YUZDE / 100)
+                sl = anlik_fiyat * (1 + SL_YUZDE / 100)
             kapat_yon = 'buy'
         
         islem_y = 'buy' if yon == 'LONG' else 'sell'
@@ -969,7 +941,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v39.0 - Kontra Modu", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v39.1 - Sabit TP/SL", flush=True)
     
     try:
         exchange.load_markets()
@@ -1173,7 +1145,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v39.0 - Kontra)*\n\n"
+            f"📊 *TREND BOT (v39.1 - Sabit TP/SL)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1184,7 +1156,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔥 Ardışık Kâr: `{ardisik}`\n"
             f"❄️ Ardışık Zarar: `{ardisikz}`\n"
             f"⭐ Anlık Baraj: `{anlik_baraj}`\n"
-            f"⚙️ Mod: `Kontra (Yön Bağımsız)`\n"
+            f"⚙️ Mod: `Kontra (Sabit TP/SL)`\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
