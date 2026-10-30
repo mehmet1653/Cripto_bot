@@ -98,28 +98,28 @@ KALDIRAC = 5
 POZISYON_MARJ = 0.20
 MAKS_POZISYON = 2
 
-# Trend Modu Ayarları
+# Trend Modu Ayarları (Agresifleştirildi)
 SL_YUZDE = 1.6              
 TP_YUZDE = 2.5              
 MIN_TP_MESAFE = 1.5  
-ADX_ESIK_DEGERI = 22.0 
+ADX_ESIK_DEGERI = 15.0 # ✅ DÜŞÜRÜLDÜ: 22 -> 15
 
 # ✅ TESTERE MODU İÇİN YENİ DAR TP/SL AYARLARI
 TESTERE_SL_YUZDE = 1.0
 TESTERE_TP_YUZDE = 1.5
 
 # Dinamik Puan Barajı Ayarları
-MIN_PUAN = 11               
-BARAJ_ARTIS_1 = 14          
-BARAJ_ARTIS_2 = 16          
-BARAJ_ARTIS_3 = 18          
+MIN_PUAN = 8 # ✅ DÜŞÜRÜLDÜ: 11 -> 8               
+BARAJ_ARTIS_1 = 10          
+BARAJ_ARTIS_2 = 12          
+BARAJ_ARTIS_3 = 14          
 
 # Sıkışma Çözücü (Zaman Aşımı) Ayarları
 ZAMAN_ASIMI_1 = 2 * 60 * 60 
 ZAMAN_ASIMI_2 = 4 * 60 * 60 
 
 # Yenilgi Serisi Freni (Ardışık SL Koruması)
-YENILGI_SERISI_LIMIT = 2  
+YENILGI_SERISI_LIMIT = 3 # ✅ 2 -> 3 (Agresif modda seri kayıp olabilir, fren mesafesi artırıldı)
 YENILGI_SERISI_BEKLEME = 60 * 60 
 
 # Kâr Takipçisi (Trailing Stop) Ayarları
@@ -147,7 +147,7 @@ COOLDOWN_VARSAYILAN = 30 * 60
 MFI_ESIK_AL = 52
 MFI_ESIK_SAT = 48
 CMF_ESIK = 0.03
-HACIM_ESIK = 0.5
+HACIM_ESIK = 0.1 # ✅ DÜŞÜRÜLDÜ: 0.5 -> 0.1 (Hacim gelmese bile fiyat hareketi varsa gir)
 MFI_ASIRI_SATIM = 10
 MFI_ASIRI_ALIM = 90
 
@@ -242,7 +242,7 @@ def hizli_on_puan(symbol):
         ort20_hacim = df['v'].iloc[-20:].mean()
         hacim_oran = son3_hacim / ort20_hacim if ort20_hacim > 0 else 0
         
-        if hacim_oran < 0.3: return 0, {"sebep": f"Hacim çok zayıf"}
+        if hacim_oran < 0.1: return 0, {"sebep": f"Hacim çok zayıf"}
         
         puan = 0
         
@@ -361,10 +361,10 @@ def mtf_analiz(symbol):
             else: sonuclar[key] = "YATAY"
         yukari_say = sum(1 for v in sonuclar.values() if v == "YUKARI")
         asagi_say = sum(1 for v in sonuclar.values() if v == "ASAGI")
-        if yukari_say >= 4: uyum = "GUCLU_LONG"
-        elif asagi_say >= 4: uyum = "GUCLU_SHORT"
-        elif yukari_say >= 3: uyum = "ZAYIF_LONG"
-        elif asagi_say >= 3: uyum = "ZAYIF_SHORT"
+        if yukari_say >= 3: uyum = "GUCLU_LONG" # ✅ 4'ten 3'e düşürüldü
+        elif asagi_say >= 3: uyum = "GUCLU_SHORT" # ✅ 4'ten 3'e düşürüldü
+        elif yukari_say >= 2: uyum = "ZAYIF_LONG"  # ✅ 3'ten 2'ye düşürüldü
+        elif asagi_say >= 2: uyum = "ZAYIF_SHORT"  # ✅ 3'ten 2'ye düşürüldü
         else: uyum = "KARISIK"
         return {"uyum": uyum}
     except: return None
@@ -427,7 +427,7 @@ def btc_bias():
         if destek_mesafe_1h < BTC_1H_TOLERANS: return "LONG" 
 
         adx_15m = ta.trend.adx(df_15m['h'], df_15m['l'], df_15m['c'], window=14).iloc[-1]
-        if adx_15m < 20:
+        if adx_15m < 15: # ✅ DÜŞÜRÜLDÜ: 20 -> 15
             return "KARISIK" 
 
         if trend_5m == "LONG" and trend_15m == "LONG" and trend_1h == "LONG":
@@ -598,8 +598,9 @@ def coin_puan_hesapla(symbol):
         if mtf:
             if mtf['uyum'] == "GUCLU_LONG": long_puan += 3; long_sebep.append("MTF güçlü LONG")
             elif mtf['uyum'] == "GUCLU_SHORT": short_puan += 3; short_sebep.append("MTF güçlü SHORT")
-            else: 
-                return None, {"sebep": "MTF Yön Belirsiz"}, 0
+            elif mtf['uyum'] == "ZAYIF_LONG": long_puan += 1
+            elif mtf['uyum'] == "ZAYIF_SHORT": short_puan += 1
+            # ✅ KARISIK durumu artık işlem iptal etmiyor, sadece puan vermiyor.
         
         if likidite:
             if likidite['yon'] == "LONG": long_puan += 4; long_sebep.append("🎣 Likidite avı")
@@ -756,8 +757,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v38.0 - Dar TP/SL)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v38.0)\n\nTestere Modu: Dar TP/SL Aktif\nTrend Modu: Normal TP/SL")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v38.1 - Agresif Mod)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v38.1 - Agresif Mod)\n\nPiyasa çakılırken/fırlarken anında işlem arayacak.")
     except: pass
 
 
@@ -799,7 +800,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         gercek_marj = (miktar * anlik_fiyat * contract_size) / KALDIRAC
         if gercek_marj > hedef_marj * 1.5: return False
         
-        # ✅ TESTERE MODU İSE DAR, DEĞİLSE GENİŞ TP/SL KULLAN
         is_testere = detay.get("testere_modu", False)
         
         if yon == "LONG":
@@ -1028,7 +1028,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v38.0 - Dar TP/SL Aktif", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v38.1 - Agresif Mod", flush=True)
     
     try:
         exchange.load_markets()
@@ -1233,7 +1233,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v38.0 - Dar TP/SL)*\n\n"
+            f"📊 *TREND BOT (v38.1 - Agresif)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1244,7 +1244,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔥 Ardışık Kâr: `{ardisik}`\n"
             f"❄️ Ardışık Zarar: `{ardisikz}`\n"
             f"⭐ Anlık Baraj: `{anlik_baraj}`\n"
-            f"⚙️ Mod: `Testere Dar TP/SL Aktif`\n"
+            f"⚙️ Mod: `Testere & Agresif`\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
