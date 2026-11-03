@@ -98,14 +98,14 @@ KALDIRAC = 5
 POZISYON_MARJ = 0.20
 MAKS_POZISYON = 2
 
-# ✅ SABİT TP/SL AYARLARI (Dinamik hesaplama iptal edildi)
-SL_YUZDE = 2.5              
-TP_YUZDE = 1.5              
+# ✅ SABİT TP/SL AYARLARI (1:2 Risk/Ödül Oranı)
+SL_YUZDE = 1.5              
+TP_YUZDE = 3.0              
 ADX_ESIK_DEGERI = 15.0 
 
 # ✅ TESTERE MODU İÇİN SABİT DAR TP/SL AYARLARI
-TESTERE_SL_YUZDE = 2.0
-TESTERE_TP_YUZDE = 1.0
+TESTERE_SL_YUZDE = 1.5
+TESTERE_TP_YUZDE = 2.0
 
 # Dinamik Puan Barajı Ayarları
 MIN_PUAN = 6 
@@ -701,8 +701,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v39.1 - Sabit TP/SL)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v39.1)\n\nTP: Sabit %1.5 | SL: Sabit %2.5")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v39.2 - 1:2 Risk/Ödül)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v39.2)\n\nTrend: TP %3.0 / SL %1.5\nTestere: TP %2.0 / SL %1.5")
     except: pass
 
 # ==================== POZİSYON AÇMA ====================
@@ -745,7 +745,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         
         is_testere = detay.get("testere_modu", False)
         
-        # ✅ DİNAMİK DESTEK/DİRENÇ İPTAL EDİLDİ - SADECE SABİT YÜZDELER
+        # ✅ SABİT YÜZDELER KULLANILIYOR
         if yon == "LONG":
             if is_testere:
                 tp = anlik_fiyat * (1 + TESTERE_TP_YUZDE / 100)
@@ -941,7 +941,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v39.1 - Sabit TP/SL", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v39.2 - 1:2 Risk/Ödül", flush=True)
     
     try:
         exchange.load_markets()
@@ -1145,7 +1145,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anlik_baraj = get_dinamik_min_puan()
         
         mesaj = (
-            f"📊 *TREND BOT (v39.1 - Sabit TP/SL)*\n\n"
+            f"📊 *TREND BOT (v39.2 - 1:2 Risk/Ödül)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
@@ -1156,7 +1156,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔥 Ardışık Kâr: `{ardisik}`\n"
             f"❄️ Ardışık Zarar: `{ardisikz}`\n"
             f"⭐ Anlık Baraj: `{anlik_baraj}`\n"
-            f"⚙️ Mod: `Kontra (Sabit TP/SL)`\n"
+            f"⚙️ Mod: `Kontra (TP:3% SL:1.5%)`\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
