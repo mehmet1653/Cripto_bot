@@ -109,6 +109,7 @@ TESTERE_TP_YUZDE = 2.0
 
 # Dinamik Puan Barajı Ayarları
 MIN_PUAN = 11 
+TESTERE_MIN_PUAN = 8 # ✅ Testere için ayrı ve daha düşük baraj
 BARAJ_ARTIS_1 = 13          
 BARAJ_ARTIS_2 = 15          
 BARAJ_ARTIS_3 = 17          
@@ -204,9 +205,12 @@ AKTIF_SISTEMLER = kalici.get("aktif_sistemler", {})
 ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "ardisik_kazanc": 0, "ardisik_zarar": 0, "son_islem_zamani": 0, "egitim_verileri": []})
 COIN_COOLDOWNLAR = kalici.get("cooldownlar", {})
 
-def get_dinamik_min_puan():
+def get_dinamik_min_puan(testere=False):
     ardisik = ANALITIK.get("ardisik_kazanc", 0)
     son_islem = ANALITIK.get("son_islem_zamani", 0)
+    
+    if testere:
+        return TESTERE_MIN_PUAN
     
     if ardisik == 0:
         return MIN_PUAN 
@@ -453,7 +457,6 @@ def coin_puan_hesapla(symbol):
         ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=PIVOT_LOOKBACK)
         ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
         
-        # ✅ Veri yetersizse log basması için eklendi
         if len(ohlcv_1h) < 30 or len(ohlcv_15m) < 30: 
             return None, {"sebep": "Veri Yetersiz"}, 0
         
@@ -465,9 +468,7 @@ def coin_puan_hesapla(symbol):
         mum_yesil = son_kapanan_15m['c'] > son_kapanan_15m['o']
         mum_kirmizi = son_kapanan_15m['c'] < son_kapanan_15m['o']
 
-        # ✅ TESTERE KONTROLÜ (ÖNCE BAKILIR)
         testere = testere_piyasasi_mi(df_15m)
-        detay_testere = testere
 
         adx_1h = ta.trend.adx(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
         ema50_1h = ta.trend.ema_indicator(df_1h['c'], window=50).iloc[-1]
@@ -475,7 +476,6 @@ def coin_puan_hesapla(symbol):
         adx_pos = ta.trend.adx_pos(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
         adx_neg = ta.trend.adx_neg(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
         
-        # ✅ HATA BURADAYDI: Testere değilse VE ADX düşükse işlemi iptal et.
         if not testere and adx_1h < ADX_ESIK_DEGERI:
             return None, {"sebep": f"ADX Yatay ({adx_1h:.0f}) - Trend Yok"}, 0
             
@@ -568,26 +568,26 @@ def coin_puan_hesapla(symbol):
         if fiyat_ema9_fark > 2.0: long_puan -= 3
         if fiyat_ema9_fark < -2.0: short_puan -= 3
 
-        if adx_pos > adx_neg:
-            short_puan -= 5; short_sebep.append("ADX +DI Baskın")
-        elif adx_neg > adx_pos:
-            long_puan -= 5; long_sebep.append("ADX -DI Baskın")
+        # ✅ TESTERE MODUNDA CEZALARI ATLA
+        if not testere:
+            if adx_pos > adx_neg:
+                short_puan -= 5; short_sebep.append("ADX +DI Baskın")
+            elif adx_neg > adx_pos:
+                long_puan -= 5; long_sebep.append("ADX -DI Baskın")
 
-        fiyat_ema50_ustunde = anlik_fiyat > ema50_1h
-        
-        if fiyat_ema50_ustunde:
-            short_puan = 0 
-            short_sebep.append("(Fiyat EMA50 Üstü - Short İptal)")
-        else:
-            long_puan = 0 
-            long_sebep.append("(Fiyat EMA50 Altı - Long İptal)")
+            fiyat_ema50_ustunde = anlik_fiyat > ema50_1h
+            if fiyat_ema50_ustunde:
+                short_puan = 0 
+                short_sebep.append("(Fiyat EMA50 Üstü - Short İptal)")
+            else:
+                long_puan = 0 
+                long_sebep.append("(Fiyat EMA50 Altı - Long İptal)")
         
         detay["long_puan"] = long_puan
         detay["short_puan"] = short_puan
         
-        anlik_baraj = get_dinamik_min_puan()
+        anlik_baraj = get_dinamik_min_puan(testere)
         
-        # TESTERE MODU İŞLEM MANTIĞI
         if testere:
             if long_puan >= anlik_baraj and long_puan > short_puan:
                 detay["sinyal_skoru"] = long_puan
@@ -601,7 +601,6 @@ def coin_puan_hesapla(symbol):
                 return "LONG", detay, short_puan
             return None, {"sebep": "Testere Modu - Puan Yetersiz"}, 0
 
-        # TREND MODU İŞLEM MANTIĞI
         if btc_yon == "KARISIK": return None, {"sebep": "BTC Yönü Belirsiz"}, 0
         
         if long_puan >= anlik_baraj and long_puan > short_puan:
@@ -714,8 +713,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v39.6 - Mantık Düzeltmeli)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v39.6)\n\nTestere Modu Algılama Düzeltildi.\nPuan Barajı: 11\nADX: 25")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v39.7 - Testere Düzeltmeli)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v39.7)\n\nTestere Modu: Ayrı Baraj (8)\nTestere Cezaları: Kaldırıldı")
     except: pass
 
 # ==================== POZİSYON AÇMA ====================
@@ -953,7 +952,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v39.6 - Mantık Düzeltmeli", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v39.7 - Testere Düzeltmeli", flush=True)
     
     try:
         exchange.load_markets()
@@ -975,7 +974,6 @@ def ana_dongu():
         try:
             if not BOT_CALISIYOR_MU: time.sleep(5); continue
             
-            # KILL-SWITCH KONTROLÜ
             if KILL_SWITCH_AKTIF:
                 if time.time() > KILL_SWITCH_BITIS_ZAMANI:
                     KILL_SWITCH_AKTIF = False
@@ -1084,12 +1082,14 @@ def ana_dongu():
                 karar, detay, puan = coin_puan_hesapla(symbol)
                 sym_kisa = symbol.replace('/USDT:USDT', '')
                 
-                if karar is not None and puan >= anlik_baraj:
+                if karar is not None and puan >= detay.get('baraj', anlik_baraj):
                     adaylar.append((symbol, karar, detay, puan))
                     mode_str = "TESTERE (Ters)" if detay.get("testere_modu") else "TREND"
                     print(f"  ✅ {sym_kisa}: {karar} | Puan: {puan} | Mod: {mode_str}", flush=True)
                 else:
-                    print(f"  ⏭️  {sym_kisa}: Puan {puan}/{anlik_baraj} | {detay.get('sebep', '')[:60]}", flush=True)
+                    # ✅ Log hatası düzeltildi: sebep veya hata yazdır
+                    msg = detay.get('sebep') or detay.get('hata', '')
+                    print(f"  ⏭️  {sym_kisa}: Puan {puan}/{anlik_baraj} | {msg[:60]}", flush=True)
             
             if not adaylar:
                 print(f"  📭 Uygun aday yok", flush=True)
@@ -1176,7 +1176,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ks_durum = "🛑 AKTİF" if KILL_SWITCH_AKTIF else "🟢 KAPALI"
         
         mesaj = (
-            f"📊 *TREND BOT (v39.6 - Mantık Düzeltmeli)*\n\n"
+            f"📊 *TREND BOT (v39.7 - Testere Düzeltmeli)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
