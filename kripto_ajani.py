@@ -55,6 +55,7 @@ if not GATE_API_KEY or not GATE_SECRET: sys.exit(1)
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# ✅ TEK MOTOR: Analiz de, emir de buradan (Testnet)
 exchange = ccxt.gate({
     'apiKey': GATE_API_KEY,
     'secret': GATE_SECRET,
@@ -63,13 +64,6 @@ exchange = ccxt.gate({
     'options': {'defaultType': 'swap'}
 })
 exchange.set_sandbox_mode(True) # Canlıya geçerken burayı False yap!
-
-real_exchange = ccxt.gate({
-    'enableRateLimit': True,
-    'timeout': 30000,
-    'options': {'defaultType': 'swap'}
-})
-real_exchange.set_sandbox_mode(False) 
 
 # ==================== AYARLAR ====================
 DINAMIK_LISTE = []
@@ -108,11 +102,11 @@ TESTERE_SL_YUZDE = 1.5
 TESTERE_TP_YUZDE = 2.0
 
 # Dinamik Puan Barajı Ayarları
-MIN_PUAN = 11 
-TESTERE_MIN_PUAN = 8 # ✅ Testere için ayrı ve daha düşük baraj
-BARAJ_ARTIS_1 = 13          
-BARAJ_ARTIS_2 = 15          
-BARAJ_ARTIS_3 = 17          
+MIN_PUAN = 8  
+TESTERE_MIN_PUAN = 8 
+BARAJ_ARTIS_1 = 10          
+BARAJ_ARTIS_2 = 12          
+BARAJ_ARTIS_3 = 14          
 
 # Sıkışma Çözücü (Zaman Aşımı) Ayarları
 ZAMAN_ASIMI_1 = 2 * 60 * 60 
@@ -120,7 +114,7 @@ ZAMAN_ASIMI_2 = 4 * 60 * 60
 
 # Yenilgi Serisi Freni (Ardışık SL Koruması)
 YENILGI_SERISI_LIMIT = 2 
-YENILGI_SERISI_BEKLEME = 60 * 60 
+YENILGI_SERISI_BEKLEME = 15 * 60 
 
 # Kâr Takipçisi (Trailing Stop) Ayarları
 TRAILING_STOP_AKTIF = False     
@@ -155,7 +149,7 @@ TOP_N_ADAY = 3
 BTC_DONUS_KALKANI_AKTIF = False  
 
 GUNLUK_BASLANGIC_BAKIYE = None
-GUNLUK_ZARAR_LIMIT = 0.05
+GUNLUK_ZARAR_LIMIT = 0.05 
 
 # ✅ KILL-SWITCH DEĞİŞKENLERİ
 KILL_SWITCH_AKTIF = False
@@ -235,7 +229,7 @@ def get_dinamik_min_puan(testere=False):
 
 def hizli_on_puan(symbol):
     try:
-        ohlcv = real_exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
         if len(ohlcv) < 30: return 0, {}
         df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         
@@ -275,7 +269,7 @@ def dinamik_liste_guncelle(zorla=False):
     print(f"\n🔄 [DİNAMİK LİSTE] Güncelleniyor...", flush=True)
     SON_LISTE_GUNCELLEME = time.time()
     try:
-        tickers = real_exchange.fetch_tickers()
+        tickers = exchange.fetch_tickers()
         adaylar = []
         tum_semboller = [s for s in tickers.keys() if ':USDT' in s and s not in KARA_LISTE]
         for sym in tum_semboller:
@@ -568,7 +562,6 @@ def coin_puan_hesapla(symbol):
         if fiyat_ema9_fark > 2.0: long_puan -= 3
         if fiyat_ema9_fark < -2.0: short_puan -= 3
 
-        # ✅ TESTERE MODUNDA CEZALARI ATLA
         if not testere:
             if adx_pos > adx_neg:
                 short_puan -= 5; short_sebep.append("ADX +DI Baskın")
@@ -713,8 +706,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v39.7 - Testere Düzeltmeli)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v39.7)\n\nTestere Modu: Ayrı Baraj (8)\nTestere Cezaları: Kaldırıldı")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v39.9 - Tek Motor)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v39.9)\n\nTüm analiz ve emirler tek motordan (Testnet) yapılıyor.")
     except: pass
 
 # ==================== POZİSYON AÇMA ====================
@@ -722,6 +715,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
     global AKTIF_SISTEMLER
     try:
         try:
+            # ✅ Her şey tek motordan (Testnet)
             ob = exchange.fetch_order_book(symbol, limit=5)
             en_iyi_alis = ob['bids'][0][0]
             en_iyi_satis = ob['asks'][0][0]
@@ -838,6 +832,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
     for symbol, bilgi in kopya:
         if symbol not in aktif_borsa_map: continue
         try:
+            # ✅ Emirler testnette olduğu için SL/TP kontrolü de testnetten yapılmalı
             ticker = exchange.fetch_ticker(symbol)
             anlik = float(ticker['last'])
         except: continue
@@ -952,11 +947,10 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v39.7 - Testere Düzeltmeli", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v39.9 - Tek Motor", flush=True)
     
     try:
         exchange.load_markets()
-        real_exchange.load_markets()
         GUNLUK_BASLANGIC_BAKIYE = float(exchange.fetch_balance()['total'].get('USDT', 0))
     except: pass
     
@@ -986,7 +980,7 @@ def ana_dongu():
                     print(f"  🛑 KILL-SWITCH AKTİF. Yeni işlem aranmıyor. Kalan: {kalan_dk} dk.", flush=True)
             
             if ANALITIK.get("ardisik_zarar", 0) >= YENILGI_SERISI_LIMIT:
-                print(f"  🛑 YENİLGİ SERİSİ FRENİ: {ANALITIK.get('ardisik_zarar')} üst üste SL. 1 saat bekleniyor...", flush=True)
+                print(f"  🛑 YENİLGİ SERİSİ FRENİ: {ANALITIK.get('ardisik_zarar')} üst üste SL. 15 dk bekleniyor...", flush=True)
                 time.sleep(YENILGI_SERISI_BEKLEME)
                 with state_lock:
                     ANALITIK["ardisik_zarar"] = 0 
@@ -1087,7 +1081,6 @@ def ana_dongu():
                     mode_str = "TESTERE (Ters)" if detay.get("testere_modu") else "TREND"
                     print(f"  ✅ {sym_kisa}: {karar} | Puan: {puan} | Mod: {mode_str}", flush=True)
                 else:
-                    # ✅ Log hatası düzeltildi: sebep veya hata yazdır
                     msg = detay.get('sebep') or detay.get('hata', '')
                     print(f"  ⏭️  {sym_kisa}: Puan {puan}/{anlik_baraj} | {msg[:60]}", flush=True)
             
@@ -1176,7 +1169,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ks_durum = "🛑 AKTİF" if KILL_SWITCH_AKTIF else "🟢 KAPALI"
         
         mesaj = (
-            f"📊 *TREND BOT (v39.7 - Testere Düzeltmeli)*\n\n"
+            f"📊 *TREND BOT (v39.9 - Tek Motor)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
@@ -1188,7 +1181,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔥 Ardışık Kâr: `{ardisik}`\n"
             f"❄️ Ardışık Zarar: `{ardisikz}`\n"
             f"⭐ Anlık Baraj: `{anlik_baraj}`\n"
-            f"⚙️ Mod: `Dinamik (Trend + Ters)`\n"
+            f"⚙️ Mod: `Kontra (TP:3% SL:2%)`\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
