@@ -424,6 +424,56 @@ def mum_yapisi(df):
     if (o['c'] > o['o'] and s['c'] < s['o'] and s['c'] < o['o']): return "SHORT", "Engulfing"
     return None, ""
 
+# ✅ BTC BIAS FONKSİYONU GERİ EKLENDİ
+def btc_bias():
+    try:
+        ticker = exchange.fetch_ticker('BTC/USDT:USDT')
+        anlik_fiyat = float(ticker['last'])
+        
+        df_5m = pd.DataFrame(exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='5m', limit=50), columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        ema20_5m = ta.trend.ema_indicator(df_5m['c'], window=20).iloc[-1]
+        ema50_5m = ta.trend.ema_indicator(df_5m['c'], window=50).iloc[-1]
+        fiyat_5m = df_5m['c'].iloc[-1]
+        trend_5m = "LONG" if fiyat_5m > ema20_5m > ema50_5m else ("SHORT" if fiyat_5m < ema20_5m < ema50_5m else "YATAY")
+
+        df_15m = pd.DataFrame(exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=50), columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        ema20_15m = ta.trend.ema_indicator(df_15m['c'], window=20).iloc[-1]
+        ema50_15m = ta.trend.ema_indicator(df_15m['c'], window=50).iloc[-1]
+        fiyat_15m = df_15m['c'].iloc[-1]
+        rsi_15m = ta.momentum.rsi(df_15m['c'], window=14).iloc[-1]
+        trend_15m = "LONG" if fiyat_15m > ema20_15m > ema50_15m else ("SHORT" if fiyat_15m < ema20_15m < ema50_15m else "YATAY")
+
+        df_1h = pd.DataFrame(exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=50), columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        ema50_1h = ta.trend.ema_indicator(df_1h['c'], window=50).iloc[-1]
+        fiyat_1h = df_1h['c'].iloc[-1]
+        trend_1h = "LONG" if fiyat_1h > ema50_1h else "SHORT"
+
+        ph_15m, pl_15m = pivot_noktalari_bul(df_15m, lookback=5)
+        destekler_15m = [p[1] for p in pl_15m[-3:]] if pl_15m else []
+        en_yakin_destek_15m = min(destekler_15m, key=lambda x: abs(x - anlik_fiyat)) if destekler_15m else None
+        destek_mesafe_15m = ((anlik_fiyat - en_yakin_destek_15m) / anlik_fiyat * 100) if en_yakin_destek_15m else 999
+
+        ph_1h, pl_1h = pivot_noktalari_bul(df_1h, lookback=5)
+        destekler_1h = [p[1] for p in pl_1h[-3:]] if pl_1h else []
+        en_yakin_destek_1h = min(destekler_1h, key=lambda x: abs(x - anlik_fiyat)) if destekler_1h else None
+        destek_mesafe_1h = ((anlik_fiyat - en_yakin_destek_1h) / anlik_fiyat * 100) if en_yakin_destek_1h else 999
+
+        if destek_mesafe_15m < BTC_15M_TOLERANS: return "LONG" 
+        if destek_mesafe_1h < BTC_1H_TOLERANS: return "LONG" 
+
+        adx_15m = ta.trend.adx(df_15m['h'], df_15m['l'], df_15m['c'], window=14).iloc[-1]
+        if adx_15m < 20: 
+            return "KARISIK" 
+
+        if trend_5m == "LONG" and trend_15m == "LONG" and trend_1h == "LONG":
+            if rsi_15m > 70: return "KARISIK" 
+            return "LONG"
+        elif trend_5m == "SHORT" and trend_15m == "SHORT" and trend_1h == "SHORT":
+            if rsi_15m < 30: return "KARISIK" 
+            return "SHORT"
+        else: return "KARISIK"
+    except: return "KARISIK"
+
 def testere_piyasasi_mi(df_15m):
     try:
         if len(df_15m) < 30: return False
@@ -706,8 +756,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v39.9 - Tek Motor)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v39.9)\n\nTüm analiz ve emirler tek motordan (Testnet) yapılıyor.")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v40.0 - Btc Bias Düzeltmeli)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v40.0)\n\nBTC Bias fonksiyonu tekrar eklendi. Hata giderildi.")
     except: pass
 
 # ==================== POZİSYON AÇMA ====================
@@ -715,7 +765,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
     global AKTIF_SISTEMLER
     try:
         try:
-            # ✅ Her şey tek motordan (Testnet)
             ob = exchange.fetch_order_book(symbol, limit=5)
             en_iyi_alis = ob['bids'][0][0]
             en_iyi_satis = ob['asks'][0][0]
@@ -832,7 +881,6 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
     for symbol, bilgi in kopya:
         if symbol not in aktif_borsa_map: continue
         try:
-            # ✅ Emirler testnette olduğu için SL/TP kontrolü de testnetten yapılmalı
             ticker = exchange.fetch_ticker(symbol)
             anlik = float(ticker['last'])
         except: continue
@@ -947,7 +995,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v39.9 - Tek Motor", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v40.0 - Btc Bias Düzeltmeli", flush=True)
     
     try:
         exchange.load_markets()
@@ -1169,7 +1217,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ks_durum = "🛑 AKTİF" if KILL_SWITCH_AKTIF else "🟢 KAPALI"
         
         mesaj = (
-            f"📊 *TREND BOT (v39.9 - Tek Motor)*\n\n"
+            f"📊 *TREND BOT (v40.0 - Btc Bias Düzeltmeli)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
