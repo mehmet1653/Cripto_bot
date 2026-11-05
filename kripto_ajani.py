@@ -92,21 +92,21 @@ KALDIRAC = 5
 POZISYON_MARJ = 0.20
 MAKS_POZISYON = 2
 
-# ✅ KATI TP/SL AYARLARI (1:1.5 Risk/Ödül Oranı)
+# ✅ TP/SL AYARLARI (1:1.5 Risk/Ödül Oranı)
 SL_YUZDE = 2.0              
 TP_YUZDE = 3.0              
-ADX_ESIK_DEGERI = 25.0 
+ADX_ESIK_DEGERI = 22.0 # ✅ DÜŞÜRÜLDÜ: 25 -> 22
 
 # ✅ TESTERE MODU İÇİN SABİT DAR TP/SL AYARLARI
 TESTERE_SL_YUZDE = 1.5
 TESTERE_TP_YUZDE = 2.0
 
 # Dinamik Puan Barajı Ayarları
-MIN_PUAN = 8  
-TESTERE_MIN_PUAN = 8 
-BARAJ_ARTIS_1 = 10          
-BARAJ_ARTIS_2 = 12          
-BARAJ_ARTIS_3 = 14          
+MIN_PUAN = 7  # ✅ DÜŞÜRÜLDÜ: 8 -> 7 (Daha fazla sinyal)
+TESTERE_MIN_PUAN = 7 
+BARAJ_ARTIS_1 = 9          
+BARAJ_ARTIS_2 = 11          
+BARAJ_ARTIS_3 = 13          
 
 # Sıkışma Çözücü (Zaman Aşımı) Ayarları
 ZAMAN_ASIMI_1 = 2 * 60 * 60 
@@ -424,7 +424,7 @@ def mum_yapisi(df):
     if (o['c'] > o['o'] and s['c'] < s['o'] and s['c'] < o['o']): return "SHORT", "Engulfing"
     return None, ""
 
-# ✅ BTC BIAS FONKSİYONU GERİ EKLENDİ
+# ✅ BTC BIAS FONKSİYONU
 def btc_bias():
     try:
         ticker = exchange.fetch_ticker('BTC/USDT:USDT')
@@ -520,6 +520,7 @@ def coin_puan_hesapla(symbol):
         adx_pos = ta.trend.adx_pos(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
         adx_neg = ta.trend.adx_neg(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
         
+        # ✅ ADX BARAJI DÜŞÜRÜLDÜ (22)
         if not testere and adx_1h < ADX_ESIK_DEGERI:
             return None, {"sebep": f"ADX Yatay ({adx_1h:.0f}) - Trend Yok"}, 0
             
@@ -646,8 +647,9 @@ def coin_puan_hesapla(symbol):
 
         if btc_yon == "KARISIK": return None, {"sebep": "BTC Yönü Belirsiz"}, 0
         
+        # ✅ BTC BIAS HAFİFLETİLDİ: Eğer puan 9'dan büyükse BTC'ye rağmen gir
         if long_puan >= anlik_baraj and long_puan > short_puan:
-            if btc_yon == "SHORT": return None, {"sebep": "BTC Short - LONG İptal"}, 0
+            if btc_yon == "SHORT" and long_puan < 9: return None, {"sebep": "BTC Short - LONG İptal"}, 0
             
             if mum_yesil:
                 detay["sinyal_skoru"] = long_puan
@@ -658,7 +660,7 @@ def coin_puan_hesapla(symbol):
                 return None, {"sebep": "LONG - Mum Onayı Yok"}, 0
         
         if short_puan >= anlik_baraj and short_puan > long_puan:
-            if btc_yon == "LONG": return None, {"sebep": "BTC Long - SHORT İptal"}, 0
+            if btc_yon == "LONG" and short_puan < 9: return None, {"sebep": "BTC Long - SHORT İptal"}, 0
             
             if mum_kirmizi:
                 detay["sinyal_skoru"] = short_puan
@@ -756,8 +758,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v40.0 - Btc Bias Düzeltmeli)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v40.0)\n\nBTC Bias fonksiyonu tekrar eklendi. Hata giderildi.")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v40.1 - Denge Modu)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v40.1)\n\nPuan Barajı: 7\nADX: 22\nDenge Modu Aktif")
     except: pass
 
 # ==================== POZİSYON AÇMA ====================
@@ -995,7 +997,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v40.0 - Btc Bias Düzeltmeli", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v40.1 - Denge Modu", flush=True)
     
     try:
         exchange.load_markets()
@@ -1217,7 +1219,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ks_durum = "🛑 AKTİF" if KILL_SWITCH_AKTIF else "🟢 KAPALI"
         
         mesaj = (
-            f"📊 *TREND BOT (v40.0 - Btc Bias Düzeltmeli)*\n\n"
+            f"📊 *TREND BOT (v40.1 - Denge Modu)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
@@ -1229,7 +1231,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔥 Ardışık Kâr: `{ardisik}`\n"
             f"❄️ Ardışık Zarar: `{ardisikz}`\n"
             f"⭐ Anlık Baraj: `{anlik_baraj}`\n"
-            f"⚙️ Mod: `Kontra (TP:3% SL:2%)`\n"
+            f"⚙️ Mod: `Denge (TP:3% SL:2%)`\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
