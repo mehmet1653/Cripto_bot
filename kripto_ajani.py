@@ -98,33 +98,31 @@ KALDIRAC = 5
 POZISYON_MARJ = 0.20
 MAKS_POZISYON = 2
 
-# ✅ SABİT TP/SL AYARLARI (1:2 Risk/Ödül Oranı)
-SL_YUZDE = 1.5              
+# ✅ KATI TP/SL AYARLARI (1:1.5 Risk/Ödül Oranı)
+SL_YUZDE = 2.0              
 TP_YUZDE = 3.0              
-ADX_ESIK_DEGERI = 15.0 
+ADX_ESIK_DEGERI = 25.0 # ✅ 15 -> 25 (Sadece güçlü trendler)
 
 # ✅ TESTERE MODU İÇİN SABİT DAR TP/SL AYARLARI
 TESTERE_SL_YUZDE = 1.5
 TESTERE_TP_YUZDE = 2.0
 
 # Dinamik Puan Barajı Ayarları
-MIN_PUAN = 6 
-BARAJ_ARTIS_1 = 8          
-BARAJ_ARTIS_2 = 10          
-BARAJ_ARTIS_3 = 12          
+MIN_PUAN = 11 # ✅ 6 -> 11 (Sadece çok güçlü sinyaller)
+BARAJ_ARTIS_1 = 13          
+BARAJ_ARTIS_2 = 15          
+BARAJ_ARTIS_3 = 17          
 
 # Sıkışma Çözücü (Zaman Aşımı) Ayarları
 ZAMAN_ASIMI_1 = 2 * 60 * 60 
 ZAMAN_ASIMI_2 = 4 * 60 * 60 
 
 # Yenilgi Serisi Freni (Ardışık SL Koruması)
-YENILGI_SERISI_LIMIT = 3 
-YENILGI_SERISI_BEKLEME = 60 * 60 
+YENILGI_SERISI_LIMIT = 2 # ✅ 3 -> 2 (Daha çabuk fren)
+YENILGI_SERISI_BEKLEME = 60 * 60 # 1 saat (Süre kısaltılmadı)
 
 # Kâr Takipçisi (Trailing Stop) Ayarları
 TRAILING_STOP_AKTIF = False     
-TRAILING_BASLANGIC_ROE = 6.0   
-TRAILING_DUSUS_YUZDE = 2.5     
 
 TOPLAM_ZARAR_LIMIT = 2.0
 
@@ -156,7 +154,11 @@ TOP_N_ADAY = 3
 BTC_DONUS_KALKANI_AKTIF = False  
 
 GUNLUK_BASLANGIC_BAKIYE = None
-GUNLUK_ZARAR_LIMIT = 0.03
+GUNLUK_ZARAR_LIMIT = 0.05 # %5
+
+# ✅ KILL-SWITCH DEĞİŞKENLERİ
+KILL_SWITCH_AKTIF = False
+KILL_SWITCH_BITIS_ZAMANI = 0
 
 def hafizayi_yukle():
     print("💾 Hafıza yükleniyor...", flush=True)
@@ -424,7 +426,6 @@ def mum_yapisi(df):
     if (o['c'] > o['o'] and s['c'] < s['o'] and s['c'] < o['o']): return "SHORT", "Engulfing"
     return None, ""
 
-# ✅ TESTERE (YATAY) PİYASA TESPİTİ
 def testere_piyasasi_mi(df_15m):
     try:
         if len(df_15m) < 30: return False
@@ -499,6 +500,7 @@ def coin_puan_hesapla(symbol):
         ema9 = ta.trend.ema_indicator(df_1h['c'], window=9).iloc[-1]
         fiyat_ema9_fark = ((anlik_fiyat - ema9) / ema9) * 100
         
+        btc_yon = btc_bias()
         ob_analiz = orderbook_analiz(symbol)
         funding_sonuc = funding_analiz(symbol)
         vp_analiz = volume_profile_analiz(df_1h)
@@ -579,8 +581,6 @@ def coin_puan_hesapla(symbol):
         testere = testere_piyasasi_mi(df_15m)
         detay["testere_modu"] = testere
         
-        # ✅ BTC BİAS FİLTRESİ TAMAMEN KALDIRILDI
-        # Ters işlem mantığı
         if testere:
             if long_puan >= anlik_baraj and long_puan > short_puan:
                 detay["sinyal_skoru"] = long_puan
@@ -594,7 +594,6 @@ def coin_puan_hesapla(symbol):
                 return "LONG", detay, short_puan
             return None, {"sebep": "Testere Modu - Puan Yetersiz"}, 0
 
-        # Normal trend mantığı
         if long_puan >= anlik_baraj and long_puan > short_puan:
             if mum_yesil:
                 detay["sinyal_skoru"] = long_puan
@@ -701,8 +700,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v39.2 - 1:2 Risk/Ödül)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v39.2)\n\nTrend: TP %3.0 / SL %1.5\nTestere: TP %2.0 / SL %1.5")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v39.5 - Kalite Odaklı)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v39.5)\n\nPuan Barajı: 11\nADX: 25\nSadece Güçlü Trendler")
     except: pass
 
 # ==================== POZİSYON AÇMA ====================
@@ -745,7 +744,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         
         is_testere = detay.get("testere_modu", False)
         
-        # ✅ SABİT YÜZDELER KULLANILIYOR
         if yon == "LONG":
             if is_testere:
                 tp = anlik_fiyat * (1 + TESTERE_TP_YUZDE / 100)
@@ -940,8 +938,8 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
-    global GUNLUK_BASLANGIC_BAKIYE
-    print(f"🚀 [BAŞLANGIÇ] v39.2 - 1:2 Risk/Ödül", flush=True)
+    global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
+    print(f"🚀 [BAŞLANGIÇ] v39.5 - Kalite Odaklı (Az SL)", flush=True)
     
     try:
         exchange.load_markets()
@@ -963,6 +961,18 @@ def ana_dongu():
         try:
             if not BOT_CALISIYOR_MU: time.sleep(5); continue
             
+            # KILL-SWITCH KONTROLÜ
+            if KILL_SWITCH_AKTIF:
+                if time.time() > KILL_SWITCH_BITIS_ZAMANI:
+                    KILL_SWITCH_AKTIF = False
+                    b = exchange.fetch_balance()
+                    GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
+                    print(f"  ✅ KILL-SWITCH SÜRESİ DOLDU. Normale dönülüyor. Yeni Başlangıç Bakiyesi: {GUNLUK_BASLANGIC_BAKIYE:.2f}", flush=True)
+                    telegram_kritik("✅ Kill-Switch süresi doldu. Bot normale döndü, yeni işlem arayacak.")
+                else:
+                    kalan_dk = int((KILL_SWITCH_BITIS_ZAMANI - time.time()) / 60)
+                    print(f"  🛑 KILL-SWITCH AKTİF. Yeni işlem aranmıyor. Kalan: {kalan_dk} dk.", flush=True)
+            
             if ANALITIK.get("ardisik_zarar", 0) >= YENILGI_SERISI_LIMIT:
                 print(f"  🛑 YENİLGİ SERİSİ FRENİ: {ANALITIK.get('ardisik_zarar')} üst üste SL. 1 saat bekleniyor...", flush=True)
                 time.sleep(YENILGI_SERISI_BEKLEME)
@@ -981,11 +991,12 @@ def ana_dongu():
                 if GUNLUK_BASLANGIC_BAKIYE and GUNLUK_BASLANGIC_BAKIYE > 0:
                     gk = (su_an - GUNLUK_BASLANGIC_BAKIYE) / GUNLUK_BASLANGIC_BAKIYE
                     print(f"💰 Kasa: {su_an:.2f} | Günlük: %{gk*100:+.2f}", flush=True)
-                    if gk <= -GUNLUK_ZARAR_LIMIT:
-                        telegram_kritik(f"🛑 KILL-SWITCH")
-                        time.sleep(3600)
-                        GUNLUK_BASLANGIC_BAKIYE = su_an
-                        continue
+                    
+                    if gk <= -GUNLUK_ZARAR_LIMIT and not KILL_SWITCH_AKTIF:
+                        KILL_SWITCH_AKTIF = True
+                        KILL_SWITCH_BITIS_ZAMANI = time.time() + 3600
+                        print(f"  🛑 KILL-SWITCH TETİKLENDİ! Günlük zarar %{gk*100:.2f}. 1 saat yeni işlem yok.", flush=True)
+                        telegram_kritik(f"🛑 KILL-SWITCH TETİKLENDİ\n\nGünlük Zarar: %{gk*100:.2f}\nYeni işlem açılmayacak. Mevcut pozisyonlar izlenmeye devam edecek.")
             except: pass
             
             pozisyon_cekme_basarili = False
@@ -1034,6 +1045,11 @@ def ana_dongu():
             limit_dolu = len(aktif_semboller_seti) >= MAKS_POZISYON
             if limit_dolu:
                 print(f"  ⛔ Limit dolu ({len(aktif_semboller_seti)}/{MAKS_POZISYON}), yeni sinyal aranmıyor.", flush=True)
+                time.sleep(10)
+                continue
+
+            # Kill switch aktifse yeni sinyal arama
+            if KILL_SWITCH_AKTIF:
                 time.sleep(10)
                 continue
 
@@ -1144,11 +1160,14 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         anlik_baraj = get_dinamik_min_puan()
         
+        ks_durum = "🛑 AKTİF" if KILL_SWITCH_AKTIF else "🟢 KAPALI"
+        
         mesaj = (
-            f"📊 *TREND BOT (v39.2 - 1:2 Risk/Ödül)*\n\n"
+            f"📊 *TREND BOT (v39.5 - Kalite Odaklı)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
-            f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`"
+            f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
+            f"🛡️ Kill-Switch: `{ks_durum}`"
             f"{pos_detay}\n\n"
             f"📋 *Coin Havuzu:*\n{liste_str}\n\n"
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
@@ -1156,7 +1175,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔥 Ardışık Kâr: `{ardisik}`\n"
             f"❄️ Ardışık Zarar: `{ardisikz}`\n"
             f"⭐ Anlık Baraj: `{anlik_baraj}`\n"
-            f"⚙️ Mod: `Kontra (TP:3% SL:1.5%)`\n"
+            f"⚙️ Mod: `Kontra (TP:3% SL:2%)`\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
