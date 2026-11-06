@@ -55,7 +55,6 @@ if not GATE_API_KEY or not GATE_SECRET: sys.exit(1)
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ✅ TEK MOTOR: Analiz de, emir de buradan (Testnet)
 exchange = ccxt.gate({
     'apiKey': GATE_API_KEY,
     'secret': GATE_SECRET,
@@ -63,7 +62,7 @@ exchange = ccxt.gate({
     'timeout': 30000,
     'options': {'defaultType': 'swap'}
 })
-exchange.set_sandbox_mode(True) # Canlıya geçerken burayı False yap!
+exchange.set_sandbox_mode(True)
 
 # ==================== AYARLAR ====================
 DINAMIK_LISTE = []
@@ -87,41 +86,33 @@ MAKS_SPREAD_YUZDE = 0.50
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
 
-# Risk yönetimi 
 KALDIRAC = 5
 POZISYON_MARJ = 0.20
 MAKS_POZISYON = 2
 
-# ✅ TP/SL AYARLARI (1:1.5 Risk/Ödül Oranı)
-SL_YUZDE = 2.0              
+# ✅ 1:2 RİSK/ÖDÜL (SL %1.5, TP %3.0)
+SL_YUZDE = 1.5              
 TP_YUZDE = 3.0              
 ADX_ESIK_DEGERI = 22.0 
 
-# ✅ TESTERE MODU İÇİN SABİT DAR TP/SL AYARLARI
+# ✅ TESTERE MODU İÇİN 1:2 ORANI
 TESTERE_SL_YUZDE = 1.5
-TESTERE_TP_YUZDE = 2.0
+TESTERE_TP_YUZDE = 3.0
 
-# Dinamik Puan Barajı Ayarları
 MIN_PUAN = 7  
 TESTERE_MIN_PUAN = 7 
 BARAJ_ARTIS_1 = 9          
 BARAJ_ARTIS_2 = 11          
 BARAJ_ARTIS_3 = 13          
 
-# Sıkışma Çözücü (Zaman Aşımı) Ayarları
 ZAMAN_ASIMI_1 = 2 * 60 * 60 
 ZAMAN_ASIMI_2 = 4 * 60 * 60 
+ZAMAN_ASIMI_AKTIF = False # ✅ Kapatıldı
 
-# ✅ ZAMAN AŞIMI (İşlemde çok kalmasın)
-ZAMAN_ASIMI_AKTIF = True
-MAKS_ISLEM_SURESI_SAAT = 4
-
-# Yenilgi Serisi Freni (Ardışık SL Koruması)
 YENILGI_SERISI_LIMIT = 2 
 YENILGI_SERISI_BEKLEME = 15 * 60 
 
-# Kâr Takipçisi (Trailing Stop) Ayarları
-TRAILING_STOP_AKTIF = True     
+TRAILING_STOP_AKTIF = False # ✅ Kapatıldı
 TRAILING_BASLANGIC_ROE = 3.0 
 TRAILING_DUSUS_YUZDE = 1.5   
 
@@ -157,7 +148,6 @@ BTC_DONUS_KALKANI_AKTIF = False
 GUNLUK_BASLANGIC_BAKIYE = None
 GUNLUK_ZARAR_LIMIT = 0.05 
 
-# ✅ KILL-SWITCH DEĞİŞKENLERİ
 KILL_SWITCH_AKTIF = False
 KILL_SWITCH_BITIS_ZAMANI = 0
 
@@ -233,38 +223,30 @@ def get_dinamik_min_puan(testere=False):
             
     return MIN_PUAN
 
-# ✅ GÜNCELLENDİ: PUMP/DUMP VE MOMENTUM AV CISI (Havuz Seçimi)
 def hizli_on_puan(symbol, ticker):
     try:
-        # 15m grafiği çek (Hacim ve anlık hareket için)
         ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
         if len(ohlcv_15m) < 30: return 0, {}
         df = pd.DataFrame(ohlcv_15m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         
-        # 24 saatlik değişim
         change_24h = float(ticker.get('percentage', 0) or 0)
         
-        # Hacim Analizi
         son3_hacim = df['v'].iloc[-3:].mean()
         ort20_hacim = df['v'].iloc[-20:].mean()
         hacim_oran = son3_hacim / ort20_hacim if ort20_hacim > 0 else 0
         
-        # Anlık Fiyat Değişimi (Son 1 saat)
         fiyat_degisim_1h = ((df['c'].iloc[-1] - df['c'].iloc[-5]) / df['c'].iloc[-5]) * 100
         
         puan = 0
         
-        # 1. 24 Saatlik Sert Hareket (Pump/Dump)
         if abs(change_24h) > 15: puan += 20
         elif abs(change_24h) > 8: puan += 15
         elif abs(change_24h) > 4: puan += 10
         
-        # 2. Hacim Patlaması
         if hacim_oran > 3.0: puan += 15
         elif hacim_oran > 2.0: puan += 10
         elif hacim_oran > 1.5: puan += 5
         
-        # 3. Anlık Momentum
         if abs(fiyat_degisim_1h) > 3.0: puan += 10
         elif abs(fiyat_degisim_1h) > 1.5: puan += 5
         
@@ -287,7 +269,6 @@ def dinamik_liste_guncelle(zorla=False):
                 fiyat = float(t.get('last', 0) or 0)
                 if hacim < MIN_HACIM_24S or fiyat < MIN_FIYAT or fiyat > MAX_FIYAT: continue
                 
-                # Ticker verisini fonksiyona yolla
                 hizli_puan, _ = hizli_on_puan(sym, t)
                 if hizli_puan > 0: adaylar.append({"symbol": sym, "hizli_puan": hizli_puan})
                 
@@ -429,7 +410,6 @@ def mum_yapisi(df):
     if (o['c'] > o['o'] and s['c'] < s['o'] and s['c'] < o['o']): return "SHORT", "Engulfing"
     return None, ""
 
-# ✅ BTC BIAS FONKSİYONU
 def btc_bias():
     try:
         ticker = exchange.fetch_ticker('BTC/USDT:USDT')
@@ -467,8 +447,7 @@ def btc_bias():
         if destek_mesafe_1h < BTC_1H_TOLERANS: return "LONG" 
 
         adx_15m = ta.trend.adx(df_15m['h'], df_15m['l'], df_15m['c'], window=14).iloc[-1]
-        if adx_15m < 20: 
-            return "KARISIK" 
+        if adx_15m < 20: return "KARISIK" 
 
         if trend_5m == "LONG" and trend_15m == "LONG" and trend_1h == "LONG":
             if rsi_15m > 70: return "KARISIK" 
@@ -482,25 +461,19 @@ def btc_bias():
 def testere_piyasasi_mi(df_15m):
     try:
         if len(df_15m) < 30: return False
-        
         adx_15m = ta.trend.adx(df_15m['h'], df_15m['l'], df_15m['c'], window=14).iloc[-1]
         ema9 = ta.trend.ema_indicator(df_15m['c'], window=9).iloc[-1]
         ema21 = ta.trend.ema_indicator(df_15m['c'], window=21).iloc[-1]
         ema_fark = abs(ema9 - ema21) / ema21 * 100
-        
         bb_h = ta.volatility.bollinger_hband(df_15m['c']).iloc[-1]
         bb_l = ta.volatility.bollinger_lband(df_15m['c']).iloc[-1]
         bb_m = ta.volatility.bollinger_mband(df_15m['c']).iloc[-1]
         bbw = (bb_h - bb_l) / bb_m if bb_m > 0 else 1
-        
         if adx_15m < 22.0: return True
         if ema_fark < 0.2 and bbw < 0.05: return True
-            
         return False
-    except:
-        return False
+    except: return False
 
-# ==================== COİN PUAN HESAPLA ====================
 def coin_puan_hesapla(symbol):
     try:
         ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=PIVOT_LOOKBACK)
@@ -691,7 +664,6 @@ def coin_puan_hesapla(symbol):
     except Exception as e:
         return None, {"hata": str(e)}, 0
 
-# ==================== TELEGRAM ====================
 def telegram_direkt_gonder(mesaj, deneme=3):
     if not TELEGRAM_TOKEN or not CHAT_ID: return False
     for i in range(deneme):
@@ -774,11 +746,10 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v40.3 - Pump Avcısı)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v40.3)\n\nPump/Dump Avcısı Aktif\nHavuz: 24s Değişim + 15m Hacim Patlaması")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v40.7 - 1:2 RR, Sade TP/SL)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v40.7)\n\nTrailing Stop: Kapalı\nZaman Aşımı: Kapalı\nTP: %{TP_YUZDE} | SL: %{SL_YUZDE}")
     except: pass
 
-# ==================== POZİSYON AÇMA ====================
 def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", detay={}):
     global AKTIF_SISTEMLER
     try:
@@ -891,7 +862,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         print(f"  ⚠️ Pozisyon {symbol}: {e}", flush=True)
         return False
 
-# ==================== SL/TP KONTROLÜ ====================
 def manuel_sl_tp_kontrol(aktif_borsa_map):
     global AKTIF_SISTEMLER
     with state_lock: kopya = list(AKTIF_SISTEMLER.items())
@@ -921,29 +891,6 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
             if yon == "LONG": kar = (anlik - giris) * miktar * contract_size
             else: kar = (giris - anlik) * miktar * contract_size
         
-        if TRAILING_STOP_AKTIF:
-            if yon == "LONG": anlik_roe = ((anlik - giris) / giris) * 100 * KALDIRAC
-            else: anlik_roe = ((giris - anlik) / giris) * 100 * KALDIRAC
-            
-            if anlik_roe > bilgi.get("en_yuksek_roe", 0.0):
-                with state_lock:
-                    AKTIF_SISTEMLER[symbol]["en_yuksek_roe"] = anlik_roe
-            
-            zirve_roe = bilgi.get("en_yuksek_roe", 0.0)
-            
-            if zirve_roe >= TRAILING_BASLANGIC_ROE:
-                dusus = zirve_roe - anlik_roe
-                if dusus >= TRAILING_DUSUS_YUZDE:
-                    print(f"  🛡️ [TRAILING STOP] {symbol} | Zirve ROE: %{zirve_roe:.2f} -> Düşüş: %{anlik_roe:.2f}", flush=True)
-                    tum_emirleri_iptal(symbol)
-                    if market_kapat(symbol, miktar, yon):
-                        with state_lock:
-                            if symbol in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[symbol]
-                            COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_TP), "son_yon": yon}
-                        sayaci_artir(True)
-                        telegram_kritik(f"💰 TRAILING STOP (Kâr Korundu)\n📌 {symbol} {yon}\n📈 Zirve ROE: %{zirve_roe:.2f}\n💵 PnL: +{kar:.4f} USDT")
-                    continue
-
         sl_tetiklendi = (yon == "LONG" and anlik <= sl) or (yon == "SHORT" and anlik >= sl)
         if sl_tetiklendi:
             tum_emirleri_iptal(symbol)
@@ -971,7 +918,6 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
                     print(f"  💰 [TP TETİKLENDİ] {symbol} | PnL: {kar:.4f}", flush=True)
             continue
 
-# ==================== KAPANAN POZİSYONLAR ====================
 def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
     global AKTIF_SISTEMLER
     try:
@@ -1010,10 +956,9 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
                     telegram_kritik(f"❌ SL (Borsa)\n📌 {eski} {y}\n💵 {pnl:.4f} USDT")
     except Exception as e: print(f"⚠️ Kapanış kontrol hatası: {e}", flush=True)
 
-# ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v40.3 - Pump Avcısı", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v40.7 - 1:2 RR (Sade TP/SL)", flush=True)
     
     try:
         exchange.load_markets()
@@ -1039,17 +984,16 @@ def ana_dongu():
                     KILL_SWITCH_AKTIF = False
                     b = exchange.fetch_balance()
                     GUNLUK_BASLANGIC_BAKIYE = float(b['total'].get('USDT', 0))
-                    print(f"  ✅ KILL-SWITCH SÜRESİ DOLDU. Normale dönülüyor. Yeni Başlangıç Bakiyesi: {GUNLUK_BASLANGIC_BAKIYE:.2f}", flush=True)
-                    telegram_kritik("✅ Kill-Switch süresi doldu. Bot normale döndü, yeni işlem arayacak.")
+                    print(f"  ✅ KILL-SWITCH SÜRESİ DOLDU.", flush=True)
+                    telegram_kritik("✅ Kill-Switch süresi doldu.")
                 else:
                     kalan_dk = int((KILL_SWITCH_BITIS_ZAMANI - time.time()) / 60)
-                    print(f"  🛑 KILL-SWITCH AKTİF. Yeni işlem aranmıyor. Kalan: {kalan_dk} dk.", flush=True)
+                    print(f"  🛑 KILL-SWITCH AKTİF. Kalan: {kalan_dk} dk.", flush=True)
             
             if ANALITIK.get("ardisik_zarar", 0) >= YENILGI_SERISI_LIMIT:
-                print(f"  🛑 YENİLGİ SERİSİ FRENİ: {ANALITIK.get('ardisik_zarar')} üst üste SL. 15 dk bekleniyor...", flush=True)
+                print(f"  🛑 YENİLGİ SERİSİ FRENİ: 15 dk bekleniyor...", flush=True)
                 time.sleep(YENILGI_SERISI_BEKLEME)
-                with state_lock:
-                    ANALITIK["ardisik_zarar"] = 0 
+                with state_lock: ANALITIK["ardisik_zarar"] = 0 
                 hafizayi_kaydet()
                 continue
             
@@ -1063,12 +1007,10 @@ def ana_dongu():
                 if GUNLUK_BASLANGIC_BAKIYE and GUNLUK_BASLANGIC_BAKIYE > 0:
                     gk = (su_an - GUNLUK_BASLANGIC_BAKIYE) / GUNLUK_BASLANGIC_BAKIYE
                     print(f"💰 Kasa: {su_an:.2f} | Günlük: %{gk*100:+.2f}", flush=True)
-                    
                     if gk <= -GUNLUK_ZARAR_LIMIT and not KILL_SWITCH_AKTIF:
                         KILL_SWITCH_AKTIF = True
                         KILL_SWITCH_BITIS_ZAMANI = time.time() + 3600
-                        print(f"  🛑 KILL-SWITCH TETİKLENDİ! Günlük zarar %{gk*100:.2f}. 1 saat yeni işlem yok.", flush=True)
-                        telegram_kritik(f"🛑 KILL-SWITCH TETİKLENDİ\n\nGünlük Zarar: %{gk*100:.2f}\nYeni işlem açılmayacak. Mevcut pozisyonlar izlenmeye devam edecek.")
+                        telegram_kritik(f"🛑 KILL-SWITCH TETİKLENDİ")
             except: pass
             
             pozisyon_cekme_basarili = False
@@ -1095,10 +1037,8 @@ def ana_dongu():
                             lev = int(p_info.get('leverage', 1))
                             tick = exchange.fetch_ticker(sym)
                             anlik = float(tick['last'])
-                            
                             if yon == "LONG": roe = ((anlik - giris) / giris) * 100 * lev
                             else: roe = ((giris - anlik) / giris) * 100 * lev
-                            
                             durum = "🟢" if pnl >= 0 else "🔴"
                             print(f"     {durum} {sym.replace('/USDT:USDT', '')} | {yon} ({lev}x) | Giriş: {giris:.4f} | Anlık: {anlik:.4f} | PnL: {pnl:+.4f} | ROE: %{roe:+.2f}", flush=True)
                         except: pass
@@ -1116,7 +1056,7 @@ def ana_dongu():
             
             limit_dolu = len(aktif_semboller_seti) >= MAKS_POZISYON
             if limit_dolu:
-                print(f"  ⛔ Limit dolu ({len(aktif_semboller_seti)}/{MAKS_POZISYON}), yeni sinyal aranmıyor.", flush=True)
+                print(f"  ⛔ Limit dolu ({len(aktif_semboller_seti)}/{MAKS_POZISYON})", flush=True)
                 time.sleep(10)
                 continue
 
@@ -1127,7 +1067,7 @@ def ana_dongu():
             print(f"\n🔍 1. AŞAMA: TÜM COİNLERİ TARA VE PUANLA", flush=True)
             adaylar = []
             anlik_baraj = get_dinamik_min_puan()
-            print(f"  ⚖️  Anlık Puan Barajı: {anlik_baraj} (Ardışık Kazanç: {ANALITIK.get('ardisik_kazanc', 0)})", flush=True)
+            print(f"  ⚖️  Anlık Puan Barajı: {anlik_baraj}", flush=True)
             
             for symbol in DINAMIK_LISTE:
                 if not BOT_CALISIYOR_MU: break
@@ -1168,10 +1108,8 @@ def ana_dongu():
                 for sym, karar, detay, puan in en_iyiler:
                     if len(aktif_semboller_seti) >= MAKS_POZISYON: break
                     if sym in aktif_semboller_seti: continue
-                    
                     ticker = exchange.fetch_ticker(sym)
                     anlik_fiyat = float(ticker['last'])
-                    
                     if pozisyon_ac(sym, karar, anlik_fiyat, detay.get('sebep', ''), puan, detay.get('aciklama', ''), detay):
                         aktif_semboller_seti.add(sym)
             else:
@@ -1184,7 +1122,6 @@ def ana_dongu():
         
         time.sleep(10)
 
-# ==================== TELEGRAM KOMUTLARI ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     try:
@@ -1235,7 +1172,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ks_durum = "🛑 AKTİF" if KILL_SWITCH_AKTIF else "🟢 KAPALI"
         
         mesaj = (
-            f"📊 *TREND BOT (v40.3 - Pump Avcısı)*\n\n"
+            f"📊 *TREND BOT (v40.7 - 1:2 RR)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
@@ -1247,7 +1184,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔥 Ardışık Kâr: `{ardisik}`\n"
             f"❄️ Ardışık Zarar: `{ardisikz}`\n"
             f"⭐ Anlık Baraj: `{anlik_baraj}`\n"
-            f"⚙️ Mod: `Pump Avcısı`\n"
+            f"⚙️ Mod: `Sade TP/SL (1:2)`\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
@@ -1265,8 +1202,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AKTIF_SISTEMLER
     
     hedef_coin = context.args[0].upper() if context.args else None
-    
-    mesaj_bekle = await update.message.reply_text("⏳ Pozisyonlar kapatılıyor, işlemler iptal ediliyor. Lütfen bekleyin...")
+    mesaj_bekle = await update.message.reply_text("⏳ Pozisyonlar kapatılıyor...")
     
     try:
         positions = await asyncio.to_thread(exchange.fetch_positions)
@@ -1306,17 +1242,14 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         hafizayi_kaydet()
         
         rapor = ""
-        if kapatilan:
-            rapor += "✅ *Başarıyla Kapatılanlar:*\n" + "\n".join([f"• `{s}`" for s in kapatilan]) + "\n\n"
-        if bulunamadi:
-            rapor += "⚠️ *Kapatılamayanlar (Hata):*\n" + "\n".join([f"• `{s}`" for s in bulunamadi])
+        if kapatilan: rapor += "✅ *Kapatılanlar:*\n" + "\n".join([f"• `{s}`" for s in kapatilan]) + "\n\n"
+        if bulunamadi: rapor += "⚠️ *Kapatılamayanlar:*\n" + "\n".join([f"• `{s}`" for s in bulunamadi])
             
         await mesaj_bekle.edit_text(rapor, parse_mode='Markdown')
         
     except Exception as e:
         await mesaj_bekle.edit_text(f"❌ Kapatma Hatası: {e}")
 
-# ==================== MAIN ====================
 async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
@@ -1324,7 +1257,7 @@ async def main():
     kuyruk_thread = threading.Thread(target=kuyruk_worker, daemon=True)
     kuyruk_thread.start()
     
-    print("⏳ Telegram bağlantısı için 5 saniye bekleniyor (Çakışma önlemi)...", flush=True)
+    print("⏳ Telegram bağlantısı için 5 saniye bekleniyor...", flush=True)
     await asyncio.sleep(5) 
     
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
