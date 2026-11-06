@@ -95,14 +95,14 @@ MAKS_POZISYON = 2
 # ✅ TP/SL AYARLARI (1:1.5 Risk/Ödül Oranı)
 SL_YUZDE = 2.0              
 TP_YUZDE = 3.0              
-ADX_ESIK_DEGERI = 22.0 # ✅ DÜŞÜRÜLDÜ: 25 -> 22
+ADX_ESIK_DEGERI = 22.0 
 
 # ✅ TESTERE MODU İÇİN SABİT DAR TP/SL AYARLARI
 TESTERE_SL_YUZDE = 1.5
 TESTERE_TP_YUZDE = 2.0
 
 # Dinamik Puan Barajı Ayarları
-MIN_PUAN = 7  # ✅ DÜŞÜRÜLDÜ: 8 -> 7 (Daha fazla sinyal)
+MIN_PUAN = 7  
 TESTERE_MIN_PUAN = 7 
 BARAJ_ARTIS_1 = 9          
 BARAJ_ARTIS_2 = 11          
@@ -520,7 +520,6 @@ def coin_puan_hesapla(symbol):
         adx_pos = ta.trend.adx_pos(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
         adx_neg = ta.trend.adx_neg(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
         
-        # ✅ ADX BARAJI DÜŞÜRÜLDÜ (22)
         if not testere and adx_1h < ADX_ESIK_DEGERI:
             return None, {"sebep": f"ADX Yatay ({adx_1h:.0f}) - Trend Yok"}, 0
             
@@ -553,6 +552,11 @@ def coin_puan_hesapla(symbol):
         
         ema9 = ta.trend.ema_indicator(df_1h['c'], window=9).iloc[-1]
         fiyat_ema9_fark = ((anlik_fiyat - ema9) / ema9) * 100
+        
+        # ✅ YENİ: RSI VE MACD DİP DÖNÜŞ KONTROLÜ
+        rsi_15m = ta.momentum.rsi(df_15m['c'], window=14).iloc[-1]
+        macd_hist = ta.trend.macd_diff(df_15m['c']).iloc[-1]
+        macd_hist_prev = ta.trend.macd_diff(df_15m['c']).iloc[-2]
         
         btc_yon = btc_bias()
         ob_analiz = orderbook_analiz(symbol)
@@ -627,6 +631,18 @@ def coin_puan_hesapla(symbol):
                 long_puan = 0 
                 long_sebep.append("(Fiyat EMA50 Altı - Long İptal)")
         
+        # ✅ DİP DÖNÜŞ KORUMASI (ONDО Hatasını Çözen Kısım)
+        if not testere:
+            # RSI 30'un altındaysa (Aşırı Satım) SHORT açma!
+            if rsi_15m < 30:
+                short_puan = 0
+                short_sebep.append("(RSI Aşırı Satım - Short İptal)")
+            
+            # MACD histogram negatiften pozitife dönüyorsa (Dip Dönüş) SHORT açma!
+            if macd_hist > macd_hist_prev and macd_hist < 0:
+                short_puan = 0
+                short_sebep.append("(MACD Dip Dönüşü - Short İptal)")
+
         detay["long_puan"] = long_puan
         detay["short_puan"] = short_puan
         
@@ -647,7 +663,6 @@ def coin_puan_hesapla(symbol):
 
         if btc_yon == "KARISIK": return None, {"sebep": "BTC Yönü Belirsiz"}, 0
         
-        # ✅ BTC BIAS HAFİFLETİLDİ: Eğer puan 9'dan büyükse BTC'ye rağmen gir
         if long_puan >= anlik_baraj and long_puan > short_puan:
             if btc_yon == "SHORT" and long_puan < 9: return None, {"sebep": "BTC Short - LONG İptal"}, 0
             
@@ -758,8 +773,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v40.1 - Denge Modu)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v40.1)\n\nPuan Barajı: 7\nADX: 22\nDenge Modu Aktif")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v40.2 - Dip Dönüş Korumalı)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v40.2)\n\nRSI Aşırı Satım Koruması\nMACD Dip Dönüş Koruması\nAktif Edildi.")
     except: pass
 
 # ==================== POZİSYON AÇMA ====================
@@ -997,7 +1012,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v40.1 - Denge Modu", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v40.2 - Dip Dönüş Korumalı", flush=True)
     
     try:
         exchange.load_markets()
@@ -1219,7 +1234,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ks_durum = "🛑 AKTİF" if KILL_SWITCH_AKTIF else "🟢 KAPALI"
         
         mesaj = (
-            f"📊 *TREND BOT (v40.1 - Denge Modu)*\n\n"
+            f"📊 *TREND BOT (v40.2 - Dip Dönüş Korumalı)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
@@ -1231,7 +1246,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔥 Ardışık Kâr: `{ardisik}`\n"
             f"❄️ Ardışık Zarar: `{ardisikz}`\n"
             f"⭐ Anlık Baraj: `{anlik_baraj}`\n"
-            f"⚙️ Mod: `Denge (TP:3% SL:2%)`\n"
+            f"⚙️ Mod: `RSI/MACD Korumalı`\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
