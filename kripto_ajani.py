@@ -92,13 +92,13 @@ POZISYON_MARJ = 0.20
 MAKS_POZISYON = 2
 
 # ✅ 1:2 RİSK/ÖDÜL (SL %2.0, TP %4.0) - Daha geniş SL, fitillere karşı koruma
-SL_YUZDE = 2.0              
-TP_YUZDE = 4.0              
+SL_YUZDE = 1.5              
+TP_YUZDE = 3.0              
 ADX_ESIK_DEGERI = 22.0 
 
 # ✅ Testere modu KAPATILDI
-TESTERE_SL_YUZDE = 2.0
-TESTERE_TP_YUZDE = 4.0
+TESTERE_SL_YUZDE = 1.0
+TESTERE_TP_YUZDE = 2.0
 TESTERE_AKTIF = False # ✅ Ters işlem yapmayacak
 
 # Dinamik Puan Barajı Ayarları
