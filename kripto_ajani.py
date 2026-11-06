@@ -62,7 +62,7 @@ exchange = ccxt.gate({
     'timeout': 30000,
     'options': {'defaultType': 'swap'}
 })
-exchange.set_sandbox_mode(True)
+exchange.set_sandbox_mode(True) # Canlıya geçerken burayı False yap!
 
 # ==================== AYARLAR ====================
 DINAMIK_LISTE = []
@@ -86,33 +86,39 @@ MAKS_SPREAD_YUZDE = 0.50
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
 
+# Risk yönetimi 
 KALDIRAC = 5
 POZISYON_MARJ = 0.20
 MAKS_POZISYON = 2
 
-# ✅ 1:2 RİSK/ÖDÜL (SL %1.5, TP %3.0)
-SL_YUZDE = 1.5              
-TP_YUZDE = 3.0              
+# ✅ 1:2 RİSK/ÖDÜL (SL %2.0, TP %4.0) - Daha geniş SL, fitillere karşı koruma
+SL_YUZDE = 2.0              
+TP_YUZDE = 4.0              
 ADX_ESIK_DEGERI = 22.0 
 
-# ✅ TESTERE MODU İÇİN 1:2 ORANI
-TESTERE_SL_YUZDE = 1.5
-TESTERE_TP_YUZDE = 3.0
+# ✅ Testere modu KAPATILDI
+TESTERE_SL_YUZDE = 2.0
+TESTERE_TP_YUZDE = 4.0
+TESTERE_AKTIF = False # ✅ Ters işlem yapmayacak
 
-MIN_PUAN = 7  
-TESTERE_MIN_PUAN = 7 
-BARAJ_ARTIS_1 = 9          
-BARAJ_ARTIS_2 = 11          
-BARAJ_ARTIS_3 = 13          
+# Dinamik Puan Barajı Ayarları
+MIN_PUAN = 9 # ✅ Yükseltildi (sadece güçlü sinyaller)
+TESTERE_MIN_PUAN = 9 
+BARAJ_ARTIS_1 = 11          
+BARAJ_ARTIS_2 = 13          
+BARAJ_ARTIS_3 = 15          
 
+# Zaman Aşımı İptal Edildi
 ZAMAN_ASIMI_1 = 2 * 60 * 60 
 ZAMAN_ASIMI_2 = 4 * 60 * 60 
-ZAMAN_ASIMI_AKTIF = False # ✅ Kapatıldı
+ZAMAN_ASIMI_AKTIF = False
 
+# Yenilgi Serisi Freni
 YENILGI_SERISI_LIMIT = 2 
 YENILGI_SERISI_BEKLEME = 15 * 60 
 
-TRAILING_STOP_AKTIF = False # ✅ Kapatıldı
+# Trailing Stop İptal Edildi
+TRAILING_STOP_AKTIF = False
 TRAILING_BASLANGIC_ROE = 3.0 
 TRAILING_DUSUS_YUZDE = 1.5   
 
@@ -148,6 +154,7 @@ BTC_DONUS_KALKANI_AKTIF = False
 GUNLUK_BASLANGIC_BAKIYE = None
 GUNLUK_ZARAR_LIMIT = 0.05 
 
+# KILL-SWITCH DEĞİŞKENLERİ
 KILL_SWITCH_AKTIF = False
 KILL_SWITCH_BITIS_ZAMANI = 0
 
@@ -223,6 +230,7 @@ def get_dinamik_min_puan(testere=False):
             
     return MIN_PUAN
 
+# ✅ PUMP/DUMP VE MOMENTUM AV CISI (Havuz Seçimi)
 def hizli_on_puan(symbol, ticker):
     try:
         ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
@@ -459,20 +467,8 @@ def btc_bias():
     except: return "KARISIK"
 
 def testere_piyasasi_mi(df_15m):
-    try:
-        if len(df_15m) < 30: return False
-        adx_15m = ta.trend.adx(df_15m['h'], df_15m['l'], df_15m['c'], window=14).iloc[-1]
-        ema9 = ta.trend.ema_indicator(df_15m['c'], window=9).iloc[-1]
-        ema21 = ta.trend.ema_indicator(df_15m['c'], window=21).iloc[-1]
-        ema_fark = abs(ema9 - ema21) / ema21 * 100
-        bb_h = ta.volatility.bollinger_hband(df_15m['c']).iloc[-1]
-        bb_l = ta.volatility.bollinger_lband(df_15m['c']).iloc[-1]
-        bb_m = ta.volatility.bollinger_mband(df_15m['c']).iloc[-1]
-        bbw = (bb_h - bb_l) / bb_m if bb_m > 0 else 1
-        if adx_15m < 22.0: return True
-        if ema_fark < 0.2 and bbw < 0.05: return True
-        return False
-    except: return False
+    # ✅ TESTERE MODU KAPATILDI (Pump/Dump yapan coinlerde ters işlem intihardır)
+    return False
 
 def coin_puan_hesapla(symbol):
     try:
@@ -609,7 +605,8 @@ def coin_puan_hesapla(symbol):
                 long_sebep.append("(Fiyat EMA50 Altı - Long İptal)")
         
         if not testere:
-            if rsi_15m < 30:
+            # ✅ Dip Dönüş Koruması Sıkılaştırıldı (RSI 40'ın altındaysa SHORT açma)
+            if rsi_15m < 40:
                 short_puan = 0
                 short_sebep.append("(RSI Aşırı Satım - Short İptal)")
             
@@ -746,8 +743,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v40.7 - 1:2 RR, Sade TP/SL)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v40.7)\n\nTrailing Stop: Kapalı\nZaman Aşımı: Kapalı\nTP: %{TP_YUZDE} | SL: %{SL_YUZDE}")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v40.8 - Trend, Geniş SL)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v40.8)\n\nTestere Modu: Kapalı\nTP: %{TP_YUZDE} | SL: %{SL_YUZDE}")
     except: pass
 
 def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", detay={}):
@@ -958,7 +955,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v40.7 - 1:2 RR (Sade TP/SL)", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v40.8 - Trend, Geniş SL", flush=True)
     
     try:
         exchange.load_markets()
@@ -1172,7 +1169,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ks_durum = "🛑 AKTİF" if KILL_SWITCH_AKTIF else "🟢 KAPALI"
         
         mesaj = (
-            f"📊 *TREND BOT (v40.7 - 1:2 RR)*\n\n"
+            f"📊 *TREND BOT (v40.8 - Trend, Geniş SL)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
@@ -1184,7 +1181,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔥 Ardışık Kâr: `{ardisik}`\n"
             f"❄️ Ardışık Zarar: `{ardisikz}`\n"
             f"⭐ Anlık Baraj: `{anlik_baraj}`\n"
-            f"⚙️ Mod: `Sade TP/SL (1:2)`\n"
+            f"⚙️ Mod: `Sadece Trend (1:2)`\n"
             f"💵 Marj: `%{POZISYON_MARJ*100:.0f}` | Kaldıraç: `{KALDIRAC}x`"
         )
         await update.message.reply_text(mesaj, parse_mode='Markdown')
