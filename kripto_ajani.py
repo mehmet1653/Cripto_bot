@@ -111,7 +111,7 @@ BARAJ_ARTIS_1 = 11
 BARAJ_ARTIS_2 = 13          
 BARAJ_ARTIS_3 = 15          
 
-# ✅ DÜZELTİLDİ: Eksik Zaman Aşımı Değişkenleri Eklendi
+# ✅ Eksik Zaman Aşımı Değişkenleri Eklendi
 ZAMAN_ASIMI_1 = 1800 # 30 Dakika
 ZAMAN_ASIMI_2 = 3600 # 1 Saat
 
@@ -519,13 +519,26 @@ def coin_puan_hesapla(symbol):
         if fiyat_ema9_fark > 2.0: long_puan -= 3
         if fiyat_ema9_fark < -2.0: short_puan -= 3
 
+        # ✅ ZİRVEDEN ALIM / DİPTEN SATIM CEZASI (FOMO FİLTRESİ)
+        son_3_mum_degisim = ((df_15m['c'].iloc[-1] - df_15m['c'].iloc[-4]) / df_15m['c'].iloc[-4]) * 100
+        if son_3_mum_degisim > 5.0: 
+            long_puan -= 6 
+            long_sebep.append("(Zirveden Alım Cezası)")
+            short_puan += 3 
+            short_sebep.append("(Aşırı Alım - Düzeltme Beklentisi)")
+        elif son_3_mum_degisim < -5.0:
+            short_puan -= 6
+            short_sebep.append("(Dipten Satım Cezası)")
+            long_puan += 3
+            long_sebep.append("(Aşırı Satım - Tepki Beklentisi)")
+
         if not testere:
             if adx_pos > adx_neg: short_puan -= 5; short_sebep.append("ADX +DI Baskın")
             elif adx_neg > adx_pos: long_puan -= 5; long_sebep.append("ADX -DI Baskın")
 
             fiyat_ema50_ustunde = anlik_fiyat > ema50_1h
             if fiyat_ema50_ustunde:
-                short_puan -= 3 # ✅ Tamamen sıfırlamak yerine ceza puanı
+                short_puan -= 3 
                 short_sebep.append("(EMA50 Üstü - Short Zayıf)")
             else:
                 long_puan -= 3
@@ -696,9 +709,10 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         base_tp = 3.0
         if atr_percent > 2.0:
             base_sl = atr_percent * 0.8 
-            base_tp = base_sl * 2.0 
-        if base_sl < 1.0: base_sl = 1.0; base_tp = 2.0
-        if base_sl > 5.0: base_sl = 5.0; base_tp = 10.0
+            base_tp = base_sl * 1.5 # ✅ TP Çarpanı 2.0'dan 1.5'e düşürüldü
+            
+        if base_sl < 1.0: base_sl = 1.0; base_tp = 1.5
+        if base_sl > 4.0: base_sl = 4.0; base_tp = 6.0 # ✅ Maksimum sınırlar daraltıldı
         
         if yon == "LONG":
             tp = anlik_fiyat * (1 + base_tp / 100)
@@ -839,7 +853,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
 
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v41.4 - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v41.5 - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
     
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     
