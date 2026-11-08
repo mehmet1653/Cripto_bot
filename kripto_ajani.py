@@ -111,7 +111,7 @@ BARAJ_ARTIS_1 = 11
 BARAJ_ARTIS_2 = 13          
 BARAJ_ARTIS_3 = 15          
 
-# ✅ Eksik Zaman Aşımı Değişkenleri Eklendi
+# ✅ Zaman aşımı değişkenleri
 ZAMAN_ASIMI_1 = 1800 # 30 Dakika
 ZAMAN_ASIMI_2 = 3600 # 1 Saat
 
@@ -200,7 +200,7 @@ def hafizayi_kaydet():
             "aktif_sistemler": mevcut_sistemler, 
             "analitik": payload, 
             "cooldownlar": clean_cd,
-            "simule_bakiye": guncel_bakiye  # ✅ Bakiye veritabanına eklendi
+            "simule_bakiye": guncel_bakiye 
         }).execute()
     except Exception as e:
         print(f"⚠️ Kayıt: {e}", flush=True)
@@ -232,7 +232,6 @@ def get_dinamik_min_puan(testere=False):
     return MIN_PUAN
 
 def bakiye_al():
-    """Simülasyon modundaysa sanal bakiyeyi, değilse borsa bakiyesini döndürür."""
     if SIMULASYON_MODU:
         return SIMULE_BAKIYE
     try:
@@ -465,6 +464,21 @@ def coin_puan_hesapla(symbol):
         ema9 = ta.trend.ema_indicator(df_1h['c'], window=9).iloc[-1]
         fiyat_ema9_fark = ((anlik_fiyat - ema9) / ema9) * 100
         
+        # ✅ 1 DAKİKALIK MUM FİLTRESİ (TUZAK VE FAKE PUMP KONTROLÜ)
+        ohlcv_1m = exchange.fetch_ohlcv(symbol, timeframe='1m', limit=20)
+        tuzak_var = False
+        if len(ohlcv_1m) >= 10:
+            df_1m = pd.DataFrame(ohlcv_1m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+            son_mum_1m = df_1m.iloc[-1]
+            hacim_ort_1m = df_1m['v'].iloc[-10:].mean()
+            ani_hacim = son_mum_1m['v'] > (hacim_ort_1m * 5) 
+            ani_hareket = abs(((son_mum_1m['c'] - son_mum_1m['o']) / son_mum_1m['o']) * 100) > 2.0
+            
+            if ani_hacim and ani_hareket:
+                tuzak_var = True
+                detay["1m_tuzak"] = "Ani Hacim ve Fiyat Hareketi (Tuzak)"
+        # -----------------------------------------------------------------
+
         ob_analiz = orderbook_analiz(symbol)
         funding_sonuc = funding_analiz(symbol)
         vp_analiz = volume_profile_analiz(df_1h)
@@ -519,18 +533,53 @@ def coin_puan_hesapla(symbol):
         if fiyat_ema9_fark > 2.0: long_puan -= 3
         if fiyat_ema9_fark < -2.0: short_puan -= 3
 
-        # ✅ ZİRVEDEN ALIM / DİPTEN SATIM CEZASI (FOMO FİLTRESİ)
-        son_3_mum_degisim = ((df_15m['c'].iloc[-1] - df_15m['c'].iloc[-4]) / df_15m['c'].iloc[-4]) * 100
-        if son_3_mum_degisim > 5.0: 
-            long_puan -= 6 
-            long_sebep.append("(Zirveden Alım Cezası)")
-            short_puan += 3 
-            short_sebep.append("(Aşırı Alım - Düzeltme Beklentisi)")
-        elif son_3_mum_degisim < -5.0:
-            short_puan -= 6
-            short_sebep.append("(Dipten Satım Cezası)")
-            long_puan += 3
-            long_sebep.append("(Aşırı Satım - Tepki Beklentisi)")
+        # ✅ YENİ NESİL FOMO VE DİRENÇ FİLTRESİ
+        son_1_saat_degisim = ((df_15m['c'].iloc[-1] - df_15m['c'].iloc[-5]) / df_15m['c'].iloc[-5]) * 100
+        
+        gun_basi_fiyat = df_1h['c'].iloc[0] if len(df_1h) >= 24 else anlik_fiyat
+        son_24s_degisim = ((anlik_fiyat - gun_basi_fiyat) / gun_basi_fiyat) * 100
+
+        if son_24s_degisim > 10.0:
+            long_puan -= 15 
+            long_sebep.append("(24s Aşırı Yükseliş - Long İptal)")
+            short_puan += 5 
+            short_sebep.append("(24s Aşırı Alım - Short Fırsatı)")
+            
+        if son_1_saat_degisim > 3.0:
+            long_puan -= 10 
+            long_sebep.append("(1s Aşırı Yükseliş - Long İptal)")
+            short_puan += 5 
+            short_sebep.append("(1s Aşırı Alım - Short Fırsatı)")
+
+        if direnc_mesafe < 1.5: 
+            long_puan -= 15 
+            long_sebep.append("(Direnç Bölgesi - Long Yasak)")
+            short_puan += 5
+            short_sebep.append("(Direnç Bölgesi - Short Primli)")
+            
+        if destek_mesafe < 1.5:
+            short_puan -= 15
+            short_sebep.append("(Destek Bölgesi - Short Yasak)")
+            long_puan += 5
+            long_sebep.append("(Destek Bölgesi - Long Primli)")
+
+        # ✅ DİKEY ÇUBUK (ÜST ÜSTE MUM) KONTROLÜ
+        son_3_mum = df_15m.iloc[-3:]
+        ust_uste_yesil = (son_3_mum['c'] > son_3_mum['o']).sum() == 3
+        ust_uste_kirmizi = (son_3_mum['c'] < son_3_mum['o']).sum() == 3
+        
+        if ust_uste_yesil:
+            long_puan -= 8
+            long_sebep.append("(Üst Üste 3 Yeşil - Dikey Çubuk Cezası)")
+        if ust_uste_kirmizi:
+            short_puan -= 8
+            short_sebep.append("(Üst Üste 3 Kırmızı - Dikey Çubuk Cezası)")
+
+        if tuzak_var:
+            long_puan -= 10
+            short_puan -= 10
+            long_sebep.append("(1m Tuzak Tespiti)")
+            short_sebep.append("(1m Tuzak Tespiti)")
 
         if not testere:
             if adx_pos > adx_neg: short_puan -= 5; short_sebep.append("ADX +DI Baskın")
@@ -674,7 +723,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
             print(f"  ⚠️ Spread kontrol hatası ({symbol}): {e}", flush=True)
             return False
             
-        # ✅ Simülasyon veya Canlı Bakiye Kontrolü
         toplam_bakiye = bakiye_al()
         serbest = toplam_bakiye
         
@@ -700,19 +748,21 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         gercek_marj = (miktar * anlik_fiyat * contract_size) / KALDIRAC
         if gercek_marj > hedef_marj * 1.5: return False
         
+        # ✅ DAHA YAKIN VE ULAŞILABİLİR TP/SL AYARI (v41.7)
         ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
         df_15m = pd.DataFrame(ohlcv_15m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         atr = ta.volatility.average_true_range(df_15m['h'], df_15m['l'], df_15m['c'], window=14).iloc[-1]
         atr_percent = (atr / anlik_fiyat) * 100
         
-        base_sl = 1.5
-        base_tp = 3.0
-        if atr_percent > 2.0:
-            base_sl = atr_percent * 0.8 
-            base_tp = base_sl * 1.5 # ✅ TP Çarpanı 2.0'dan 1.5'e düşürüldü
+        base_sl = 1.2  # Varsayılan SL %1.2
+        base_tp = 2.0  # Varsayılan TP %2.0
+        
+        if atr_percent > 1.5:
+            base_sl = atr_percent * 0.7 
+            base_tp = base_sl * 1.3    
             
-        if base_sl < 1.0: base_sl = 1.0; base_tp = 1.5
-        if base_sl > 4.0: base_sl = 4.0; base_tp = 6.0 # ✅ Maksimum sınırlar daraltıldı
+        if base_sl < 0.8: base_sl = 0.8; base_tp = 1.2
+        if base_sl > 3.0: base_sl = 3.0; base_tp = 4.0 
         
         if yon == "LONG":
             tp = anlik_fiyat * (1 + base_tp / 100)
@@ -721,7 +771,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
             tp = anlik_fiyat * (1 - base_tp / 100)
             sl = anlik_fiyat * (1 + base_sl / 100)
         
-        # ✅ EMİR GÖNDERME KISMI (Sadece Canlı Moddaysa)
         if not SIMULASYON_MODU:
             islem_y = 'buy' if yon == 'LONG' else 'sell'
             exchange.create_order(symbol, 'market', islem_y, miktar)
@@ -737,7 +786,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
                 market_kapat(symbol, miktar, yon)
                 return False
         else:
-            # Simülasyon Modu: Komisyon Düşülür
             giris_komisyonu = (anlik_fiyat * miktar * contract_size) * KOMISYON_ORANI
             with state_lock:
                 SIMULE_BAKIYE -= giris_komisyonu
@@ -775,18 +823,15 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         return False
 
 def simule_pozisyon_kapat(symbol, bilgi, anlik_fiyat, kapanis_nedeni):
-    """TP veya SL olduğunda sanal cüzdanı güncelleyen fonksiyon"""
     global SIMULE_BAKIYE
     yon = bilgi.get("yon", "LONG")
     miktar = float(bilgi.get("miktar", 0))
     giris = float(bilgi.get("giris_fiyati", 0))
     contract_size = float(bilgi.get("contract_size", 1.0))
     
-    # Brüt PnL
     if yon == "LONG": pnl = (anlik_fiyat - giris) * miktar * contract_size
     else: pnl = (giris - anlik_fiyat) * miktar * contract_size
     
-    # Çıkış Komisyonu
     cikis_komisyonu = (anlik_fiyat * miktar * contract_size) * KOMISYON_ORANI
     net_pnl = pnl - cikis_komisyonu
     
@@ -812,7 +857,6 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
     with state_lock: kopya = list(AKTIF_SISTEMLER.items())
     
     for symbol, bilgi in kopya:
-        # Canlı modda borsada yoksa atla, simülasyonda direkt fiyata bak
         if not SIMULASYON_MODU and symbol not in aktif_borsa_map: continue
         
         try:
@@ -853,7 +897,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
 
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v41.5 - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v41.7 - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
     
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     
@@ -911,7 +955,6 @@ def ana_dongu():
                             aktif_borsa_map[p['symbol']] = p
                             aktif_semboller_seti.add(p['symbol'])
                 else:
-                    # ✅ Simülasyon Modunda pozisyonlar hafızadan okunur
                     with state_lock:
                         aktif_semboller_seti = set(AKTIF_SISTEMLER.keys())
                 
@@ -1069,7 +1112,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mod_str = "🧪 SİMÜLASYON" if SIMULASYON_MODU else "🔥 CANLI"
         
         mesaj = (
-            f"📊 *TREND BOT (v41.5 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v41.7 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
