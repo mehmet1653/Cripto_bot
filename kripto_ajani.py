@@ -56,9 +56,9 @@ if not GATE_API_KEY or not GATE_SECRET: sys.exit(1)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ✅ SİMÜLASYON (PAPER TRADING) AYARLARI
-SIMULASYON_MODU = True  # Canlı paraya geçmek için burayı False yap!
-SIMULE_BASLANGIC_BAKIYE = 100.0 # Temiz başlangıç için 100'e sıfırlandı
-KOMISYON_ORANI = 0.0005 # Gate.io Futures Taker Komisyonu (%0.05)
+SIMULASYON_MODU = True
+SIMULE_BASLANGIC_BAKIYE = 100.0
+KOMISYON_ORANI = 0.0005
 
 exchange = ccxt.gate({
     'apiKey': GATE_API_KEY,
@@ -67,7 +67,6 @@ exchange = ccxt.gate({
     'timeout': 30000,
     'options': {'defaultType': 'swap'}
 })
-# ✅ Testnet KAPATILDI! Gerçek canlı fiyatları okuyacağız.
 exchange.set_sandbox_mode(False) 
 
 # ==================== AYARLAR ====================
@@ -83,8 +82,8 @@ KARA_LISTE = [
     'FDUSD/USDT:USDT', 'TUSD/USDT:USDT', 'BUSD/USDT:USDT'
 ]
 
-# ✅ RİSK AZALTILDI: Hacim barajı 5 Milyon Dolara çıkarıldı (Manipülasyonu önlemek için)
-MIN_HACIM_24S = 5_000_000 
+# ✅ FİLTRELER DENGELENDİ
+MIN_HACIM_24S = 2_000_000 # 5M'den 2M'ye düşürüldü
 MIN_DEGISIM_YUZDE = 0.5
 MIN_FIYAT = 0.00000001   
 MAX_FIYAT = 1000000.0    
@@ -95,12 +94,12 @@ state_lock = threading.Lock()
 
 # Risk yönetimi 
 KALDIRAC = 5
-POZISYON_MARJ = 0.10 # ✅ RİSK AZALTILDI: Marj %20'den %10'a düşürüldü
+POZISYON_MARJ = 0.10 
 MAKS_POZISYON = 2
 
 SL_YUZDE = 1.5              
 TP_YUZDE = 3.0              
-ADX_ESIK_DEGERI = 18.0 
+ADX_ESIK_DEGERI = 15.0 # 18'den 15'e düşürüldü
 
 TESTERE_SL_YUZDE = 1.5
 TESTERE_TP_YUZDE = 3.0
@@ -446,8 +445,6 @@ def coin_puan_hesapla(symbol):
 
         destek_mesafe = ((anlik_fiyat - en_yakin_destek) / anlik_fiyat * 100) if en_yakin_destek else 999
         direnc_mesafe = ((en_yakin_direnc - anlik_fiyat) / anlik_fiyat * 100) if en_yakin_direnc else 999
-        destege_yakin = 0 <= destek_mesafe < DESTEK_DIRENC_MESAFE
-        dirence_yakin = 0 <= direnc_mesafe < DESTEK_DIRENC_MESAFE
         
         pivot_highs, pivot_lows = pivot_noktalari_bul(df_1h, lookback=5)
         trend_tip, _ = trend_cizgisi_analiz(pivot_highs, pivot_lows)
@@ -487,6 +484,7 @@ def coin_puan_hesapla(symbol):
         long_puan = 0; short_puan = 0
         long_sebep = []; short_sebep = []
         
+        # ✅ POZİTİF PUANLAR (Toplama)
         if formasyon_yon == "LONG": long_puan += 4; long_sebep.append(f"Formasyon: {formasyon_sebep}")
         elif formasyon_yon == "SHORT": short_puan += 4; short_sebep.append(f"Formasyon: {formasyon_sebep}")
         
@@ -496,8 +494,8 @@ def coin_puan_hesapla(symbol):
         if mum_yon == "LONG": long_puan += 3; long_sebep.append(f"Mum: {mum_sebep}")
         elif mum_yon == "SHORT": short_puan += 3; short_sebep.append(f"Mum: {mum_sebep}")
         
-        if destege_yakin and not dirence_yakin: long_puan += 2; long_sebep.append("Destek")
-        if dirence_yakin and not destege_yakin: short_puan += 2; short_sebep.append("Direnç")
+        if 0 <= destek_mesafe < DESTEK_DIRENC_MESAFE and direnc_mesafe >= DESTEK_DIRENC_MESAFE: long_puan += 2; long_sebep.append("Destek")
+        if 0 <= direnc_mesafe < DESTEK_DIRENC_MESAFE and destek_mesafe >= DESTEK_DIRENC_MESAFE: short_puan += 2; short_sebep.append("Direnç")
         
         if mfi > MFI_ESIK_AL: long_puan += 1
         if mfi < MFI_ESIK_SAT: short_puan += 1
@@ -527,72 +525,56 @@ def coin_puan_hesapla(symbol):
             if likidite['yon'] == "LONG": long_puan += 4; long_sebep.append("🎣 Likidite avı")
             elif likidite['yon'] == "SHORT": short_puan += 4; short_sebep.append("🎣 Likidite avı")
         
-        if fiyat_ema9_fark > 2.0: long_puan -= 3
-        if fiyat_ema9_fark < -2.0: short_puan -= 3
+        if fiyat_ema9_fark > 2.0: long_puan -= 2 # Hafif ceza
+        if fiyat_ema9_fark < -2.0: short_puan -= 2
 
-        # ✅ YENİ NESİL FOMO VE DİRENÇ FİLTRESİ
-        son_1_saat_degisim = ((df_15m['c'].iloc[-1] - df_15m['c'].iloc[-5]) / df_15m['c'].iloc[-5]) * 100
+        # ✅ HARD FİLTRELER (Puan Kırma Değil, Direkt İptal)
+        # 1. 24s FOMO
         gun_basi_fiyat = df_1h['c'].iloc[0] if len(df_1h) >= 24 else anlik_fiyat
         son_24s_degisim = ((anlik_fiyat - gun_basi_fiyat) / gun_basi_fiyat) * 100
-
-        if son_24s_degisim > 10.0:
-            long_puan -= 15 
-            long_sebep.append("(24s Aşırı Yükseliş - Long İptal)")
-            short_puan += 5 
-            short_sebep.append("(24s Aşırı Alım - Short Fırsatı)")
+        if son_24s_degisim > 15.0:
+            long_puan = -99; long_sebep.append("(24s Aşırı Yükseliş - İptal)")
             
-        if son_1_saat_degisim > 3.0:
-            long_puan -= 10 
-            long_sebep.append("(1s Aşırı Yükseliş - Long İptal)")
-            short_puan += 5 
-            short_sebep.append("(1s Aşırı Alım - Short Fırsatı)")
+        # 2. 1s FOMO
+        son_1_saat_degisim = ((df_15m['c'].iloc[-1] - df_15m['c'].iloc[-5]) / df_15m['c'].iloc[-5]) * 100
+        if son_1_saat_degisim > 4.0:
+            long_puan = -99; long_sebep.append("(1s Aşırı Yükseliş - İptal)")
 
-        if direnc_mesafe < 1.5: 
-            long_puan -= 15 
-            long_sebep.append("(Direnç Bölgesi - Long Yasak)")
-            short_puan += 5
-            short_sebep.append("(Direnç Bölgesi - Short Primli)")
+        # 3. Dirence Çok Yakınlık (%1.2)
+        if direnc_mesafe < 1.2: 
+            long_puan = -99; long_sebep.append("(Direnç Bölgesi - Long İptal)")
             
-        if destek_mesafe < 1.5:
-            short_puan -= 15
-            short_sebep.append("(Destek Bölgesi - Short Yasak)")
-            long_puan += 5
-            long_sebep.append("(Destek Bölgesi - Long Primli)")
+        # 4. Desteğe Çok Yakınlık (%1.2)
+        if destek_mesafe < 1.2:
+            short_puan = -99; short_sebep.append("(Destek Bölgesi - Short İptal)")
 
-        # ✅ DİKEY ÇUBUK KONTROLÜ
+        # 5. Dikey Çubuk Koruması (Üst üste 3 mum)
         son_3_mum = df_15m.iloc[-3:]
         ust_uste_yesil = (son_3_mum['c'] > son_3_mum['o']).sum() == 3
         ust_uste_kirmizi = (son_3_mum['c'] < son_3_mum['o']).sum() == 3
         
         if ust_uste_yesil:
-            long_puan -= 8
-            long_sebep.append("(Üst Üste 3 Yeşil - Dikey Çubuk Cezası)")
+            long_puan = -99; long_sebep.append("(Üst Üste 3 Yeşil - Long İptal)")
         if ust_uste_kirmizi:
-            short_puan -= 8
-            short_sebep.append("(Üst Üste 3 Kırmızı - Dikey Çubuk Cezası)")
+            short_puan = -99; short_sebep.append("(Üst Üste 3 Kırmızı - Short İptal)")
 
+        # 6. 1m Tuzak Koruması
         if tuzak_var:
-            long_puan -= 10
-            short_puan -= 10
-            long_sebep.append("(1m Tuzak Tespiti)")
-            short_sebep.append("(1m Tuzak Tespiti)")
+            long_puan = -99; short_puan = -99
+            long_sebep.append("(1m Tuzak - İptal)"); short_sebep.append("(1m Tuzak - İptal)")
 
         if not testere:
-            # ✅ YENİ: 1 SAATLİK TRENDİN TERSİNE İŞLEM YASAĞI
-            if adx_pos > adx_neg and adx_1h > 20: 
-                short_puan -= 20
-                short_sebep.append("(1H Trend YUKARI - Short İptal)")
-            elif adx_neg > adx_pos and adx_1h > 20: 
-                long_puan -= 20
-                long_sebep.append("(1H Trend AŞAĞI - Long İptal)")
+            # 7. 1H Trend Ters İşlem İptali (Sadece ADX > 25 ise güçlü trenddir)
+            if adx_pos > adx_neg and adx_1h > 25: 
+                short_puan = -99; short_sebep.append("(Güçlü 1H Trend Yukarı - Short İptal)")
+            elif adx_neg > adx_pos and adx_1h > 25: 
+                long_puan = -99; long_sebep.append("(Güçlü 1H Trend Aşağı - Long İptal)")
 
-            fiyat_ema50_ustunde = anlik_fiyat > ema50_1h
-            if fiyat_ema50_ustunde:
-                short_puan -= 3 
-                short_sebep.append("(EMA50 Üstü - Short Zayıf)")
+            # 8. EMA50 Ters İşlem İptali
+            if anlik_fiyat < ema50_1h:
+                long_puan = -99; long_sebep.append("(EMA50 Altı - Long İptal)")
             else:
-                long_puan -= 3
-                long_sebep.append("(EMA50 Altı - Long Zayıf)")
+                short_puan = -99; short_sebep.append("(EMA50 Üstü - Short İptal)")
 
         detay["long_puan"] = long_puan; detay["short_puan"] = short_puan
         anlik_baraj = get_dinamik_min_puan(testere)
@@ -700,7 +682,7 @@ def sayaci_artir(basarili_mi):
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI (SİMÜLASYON MODU - v41.8)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nGerçek Piyasa Verileri Kullanılıyor.")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI (SİMÜLASYON MODU - v41.9)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nGerçek Piyasa Verileri Kullanılıyor.")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -749,7 +731,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         gercek_marj = (miktar * anlik_fiyat * contract_size) / KALDIRAC
         if gercek_marj > hedef_marj * 1.5: return False
         
-        # ✅ DAHA YAKIN VE ULAŞILABİLİR TP/SL AYARI
         ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
         df_15m = pd.DataFrame(ohlcv_15m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         atr = ta.volatility.average_true_range(df_15m['h'], df_15m['l'], df_15m['c'], window=14).iloc[-1]
@@ -772,10 +753,8 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
             tp = anlik_fiyat * (1 - base_tp / 100)
             sl = anlik_fiyat * (1 + base_sl / 100)
         
-        # ✅ EMİR GÖNDERME KISMI
         if not SIMULASYON_MODU:
             islem_y = 'buy' if yon == 'LONG' else 'sell'
-            # ✅ MARKET YERİNE LİMİT EMİR KULLANILIYOR
             exchange.create_order(symbol, 'limit', islem_y, miktar, anlik_fiyat)
             time.sleep(1.0)
             
@@ -900,7 +879,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
 
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v41.8 - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v41.9 - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
     
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     
@@ -1115,7 +1094,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mod_str = "🧪 SİMÜLASYON" if SIMULASYON_MODU else "🔥 CANLI"
         
         mesaj = (
-            f"📊 *TREND BOT (v41.8 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v41.9 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
