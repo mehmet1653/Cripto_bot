@@ -445,6 +445,10 @@ def coin_puan_hesapla(symbol):
         destek_mesafe = ((anlik_fiyat - en_yakin_destek) / anlik_fiyat * 100) if en_yakin_destek else 999
         direnc_mesafe = ((en_yakin_direnc - anlik_fiyat) / anlik_fiyat * 100) if en_yakin_direnc else 999
         
+        # ✅ HATA ÇÖZÜMÜ: Bu iki değişken eksikti, eklendi
+        destege_yakin = 0 <= destek_mesafe < DESTEK_DIRENC_MESAFE
+        dirence_yakin = 0 <= direnc_mesafe < DESTEK_DIRENC_MESAFE
+        
         pivot_highs, pivot_lows = pivot_noktalari_bul(df_1h, lookback=5)
         trend_tip, _ = trend_cizgisi_analiz(pivot_highs, pivot_lows)
         mum_yon, mum_sebep = mum_yapisi(df_15m)
@@ -478,6 +482,7 @@ def coin_puan_hesapla(symbol):
         if mum_yon == "LONG": long_puan += 3; long_sebep.append(f"Mum: {mum_sebep}")
         elif mum_yon == "SHORT": short_puan += 3; short_sebep.append(f"Mum: {mum_sebep}")
         
+        # ✅ HATA ÇÖZÜMÜ: Değişkenler artık kullanılabiliyor
         if destege_yakin and not dirence_yakin: long_puan += 2; long_sebep.append("Destek")
         if dirence_yakin and not destege_yakin: short_puan += 2; short_sebep.append("Direnç")
         
@@ -512,7 +517,7 @@ def coin_puan_hesapla(symbol):
         if fiyat_ema9_fark > 2.0: long_puan -= 3
         if fiyat_ema9_fark < -2.0: short_puan -= 3
 
-        # ✅ TEK KORUMA: Sadece gün içi aşırı yükselmişse Long açmayı engelle (4 SL'nin ana sebebiydi)
+        # ✅ TEK KORUMA: Sadece gün içi aşırı yükselmişse Long açmayı engelle
         gun_basi_fiyat = df_1h['c'].iloc[0] if len(df_1h) >= 24 else anlik_fiyat
         son_24s_degisim = ((anlik_fiyat - gun_basi_fiyat) / gun_basi_fiyat) * 100
         if son_24s_degisim > 10.0:
@@ -686,7 +691,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         gercek_marj = (miktar * anlik_fiyat * contract_size) / KALDIRAC
         if gercek_marj > hedef_marj * 1.5: return False
         
-        # ✅ DAHA YAKIN VE ULAŞILABİLİR TP/SL AYARI (v41.7)
         ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
         df_15m = pd.DataFrame(ohlcv_15m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         atr = ta.volatility.average_true_range(df_15m['h'], df_15m['l'], df_15m['c'], window=14).iloc[-1]
