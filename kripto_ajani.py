@@ -82,8 +82,8 @@ KARA_LISTE = [
     'FDUSD/USDT:USDT', 'TUSD/USDT:USDT', 'BUSD/USDT:USDT'
 ]
 
-# ✅ FİLTRELER DENGELENDİ
-MIN_HACIM_24S = 2_000_000 # 5M'den 2M'ye düşürüldü
+# ✅ FİLTRELER ESNETİLDİ
+MIN_HACIM_24S = 500_000 # 2M'den 500K'ya düşürüldü (Daha fazla coin görsün)
 MIN_DEGISIM_YUZDE = 0.5
 MIN_FIYAT = 0.00000001   
 MAX_FIYAT = 1000000.0    
@@ -99,7 +99,7 @@ MAKS_POZISYON = 2
 
 SL_YUZDE = 1.5              
 TP_YUZDE = 3.0              
-ADX_ESIK_DEGERI = 15.0 # 18'den 15'e düşürüldü
+ADX_ESIK_DEGERI = 10.0 # 15'ten 10'a düşürüldü (Yatay piyasada daha fazla tarama)
 
 TESTERE_SL_YUZDE = 1.5
 TESTERE_TP_YUZDE = 3.0
@@ -528,25 +528,29 @@ def coin_puan_hesapla(symbol):
         if fiyat_ema9_fark > 2.0: long_puan -= 2 # Hafif ceza
         if fiyat_ema9_fark < -2.0: short_puan -= 2
 
-        # ✅ HARD FİLTRELER (Puan Kırma Değil, Direkt İptal)
+        # ✅ ESNEK CEZALAR (İptal Yok, Yön Değiştirme Var)
         # 1. 24s FOMO
         gun_basi_fiyat = df_1h['c'].iloc[0] if len(df_1h) >= 24 else anlik_fiyat
         son_24s_degisim = ((anlik_fiyat - gun_basi_fiyat) / gun_basi_fiyat) * 100
         if son_24s_degisim > 15.0:
-            long_puan = -99; long_sebep.append("(24s Aşırı Yükseliş - İptal)")
+            long_puan -= 10; long_sebep.append("(24s Aşırı Yükseliş - Long Zayıf)")
+            short_puan += 5; short_sebep.append("(24s Aşırı Alım - Short Primli)")
             
         # 2. 1s FOMO
         son_1_saat_degisim = ((df_15m['c'].iloc[-1] - df_15m['c'].iloc[-5]) / df_15m['c'].iloc[-5]) * 100
         if son_1_saat_degisim > 4.0:
-            long_puan = -99; long_sebep.append("(1s Aşırı Yükseliş - İptal)")
+            long_puan -= 8; long_sebep.append("(1s Aşırı Yükseliş - Long Zayıf)")
+            short_puan += 4; short_sebep.append("(1s Aşırı Alım - Short Primli)")
 
         # 3. Dirence Çok Yakınlık (%1.2)
         if direnc_mesafe < 1.2: 
-            long_puan = -99; long_sebep.append("(Direnç Bölgesi - Long İptal)")
+            long_puan -= 10; long_sebep.append("(Direnç Bölgesi - Long Zayıf)")
+            short_puan += 5; short_sebep.append("(Direnç Bölgesi - Short Primli)")
             
         # 4. Desteğe Çok Yakınlık (%1.2)
         if destek_mesafe < 1.2:
-            short_puan = -99; short_sebep.append("(Destek Bölgesi - Short İptal)")
+            short_puan -= 10; short_sebep.append("(Destek Bölgesi - Short Zayıf)")
+            long_puan += 5; long_sebep.append("(Destek Bölgesi - Long Primli)")
 
         # 5. Dikey Çubuk Koruması (Üst üste 3 mum)
         son_3_mum = df_15m.iloc[-3:]
@@ -554,27 +558,27 @@ def coin_puan_hesapla(symbol):
         ust_uste_kirmizi = (son_3_mum['c'] < son_3_mum['o']).sum() == 3
         
         if ust_uste_yesil:
-            long_puan = -99; long_sebep.append("(Üst Üste 3 Yeşil - Long İptal)")
+            long_puan -= 6; long_sebep.append("(Üst Üste 3 Yeşil - Long Zayıf)")
         if ust_uste_kirmizi:
-            short_puan = -99; short_sebep.append("(Üst Üste 3 Kırmızı - Short İptal)")
+            short_puan -= 6; short_sebep.append("(Üst Üste 3 Kırmızı - Short Zayıf)")
 
-        # 6. 1m Tuzak Koruması
+        # 6. 1m Tuzak Koruması (Sadece puan kır)
         if tuzak_var:
-            long_puan = -99; short_puan = -99
-            long_sebep.append("(1m Tuzak - İptal)"); short_sebep.append("(1m Tuzak - İptal)")
+            long_puan -= 5; short_puan -= 5
+            long_sebep.append("(1m Tuzak Riski)"); short_sebep.append("(1m Tuzak Riski)")
 
         if not testere:
-            # 7. 1H Trend Ters İşlem İptali (Sadece ADX > 25 ise güçlü trenddir)
+            # 7. 1H Trend Ters İşlem (Sadece puan kır)
             if adx_pos > adx_neg and adx_1h > 25: 
-                short_puan = -99; short_sebep.append("(Güçlü 1H Trend Yukarı - Short İptal)")
+                short_puan -= 10; short_sebep.append("(1H Trend Ters)")
             elif adx_neg > adx_pos and adx_1h > 25: 
-                long_puan = -99; long_sebep.append("(Güçlü 1H Trend Aşağı - Long İptal)")
+                long_puan -= 10; long_sebep.append("(1H Trend Ters)")
 
-            # 8. EMA50 Ters İşlem İptali
+            # 8. EMA50 Ters İşlem (Direkt iptal yerine ağır ceza)
             if anlik_fiyat < ema50_1h:
-                long_puan = -99; long_sebep.append("(EMA50 Altı - Long İptal)")
+                long_puan -= 8; long_sebep.append("(EMA50 Altı - Long Zayıf)")
             else:
-                short_puan = -99; short_sebep.append("(EMA50 Üstü - Short İptal)")
+                short_puan -= 8; short_sebep.append("(EMA50 Üstü - Short Zayıf)")
 
         detay["long_puan"] = long_puan; detay["short_puan"] = short_puan
         anlik_baraj = get_dinamik_min_puan(testere)
@@ -682,7 +686,7 @@ def sayaci_artir(basarili_mi):
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI (SİMÜLASYON MODU - v41.9)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nGerçek Piyasa Verileri Kullanılıyor.")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI (SİMÜLASYON MODU - v42.0)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nGerçek Piyasa Verileri Kullanılıyor.")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -879,7 +883,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
 
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v41.9 - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v42.0 - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
     
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     
@@ -1094,7 +1098,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mod_str = "🧪 SİMÜLASYON" if SIMULASYON_MODU else "🔥 CANLI"
         
         mesaj = (
-            f"📊 *TREND BOT (v41.9 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v42.0 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
