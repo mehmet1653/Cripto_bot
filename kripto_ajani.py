@@ -77,10 +77,11 @@ KARA_LISTE = [
     'FDUSD/USDT:USDT', 'TUSD/USDT:USDT', 'BUSD/USDT:USDT'
 ]
 
-MIN_HACIM_24S = 2_000_000 
+# ✅ FİYAT FİLTRESİ DÜZELTİLDİ (Pump coinleri için sıfıra yakın)
+MIN_HACIM_24S = 1_000_000 
 MIN_DEGISIM_YUZDE = 0.5
-MIN_FIYAT = 0.01
-MAX_FIYAT = 300.0
+MIN_FIYAT = 0.00000001   
+MAX_FIYAT = 1000000.0    
 MAKS_SPREAD_YUZDE = 0.50 
 
 BOT_CALISIYOR_MU = True
@@ -91,36 +92,35 @@ KALDIRAC = 5
 POZISYON_MARJ = 0.20
 MAKS_POZISYON = 2
 
-# ✅ 1:2 RİSK/ÖDÜL (SL %2.0, TP %4.0) - Daha geniş SL, fitillere karşı koruma
+# ✅ 1:2 RİSK/ÖDÜL TEMEL AYARLARI (ATR'ye göre dinamik değişecek)
 SL_YUZDE = 1.5              
 TP_YUZDE = 3.0              
 ADX_ESIK_DEGERI = 22.0 
 
 # ✅ Testere modu KAPATILDI
-TESTERE_SL_YUZDE = 1.0
-TESTERE_TP_YUZDE = 2.0
-TESTERE_AKTIF = False # ✅ Ters işlem yapmayacak
+TESTERE_SL_YUZDE = 1.5
+TESTERE_TP_YUZDE = 3.0
+TESTERE_AKTIF = False
 
 # Dinamik Puan Barajı Ayarları
-MIN_PUAN = 9 # ✅ Yükseltildi (sadece güçlü sinyaller)
+MIN_PUAN = 9 
 TESTERE_MIN_PUAN = 9 
 BARAJ_ARTIS_1 = 11          
 BARAJ_ARTIS_2 = 13          
 BARAJ_ARTIS_3 = 15          
 
-# Zaman Aşımı İptal Edildi
+# ✅ ZAMAN AŞIMI VE TRAILING STOP KAPATILDI
 ZAMAN_ASIMI_1 = 2 * 60 * 60 
 ZAMAN_ASIMI_2 = 4 * 60 * 60 
 ZAMAN_ASIMI_AKTIF = False
 
-# Yenilgi Serisi Freni
-YENILGI_SERISI_LIMIT = 2 
-YENILGI_SERISI_BEKLEME = 15 * 60 
-
-# Trailing Stop İptal Edildi
 TRAILING_STOP_AKTIF = False
 TRAILING_BASLANGIC_ROE = 3.0 
 TRAILING_DUSUS_YUZDE = 1.5   
+
+# Yenilgi Serisi Freni
+YENILGI_SERISI_LIMIT = 2 
+YENILGI_SERISI_BEKLEME = 15 * 60 
 
 TOPLAM_ZARAR_LIMIT = 2.0
 
@@ -230,24 +230,29 @@ def get_dinamik_min_puan(testere=False):
             
     return MIN_PUAN
 
-# ✅ PUMP/DUMP VE MOMENTUM AV CISI (Havuz Seçimi)
+# ✅ MEGA PUMP/DUMP AV CISI (Havuz Seçimi)
 def hizli_on_puan(symbol, ticker):
     try:
         ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
-        if len(ohlcv_15m) < 30: return 0, {}
+        
+        if len(ohlcv_15m) < 10: return 0, {}
+        
         df = pd.DataFrame(ohlcv_15m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         
         change_24h = float(ticker.get('percentage', 0) or 0)
         
         son3_hacim = df['v'].iloc[-3:].mean()
-        ort20_hacim = df['v'].iloc[-20:].mean()
+        ort20_hacim = df['v'].iloc[-len(df):].mean()
         hacim_oran = son3_hacim / ort20_hacim if ort20_hacim > 0 else 0
         
-        fiyat_degisim_1h = ((df['c'].iloc[-1] - df['c'].iloc[-5]) / df['c'].iloc[-5]) * 100
+        fiyat_degisim_1h = ((df['c'].iloc[-1] - df['c'].iloc[0]) / df['c'].iloc[0]) * 100 if len(df) > 1 else 0
         
         puan = 0
         
-        if abs(change_24h) > 15: puan += 20
+        # MEGA PUMP / DUMP KONTROLÜ
+        if abs(change_24h) > 50: puan += 50
+        elif abs(change_24h) > 25: puan += 30
+        elif abs(change_24h) > 15: puan += 20
         elif abs(change_24h) > 8: puan += 15
         elif abs(change_24h) > 4: puan += 10
         
@@ -255,7 +260,8 @@ def hizli_on_puan(symbol, ticker):
         elif hacim_oran > 2.0: puan += 10
         elif hacim_oran > 1.5: puan += 5
         
-        if abs(fiyat_degisim_1h) > 3.0: puan += 10
+        if abs(fiyat_degisim_1h) > 5.0: puan += 15
+        elif abs(fiyat_degisim_1h) > 3.0: puan += 10
         elif abs(fiyat_degisim_1h) > 1.5: puan += 5
         
         return puan, {}
@@ -264,7 +270,7 @@ def hizli_on_puan(symbol, ticker):
 def dinamik_liste_guncelle(zorla=False):
     global DINAMIK_LISTE, SON_LISTE_GUNCELLEME
     if not zorla and (time.time() - SON_LISTE_GUNCELLEME < LISTE_GUNCELLEME_SURESI): return
-    print(f"\n🔄 [DİNAMİK LİSTE] Güncelleniyor (Pump/Dump Avcısı)...", flush=True)
+    print(f"\n🔄 [DİNAMİK LİSTE] Güncelleniyor (Mega Pump Avcısı)...", flush=True)
     SON_LISTE_GUNCELLEME = time.time()
     try:
         tickers = exchange.fetch_tickers()
@@ -344,7 +350,7 @@ def mtf_analiz(symbol):
         sonuclar = {}
         for tf, limit, key in [('1d', 30, '1d'), ('4h', 40, '4h'), ('1h', 50, '1h'), ('15m', 50, '15m'), ('5m', 50, '5m')]:
             ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=limit)
-            if len(ohlcv) < 20: sonuclar[key] = "YATAY"; continue
+            if len(ohlcv) < 10: sonuclar[key] = "YATAY"; continue
             df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
             ema9 = ta.trend.ema_indicator(df['c'], window=9).iloc[-1]
             ema21 = ta.trend.ema_indicator(df['c'], window=21).iloc[-1]
@@ -467,7 +473,6 @@ def btc_bias():
     except: return "KARISIK"
 
 def testere_piyasasi_mi(df_15m):
-    # ✅ TESTERE MODU KAPATILDI (Pump/Dump yapan coinlerde ters işlem intihardır)
     return False
 
 def coin_puan_hesapla(symbol):
@@ -475,7 +480,7 @@ def coin_puan_hesapla(symbol):
         ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=PIVOT_LOOKBACK)
         ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
         
-        if len(ohlcv_1h) < 30 or len(ohlcv_15m) < 30: 
+        if len(ohlcv_1h) < 15 or len(ohlcv_15m) < 15: 
             return None, {"sebep": "Veri Yetersiz"}, 0
         
         df_1h = pd.DataFrame(ohlcv_1h, columns=['t', 'o', 'h', 'l', 'c', 'v'])
@@ -489,7 +494,7 @@ def coin_puan_hesapla(symbol):
         testere = testere_piyasasi_mi(df_15m)
 
         adx_1h = ta.trend.adx(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
-        ema50_1h = ta.trend.ema_indicator(df_1h['c'], window=50).iloc[-1]
+        ema50_1h = ta.trend.ema_indicator(df_1h['c'], window=min(50, len(df_1h))).iloc[-1]
         
         adx_pos = ta.trend.adx_pos(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
         adx_neg = ta.trend.adx_neg(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
@@ -605,7 +610,6 @@ def coin_puan_hesapla(symbol):
                 long_sebep.append("(Fiyat EMA50 Altı - Long İptal)")
         
         if not testere:
-            # ✅ Dip Dönüş Koruması Sıkılaştırıldı (RSI 40'ın altındaysa SHORT açma)
             if rsi_15m < 40:
                 short_puan = 0
                 short_sebep.append("(RSI Aşırı Satım - Short İptal)")
@@ -743,8 +747,8 @@ def baslangic_temizligi():
     try:
         raw_pos = exchange.fetch_positions()
         mevcut = [p['symbol'] for p in raw_pos if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v40.8 - Trend, Geniş SL)\n\nMevcut pozisyonlar:\n{mevcut}")
-        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v40.8)\n\nTestere Modu: Kapalı\nTP: %{TP_YUZDE} | SL: %{SL_YUZDE}")
+        if mevcut: telegram_kritik(f"ℹ️ BOT BAŞLATILDI (v41.2 - ATR Dinamik)\n\nMevcut pozisyonlar:\n{mevcut}")
+        else: telegram_kritik(f"🟢 BOT BAŞLATILDI (v41.2)\n\nZaman Aşımı: KAPALI\nTrailing Stop: KAPALI\nATR Dinamik 1:2 TP/SL")
     except: pass
 
 def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", detay={}):
@@ -784,23 +788,44 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         gercek_marj = (miktar * anlik_fiyat * contract_size) / KALDIRAC
         if gercek_marj > hedef_marj * 1.5: return False
         
+        # ✅ ATR DİNAMİK TP/SL HESAPLAMA
+        ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
+        df_15m = pd.DataFrame(ohlcv_15m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        
+        # ATR (Volatilite) hesapla
+        atr = ta.volatility.average_true_range(df_15m['h'], df_15m['l'], df_15m['c'], window=14).iloc[-1]
+        atr_percent = (atr / anlik_fiyat) * 100
+        
+        # Temel SL ve TP (Kullanıcının istediği minimum)
+        base_sl = 1.5
+        base_tp = 3.0
+        
+        # Eğer coin çok volatilse (ATR %2'den büyükse) SL'yi genişlet (1:2 oran korunarak)
+        if atr_percent > 2.0:
+            base_sl = atr_percent * 0.8  # ATR'nin %80'i kadar SL
+            base_tp = base_sl * 2.0     # 1:2 Oran
+            
+        # Filtreleme (Çok dar veya çok geniş olmasın)
+        if base_sl < 1.0: base_sl = 1.0; base_tp = 2.0
+        if base_sl > 5.0: base_sl = 5.0; base_tp = 10.0
+        
         is_testere = detay.get("testere_modu", False)
         
         if yon == "LONG":
             if is_testere:
-                tp = anlik_fiyat * (1 + TESTERE_TP_YUZDE / 100)
-                sl = anlik_fiyat * (1 - TESTERE_SL_YUZDE / 100)
+                tp = anlik_fiyat * (1 + base_tp / 100)
+                sl = anlik_fiyat * (1 - base_sl / 100)
             else:
-                tp = anlik_fiyat * (1 + TP_YUZDE / 100)
-                sl = anlik_fiyat * (1 - SL_YUZDE / 100)
+                tp = anlik_fiyat * (1 + base_tp / 100)
+                sl = anlik_fiyat * (1 - base_sl / 100)
             kapat_yon = 'sell'
         else:
             if is_testere:
-                tp = anlik_fiyat * (1 - TESTERE_TP_YUZDE / 100)
-                sl = anlik_fiyat * (1 + TESTERE_SL_YUZDE / 100)
+                tp = anlik_fiyat * (1 - base_tp / 100)
+                sl = anlik_fiyat * (1 + base_sl / 100)
             else:
-                tp = anlik_fiyat * (1 - TP_YUZDE / 100)
-                sl = anlik_fiyat * (1 + SL_YUZDE / 100)
+                tp = anlik_fiyat * (1 - base_tp / 100)
+                sl = anlik_fiyat * (1 + base_sl / 100)
             kapat_yon = 'buy'
         
         islem_y = 'buy' if yon == 'LONG' else 'sell'
@@ -888,6 +913,9 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
             if yon == "LONG": kar = (anlik - giris) * miktar * contract_size
             else: kar = (giris - anlik) * miktar * contract_size
         
+        # ✅ ZAMAN AŞIMI VE TRAILING STOP KODLARI KOMPLE KALDIRILDI
+        # Sadece SL ve TP kontrol edilir.
+
         sl_tetiklendi = (yon == "LONG" and anlik <= sl) or (yon == "SHORT" and anlik >= sl)
         if sl_tetiklendi:
             tum_emirleri_iptal(symbol)
@@ -955,7 +983,7 @@ def kapanan_pozisyonlari_kontrol(aktif_semboller_seti):
 
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v40.8 - Trend, Geniş SL", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v41.2 - ATR Dinamik", flush=True)
     
     try:
         exchange.load_markets()
@@ -1169,7 +1197,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ks_durum = "🛑 AKTİF" if KILL_SWITCH_AKTIF else "🟢 KAPALI"
         
         mesaj = (
-            f"📊 *TREND BOT (v40.8 - Trend, Geniş SL)*\n\n"
+            f"📊 *TREND BOT (v41.2 - ATR Dinamik)*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
