@@ -82,8 +82,7 @@ KARA_LISTE = [
     'FDUSD/USDT:USDT', 'TUSD/USDT:USDT', 'BUSD/USDT:USDT'
 ]
 
-# ✅ FİLTRELER ESNETİLDİ
-MIN_HACIM_24S = 500_000 # 2M'den 500K'ya düşürüldü (Daha fazla coin görsün)
+MIN_HACIM_24S = 1_000_000 
 MIN_DEGISIM_YUZDE = 0.5
 MIN_FIYAT = 0.00000001   
 MAX_FIYAT = 1000000.0    
@@ -94,12 +93,12 @@ state_lock = threading.Lock()
 
 # Risk yönetimi 
 KALDIRAC = 5
-POZISYON_MARJ = 0.10 
+POZISYON_MARJ = 0.20
 MAKS_POZISYON = 2
 
 SL_YUZDE = 1.5              
 TP_YUZDE = 3.0              
-ADX_ESIK_DEGERI = 10.0 # 15'ten 10'a düşürüldü (Yatay piyasada daha fazla tarama)
+ADX_ESIK_DEGERI = 18.0 
 
 TESTERE_SL_YUZDE = 1.5
 TESTERE_TP_YUZDE = 3.0
@@ -459,20 +458,6 @@ def coin_puan_hesapla(symbol):
         ema9 = ta.trend.ema_indicator(df_1h['c'], window=9).iloc[-1]
         fiyat_ema9_fark = ((anlik_fiyat - ema9) / ema9) * 100
         
-        # ✅ 1 DAKİKALIK MUM FİLTRESİ
-        ohlcv_1m = exchange.fetch_ohlcv(symbol, timeframe='1m', limit=20)
-        tuzak_var = False
-        if len(ohlcv_1m) >= 10:
-            df_1m = pd.DataFrame(ohlcv_1m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
-            son_mum_1m = df_1m.iloc[-1]
-            hacim_ort_1m = df_1m['v'].iloc[-10:].mean()
-            ani_hacim = son_mum_1m['v'] > (hacim_ort_1m * 5) 
-            ani_hareket = abs(((son_mum_1m['c'] - son_mum_1m['o']) / son_mum_1m['o']) * 100) > 2.0
-            
-            if ani_hacim and ani_hareket:
-                tuzak_var = True
-                detay["1m_tuzak"] = "Ani Hacim ve Fiyat Hareketi (Tuzak)"
-
         ob_analiz = orderbook_analiz(symbol)
         funding_sonuc = funding_analiz(symbol)
         vp_analiz = volume_profile_analiz(df_1h)
@@ -484,7 +469,6 @@ def coin_puan_hesapla(symbol):
         long_puan = 0; short_puan = 0
         long_sebep = []; short_sebep = []
         
-        # ✅ POZİTİF PUANLAR (Toplama)
         if formasyon_yon == "LONG": long_puan += 4; long_sebep.append(f"Formasyon: {formasyon_sebep}")
         elif formasyon_yon == "SHORT": short_puan += 4; short_sebep.append(f"Formasyon: {formasyon_sebep}")
         
@@ -494,8 +478,8 @@ def coin_puan_hesapla(symbol):
         if mum_yon == "LONG": long_puan += 3; long_sebep.append(f"Mum: {mum_sebep}")
         elif mum_yon == "SHORT": short_puan += 3; short_sebep.append(f"Mum: {mum_sebep}")
         
-        if 0 <= destek_mesafe < DESTEK_DIRENC_MESAFE and direnc_mesafe >= DESTEK_DIRENC_MESAFE: long_puan += 2; long_sebep.append("Destek")
-        if 0 <= direnc_mesafe < DESTEK_DIRENC_MESAFE and destek_mesafe >= DESTEK_DIRENC_MESAFE: short_puan += 2; short_sebep.append("Direnç")
+        if destege_yakin and not dirence_yakin: long_puan += 2; long_sebep.append("Destek")
+        if dirence_yakin and not destege_yakin: short_puan += 2; short_sebep.append("Direnç")
         
         if mfi > MFI_ESIK_AL: long_puan += 1
         if mfi < MFI_ESIK_SAT: short_puan += 1
@@ -525,60 +509,27 @@ def coin_puan_hesapla(symbol):
             if likidite['yon'] == "LONG": long_puan += 4; long_sebep.append("🎣 Likidite avı")
             elif likidite['yon'] == "SHORT": short_puan += 4; short_sebep.append("🎣 Likidite avı")
         
-        if fiyat_ema9_fark > 2.0: long_puan -= 2 # Hafif ceza
-        if fiyat_ema9_fark < -2.0: short_puan -= 2
+        if fiyat_ema9_fark > 2.0: long_puan -= 3
+        if fiyat_ema9_fark < -2.0: short_puan -= 3
 
-        # ✅ ESNEK CEZALAR (İptal Yok, Yön Değiştirme Var)
-        # 1. 24s FOMO
+        # ✅ TEK KORUMA: Sadece gün içi aşırı yükselmişse Long açmayı engelle (4 SL'nin ana sebebiydi)
         gun_basi_fiyat = df_1h['c'].iloc[0] if len(df_1h) >= 24 else anlik_fiyat
         son_24s_degisim = ((anlik_fiyat - gun_basi_fiyat) / gun_basi_fiyat) * 100
-        if son_24s_degisim > 15.0:
-            long_puan -= 10; long_sebep.append("(24s Aşırı Yükseliş - Long Zayıf)")
-            short_puan += 5; short_sebep.append("(24s Aşırı Alım - Short Primli)")
-            
-        # 2. 1s FOMO
-        son_1_saat_degisim = ((df_15m['c'].iloc[-1] - df_15m['c'].iloc[-5]) / df_15m['c'].iloc[-5]) * 100
-        if son_1_saat_degisim > 4.0:
-            long_puan -= 8; long_sebep.append("(1s Aşırı Yükseliş - Long Zayıf)")
-            short_puan += 4; short_sebep.append("(1s Aşırı Alım - Short Primli)")
-
-        # 3. Dirence Çok Yakınlık (%1.2)
-        if direnc_mesafe < 1.2: 
-            long_puan -= 10; long_sebep.append("(Direnç Bölgesi - Long Zayıf)")
-            short_puan += 5; short_sebep.append("(Direnç Bölgesi - Short Primli)")
-            
-        # 4. Desteğe Çok Yakınlık (%1.2)
-        if destek_mesafe < 1.2:
-            short_puan -= 10; short_sebep.append("(Destek Bölgesi - Short Zayıf)")
-            long_puan += 5; long_sebep.append("(Destek Bölgesi - Long Primli)")
-
-        # 5. Dikey Çubuk Koruması (Üst üste 3 mum)
-        son_3_mum = df_15m.iloc[-3:]
-        ust_uste_yesil = (son_3_mum['c'] > son_3_mum['o']).sum() == 3
-        ust_uste_kirmizi = (son_3_mum['c'] < son_3_mum['o']).sum() == 3
-        
-        if ust_uste_yesil:
-            long_puan -= 6; long_sebep.append("(Üst Üste 3 Yeşil - Long Zayıf)")
-        if ust_uste_kirmizi:
-            short_puan -= 6; short_sebep.append("(Üst Üste 3 Kırmızı - Short Zayıf)")
-
-        # 6. 1m Tuzak Koruması (Sadece puan kır)
-        if tuzak_var:
-            long_puan -= 5; short_puan -= 5
-            long_sebep.append("(1m Tuzak Riski)"); short_sebep.append("(1m Tuzak Riski)")
+        if son_24s_degisim > 10.0:
+            long_puan -= 10
+            long_sebep.append("(24s Aşırı Yükseliş - Long Cezalı)")
 
         if not testere:
-            # 7. 1H Trend Ters İşlem (Sadece puan kır)
-            if adx_pos > adx_neg and adx_1h > 25: 
-                short_puan -= 10; short_sebep.append("(1H Trend Ters)")
-            elif adx_neg > adx_pos and adx_1h > 25: 
-                long_puan -= 10; long_sebep.append("(1H Trend Ters)")
+            if adx_pos > adx_neg: short_puan -= 5; short_sebep.append("ADX +DI Baskın")
+            elif adx_neg > adx_pos: long_puan -= 5; long_sebep.append("ADX -DI Baskın")
 
-            # 8. EMA50 Ters İşlem (Direkt iptal yerine ağır ceza)
-            if anlik_fiyat < ema50_1h:
-                long_puan -= 8; long_sebep.append("(EMA50 Altı - Long Zayıf)")
+            fiyat_ema50_ustunde = anlik_fiyat > ema50_1h
+            if fiyat_ema50_ustunde:
+                short_puan -= 3 
+                short_sebep.append("(EMA50 Üstü - Short Zayıf)")
             else:
-                short_puan -= 8; short_sebep.append("(EMA50 Üstü - Short Zayıf)")
+                long_puan -= 3
+                long_sebep.append("(EMA50 Altı - Long Zayıf)")
 
         detay["long_puan"] = long_puan; detay["short_puan"] = short_puan
         anlik_baraj = get_dinamik_min_puan(testere)
@@ -686,7 +637,7 @@ def sayaci_artir(basarili_mi):
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI (SİMÜLASYON MODU - v42.0)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nGerçek Piyasa Verileri Kullanılıyor.")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI (SİMÜLASYON MODU - v41.7)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nGerçek Piyasa Verileri Kullanılıyor.")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -735,6 +686,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         gercek_marj = (miktar * anlik_fiyat * contract_size) / KALDIRAC
         if gercek_marj > hedef_marj * 1.5: return False
         
+        # ✅ DAHA YAKIN VE ULAŞILABİLİR TP/SL AYARI (v41.7)
         ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
         df_15m = pd.DataFrame(ohlcv_15m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         atr = ta.volatility.average_true_range(df_15m['h'], df_15m['l'], df_15m['c'], window=14).iloc[-1]
@@ -883,7 +835,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
 
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v42.0 - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v41.7 - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
     
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     
@@ -1098,7 +1050,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mod_str = "🧪 SİMÜLASYON" if SIMULASYON_MODU else "🔥 CANLI"
         
         mesaj = (
-            f"📊 *TREND BOT (v42.0 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v41.7 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
