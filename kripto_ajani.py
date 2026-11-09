@@ -82,7 +82,6 @@ KARA_LISTE = [
     'FDUSD/USDT:USDT', 'TUSD/USDT:USDT', 'BUSD/USDT:USDT'
 ]
 
-# ✅ O GÜNKÜ HIZLI YAPI
 MIN_HACIM_24S = 1_000_000 
 MIN_DEGISIM_YUZDE = 0.5
 MIN_FIYAT = 0.00000001   
@@ -94,7 +93,7 @@ state_lock = threading.Lock()
 
 # Risk yönetimi 
 KALDIRAC = 5
-POZISYON_MARJ = 0.20
+POZISYON_MARJ = 0.20 # ✅ Marj senin istediğin gibi %20 kaldı
 MAKS_POZISYON = 2
 
 SL_YUZDE = 1.5              
@@ -446,7 +445,6 @@ def coin_puan_hesapla(symbol):
         destek_mesafe = ((anlik_fiyat - en_yakin_destek) / anlik_fiyat * 100) if en_yakin_destek else 999
         direnc_mesafe = ((en_yakin_direnc - anlik_fiyat) / anlik_fiyat * 100) if en_yakin_direnc else 999
         
-        # ✅ HATA ÇÖZÜMÜ: Bu iki değişken eksikti, eklendi
         destege_yakin = 0 <= destek_mesafe < DESTEK_DIRENC_MESAFE
         dirence_yakin = 0 <= direnc_mesafe < DESTEK_DIRENC_MESAFE
         
@@ -695,15 +693,19 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         atr = ta.volatility.average_true_range(df_15m['h'], df_15m['l'], df_15m['c'], window=14).iloc[-1]
         atr_percent = (atr / anlik_fiyat) * 100
         
-        base_sl = 1.2  
-        base_tp = 2.0  
+        # ✅ DİNAMİK SL VE ZORUNLU 1:2 ORANI
+        base_sl = 1.5  
         
         if atr_percent > 1.5:
             base_sl = atr_percent * 0.7 
-            base_tp = base_sl * 1.3    
             
-        if base_sl < 0.8: base_sl = 0.8; base_tp = 1.2
-        if base_sl > 3.0: base_sl = 3.0; base_tp = 4.0 
+        if base_sl < 1.0: base_sl = 1.0
+        if base_sl > 2.5: base_sl = 2.5 
+        
+        # ✅ KUTSAL KURAL: TP HER ZAMAN SL'NİN TAM 2 KATIDIR (1:2)
+        base_tp = base_sl * 2.0 
+        
+        if base_tp > 5.0: base_tp = 5.0
         
         if yon == "LONG":
             tp = anlik_fiyat * (1 + base_tp / 100)
