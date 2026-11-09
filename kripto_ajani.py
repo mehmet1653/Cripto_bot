@@ -82,6 +82,7 @@ KARA_LISTE = [
     'FDUSD/USDT:USDT', 'TUSD/USDT:USDT', 'BUSD/USDT:USDT'
 ]
 
+# ✅ O GÜNKÜ HIZLI YAPI
 MIN_HACIM_24S = 1_000_000 
 MIN_DEGISIM_YUZDE = 0.5
 MIN_FIYAT = 0.00000001   
@@ -137,7 +138,7 @@ COOLDOWN_VARSAYILAN = 30 * 60
 MFI_ESIK_AL = 52
 MFI_ESIK_SAT = 48
 CMF_ESIK = 0.03
-HACIM_ESIK = 0.7
+HACIM_ESIK = 1.0 
 MFI_ASIRI_SATIM = 10
 MFI_ASIRI_ALIM = 90
 
@@ -482,7 +483,6 @@ def coin_puan_hesapla(symbol):
         if mum_yon == "LONG": long_puan += 3; long_sebep.append(f"Mum: {mum_sebep}")
         elif mum_yon == "SHORT": short_puan += 3; short_sebep.append(f"Mum: {mum_sebep}")
         
-        # ✅ HATA ÇÖZÜMÜ: Değişkenler artık kullanılabiliyor
         if destege_yakin and not dirence_yakin: long_puan += 2; long_sebep.append("Destek")
         if dirence_yakin and not destege_yakin: short_puan += 2; short_sebep.append("Direnç")
         
@@ -517,7 +517,6 @@ def coin_puan_hesapla(symbol):
         if fiyat_ema9_fark > 2.0: long_puan -= 3
         if fiyat_ema9_fark < -2.0: short_puan -= 3
 
-        # ✅ TEK KORUMA: Sadece gün içi aşırı yükselmişse Long açmayı engelle
         gun_basi_fiyat = df_1h['c'].iloc[0] if len(df_1h) >= 24 else anlik_fiyat
         son_24s_degisim = ((anlik_fiyat - gun_basi_fiyat) / gun_basi_fiyat) * 100
         if son_24s_degisim > 10.0:
@@ -642,7 +641,7 @@ def sayaci_artir(basarili_mi):
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI (SİMÜLASYON MODU - v41.7)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nGerçek Piyasa Verileri Kullanılıyor.")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI (TERS İŞLEM MODU - v41.8)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nGerçek Piyasa Verileri Kullanılıyor.")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -747,7 +746,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         
         mod_str = "SİMÜLASYON" if SIMULASYON_MODU else "CANLI"
         mesaj = (
-            f"🏆 EN İYİ SİNYAL ({islem_no}. İşlem) [{mod_str}]\n"
+            f"🏆 EN İYİ SİNYAL ({islem_no}. İşlem) [{mod_str} - TERS]\n"
             f"📌 {symbol} | {yon}\n"
             f"⭐ Puan: {sinyal_skoru}\n"
             f"📋 {aciklama}\n"
@@ -758,7 +757,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
             f"📌 Açık: {islem_no}/{MAKS_POZISYON}"
         )
         telegram_kritik(mesaj)
-        print(f"  🚀 [İŞLEM AÇILDI] {symbol} | {yon} | Giriş: {anlik_fiyat:.6f}", flush=True)
+        print(f"  🚀 [TERS İŞLEM AÇILDI] {symbol} | {yon} | Giriş: {anlik_fiyat:.6f}", flush=True)
         return True
     except Exception as e:
         print(f"  ⚠️ Pozisyon {symbol}: {e}", flush=True)
@@ -839,7 +838,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
 
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v41.7 - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v41.8 (TERS İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
     
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     
@@ -940,7 +939,7 @@ def ana_dongu():
                 time.sleep(10)
                 continue
 
-            print(f"\n🔍 1. AŞAMA: TÜM COİNLERİ TARA VE PUANLA", flush=True)
+            print(f"\n🔍 1. AŞAMA: TÜM COİNLERİ TARA VE PUANLA (TERS MANTIK)", flush=True)
             adaylar = []
             anlik_baraj = get_dinamik_min_puan()
             print(f"  ⚖️  Anlık Puan Barajı: {anlik_baraj}", flush=True)
@@ -983,7 +982,11 @@ def ana_dongu():
                     if sym in aktif_semboller_seti: continue
                     ticker = exchange.fetch_ticker(sym)
                     anlik_fiyat = float(ticker['last'])
-                    if pozisyon_ac(sym, karar, anlik_fiyat, detay.get('sebep', ''), puan, detay.get('aciklama', ''), detay):
+                    
+                    # ✅ BURADA TERS İŞLEM MANTIĞI UYGULANIYOR
+                    ters_karar = "SHORT" if karar == "LONG" else "LONG"
+                    
+                    if pozisyon_ac(sym, ters_karar, anlik_fiyat, detay.get('sebep', '') + " (TERS)", puan, detay.get('aciklama', '') + " (TERS)", detay):
                         aktif_semboller_seti.add(sym)
             
         except Exception as e:
@@ -1051,10 +1054,10 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         anlik_baraj = get_dinamik_min_puan()
         ks_durum = "🛑 AKTİF" if KILL_SWITCH_AKTIF else "🟢 KAPALI"
-        mod_str = "🧪 SİMÜLASYON" if SIMULASYON_MODU else "🔥 CANLI"
+        mod_str = "🧪 SİMÜLASYON (TERS)" if SIMULASYON_MODU else "🔥 CANLI (TERS)"
         
         mesaj = (
-            f"📊 *TREND BOT (v41.7 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v41.8 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
