@@ -93,7 +93,7 @@ state_lock = threading.Lock()
 
 # Risk yönetimi 
 KALDIRAC = 5
-POZISYON_MARJ = 0.20 # ✅ Marj senin istediğin gibi %20 kaldı
+POZISYON_MARJ = 0.20 # ✅ Marj dokunulmadı, %20
 MAKS_POZISYON = 2
 
 SL_YUZDE = 1.5              
@@ -238,33 +238,24 @@ def bakiye_al():
 
 def hizli_on_puan(symbol, ticker):
     try:
-        ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
-        if len(ohlcv_15m) < 10: return 0, {}
-        df = pd.DataFrame(ohlcv_15m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         change_24h = float(ticker.get('percentage', 0) or 0)
-        son3_hacim = df['v'].iloc[-3:].mean()
-        ort20_hacim = df['v'].iloc[-len(df):].mean()
-        hacim_oran = son3_hacim / ort20_hacim if ort20_hacim > 0 else 0
-        fiyat_degisim_1h = ((df['c'].iloc[-1] - df['c'].iloc[0]) / df['c'].iloc[0]) * 100 if len(df) > 1 else 0
+        hacim = float(ticker.get('quoteVolume', 0) or 0)
         puan = 0
         if abs(change_24h) > 50: puan += 50
         elif abs(change_24h) > 25: puan += 30
         elif abs(change_24h) > 15: puan += 20
         elif abs(change_24h) > 8: puan += 15
         elif abs(change_24h) > 4: puan += 10
-        if hacim_oran > 3.0: puan += 15
-        elif hacim_oran > 2.0: puan += 10
-        elif hacim_oran > 1.5: puan += 5
-        if abs(fiyat_degisim_1h) > 5.0: puan += 15
-        elif abs(fiyat_degisim_1h) > 3.0: puan += 10
-        elif abs(fiyat_degisim_1h) > 1.5: puan += 5
+        
+        if hacim > 50_000_000: puan += 20
+        elif hacim > 10_000_000: puan += 10
         return puan, {}
     except: return 0, {}
 
 def dinamik_liste_guncelle(zorla=False):
     global DINAMIK_LISTE, SON_LISTE_GUNCELLEME
     if not zorla and (time.time() - SON_LISTE_GUNCELLEME < LISTE_GUNCELLEME_SURESI): return
-    print(f"\n🔄 [DİNAMİK LİSTE] Güncelleniyor (Gündem Avcısı)...", flush=True)
+    print(f"\n🔄 [DİNAMİK LİSTE] Güncelleniyor...", flush=True)
     SON_LISTE_GUNCELLEME = time.time()
     try:
         tickers = exchange.fetch_tickers()
@@ -272,7 +263,6 @@ def dinamik_liste_guncelle(zorla=False):
         tum_semboller = [s for s in tickers.keys() if ':USDT' in s and s not in KARA_LISTE]
         for sym in tum_semboller:
             try:
-                time.sleep(0.1)
                 t = tickers[sym]
                 hacim = float(t.get('quoteVolume', 0) or 0)
                 fiyat = float(t.get('last', 0) or 0)
@@ -281,7 +271,9 @@ def dinamik_liste_guncelle(zorla=False):
                 if hizli_puan > 0: adaylar.append({"symbol": sym, "hizli_puan": hizli_puan})
             except: continue
         adaylar.sort(key=lambda x: x['hizli_puan'], reverse=True)
-        if adaylar: DINAMIK_LISTE = [a['symbol'] for a in adaylar[:LISTE_BOYUT]]
+        if adaylar: 
+            DINAMIK_LISTE = [a['symbol'] for a in adaylar[:LISTE_BOYUT]]
+            print(f"✅ Liste güncellendi: {len(DINAMIK_LISTE)} coin seçildi", flush=True)
     except Exception as e:
         print(f"⚠️ [DİNAMİK] Hata: {e}", flush=True)
 
@@ -410,7 +402,18 @@ def mum_yapisi(df):
     return None, ""
 
 def btc_bias(): return "KARISIK"
-def testere_piyasasi_mi(df_15m): return False
+
+def testere_piyasasi_mi(df_15m):
+    # ✅ PİYASA REJİMİ ANALİZİ (Testere mi Trend mi?)
+    if len(df_15m) < 20: return False
+    yuksek = df_15m['h'].iloc[-20:].max()
+    dusuk = df_15m['l'].iloc[-20:].min()
+    bant_genisligi = ((yuksek - dusuk) / dusuk) * 100
+    
+    # Fiyat son 5 saatte (20 mum) %1.5'lik dar bir banttaysa, bu testeredir.
+    if bant_genisligi < 1.5:
+        return True
+    return False
 
 def coin_puan_hesapla(symbol):
     try:
@@ -432,9 +435,10 @@ def coin_puan_hesapla(symbol):
         adx_pos = ta.trend.adx_pos(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
         adx_neg = ta.trend.adx_neg(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
         
+        # Trend modundaysak ve ADX düşükse işlem yapma
         if not testere and adx_1h < ADX_ESIK_DEGERI: return None, {"sebep": f"ADX Yatay ({adx_1h:.0f}) - Trend Yok"}, 0
             
-        detay = {"mod": "TREND", "adx": round(adx_1h, 1), "testere_modu": testere}
+        detay = {"mod": "TREND" if not testere else "TESTERE", "adx": round(adx_1h, 1), "testere_modu": testere}
         formasyon_yon, formasyon_sebep = formasyon_tespit(df_1h)
         destekler, direncler = destek_direnc_seviyeleri(df_1h)
         
@@ -536,6 +540,7 @@ def coin_puan_hesapla(symbol):
         detay["long_puan"] = long_puan; detay["short_puan"] = short_puan
         anlik_baraj = get_dinamik_min_puan(testere)
         
+        # ✅ REJİME GÖRE KARAR VERME
         if testere:
             if long_puan >= anlik_baraj and long_puan > short_puan:
                 detay["sinyal_skoru"] = long_puan; detay["aciklama"] = "TESTERE - Ters (SHORT)"; detay["sebep"] = f"TESTERE SHORT | L:{long_puan} S:{short_puan}"
@@ -639,7 +644,7 @@ def sayaci_artir(basarili_mi):
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI (TERS İŞLEM MODU - v41.8)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nGerçek Piyasa Verileri Kullanılıyor.")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI (ADAPTİF MOD - v42.0)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nPiyasa Rejimi: Otomatik (Trend/Testere)")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -748,7 +753,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         
         mod_str = "SİMÜLASYON" if SIMULASYON_MODU else "CANLI"
         mesaj = (
-            f"🏆 EN İYİ SİNYAL ({islem_no}. İşlem) [{mod_str} - TERS]\n"
+            f"🏆 EN İYİ SİNYAL ({islem_no}. İşlem) [{mod_str} - {detay.get('mod', 'TREND')}]\n"
             f"📌 {symbol} | {yon}\n"
             f"⭐ Puan: {sinyal_skoru}\n"
             f"📋 {aciklama}\n"
@@ -759,7 +764,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
             f"📌 Açık: {islem_no}/{MAKS_POZISYON}"
         )
         telegram_kritik(mesaj)
-        print(f"  🚀 [TERS İŞLEM AÇILDI] {symbol} | {yon} | Giriş: {anlik_fiyat:.6f}", flush=True)
+        print(f"  🚀 [İŞLEM AÇILDI] {symbol} | {yon} | Mod: {detay.get('mod', 'TREND')}", flush=True)
         return True
     except Exception as e:
         print(f"  ⚠️ Pozisyon {symbol}: {e}", flush=True)
@@ -840,7 +845,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
 
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v41.8 (TERS İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v42.0 (ADAPTİF) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
     
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     
@@ -941,7 +946,7 @@ def ana_dongu():
                 time.sleep(10)
                 continue
 
-            print(f"\n🔍 1. AŞAMA: TÜM COİNLERİ TARA VE PUANLA (TERS MANTIK)", flush=True)
+            print(f"\n🔍 1. AŞAMA: TÜM COİNLERİ TARA VE PUANLA (ADAPTİF)", flush=True)
             adaylar = []
             anlik_baraj = get_dinamik_min_puan()
             print(f"  ⚖️  Anlık Puan Barajı: {anlik_baraj}", flush=True)
@@ -961,7 +966,7 @@ def ana_dongu():
                 
                 if karar is not None and puan >= detay.get('baraj', anlik_baraj):
                     adaylar.append((symbol, karar, detay, puan))
-                    print(f"  ✅ {sym_kisa}: {karar} | Puan: {puan}", flush=True)
+                    print(f"  ✅ {sym_kisa}: {karar} | Puan: {puan} | Mod: {detay.get('mod', 'TREND')}", flush=True)
                 else:
                     msg = detay.get('sebep') or detay.get('hata', '')
                     print(f"  ⏭️  {sym_kisa}: Puan {puan}/{anlik_baraj} | {msg[:60]}", flush=True)
@@ -976,7 +981,7 @@ def ana_dongu():
             
             print(f"\n🏆 2. AŞAMA: EN İYİ ADAYLAR", flush=True)
             for i, (sym, karar, detay, puan) in enumerate(en_iyiler, 1):
-                print(f"     {i}. {sym.replace('/USDT:USDT','')}: {karar} | Puan: {puan}", flush=True)
+                print(f"     {i}. {sym.replace('/USDT:USDT','')}: {karar} | Puan: {puan} | Mod: {detay.get('mod', 'TREND')}", flush=True)
             
             if not limit_dolu:
                 for sym, karar, detay, puan in en_iyiler:
@@ -985,10 +990,7 @@ def ana_dongu():
                     ticker = exchange.fetch_ticker(sym)
                     anlik_fiyat = float(ticker['last'])
                     
-                    # ✅ BURADA TERS İŞLEM MANTIĞI UYGULANIYOR
-                    ters_karar = "SHORT" if karar == "LONG" else "LONG"
-                    
-                    if pozisyon_ac(sym, ters_karar, anlik_fiyat, detay.get('sebep', '') + " (TERS)", puan, detay.get('aciklama', '') + " (TERS)", detay):
+                    if pozisyon_ac(sym, karar, anlik_fiyat, detay.get('sebep', ''), puan, detay.get('aciklama', ''), detay):
                         aktif_semboller_seti.add(sym)
             
         except Exception as e:
@@ -1056,10 +1058,10 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         anlik_baraj = get_dinamik_min_puan()
         ks_durum = "🛑 AKTİF" if KILL_SWITCH_AKTIF else "🟢 KAPALI"
-        mod_str = "🧪 SİMÜLASYON (TERS)" if SIMULASYON_MODU else "🔥 CANLI (TERS)"
+        mod_str = "🧪 SİMÜLASYON (ADAPTİF)" if SIMULASYON_MODU else "🔥 CANLI (ADAPTİF)"
         
         mesaj = (
-            f"📊 *TREND BOT (v41.8 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v42.0 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
