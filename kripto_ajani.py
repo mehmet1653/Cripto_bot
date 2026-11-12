@@ -137,7 +137,7 @@ COOLDOWN_VARSAYILAN = 30 * 60
 MFI_ESIK_AL = 52
 MFI_ESIK_SAT = 48
 CMF_ESIK = 0.03
-HACIM_ESIK = 0.8 
+HACIM_ESIK = 1.0 
 MFI_ASIRI_SATIM = 10
 MFI_ASIRI_ALIM = 90
 
@@ -402,18 +402,7 @@ def mum_yapisi(df):
     return None, ""
 
 def btc_bias(): return "KARISIK"
-
-def testere_piyasasi_mi(df_15m):
-    # ✅ PİYASA REJİMİ ANALİZİ (Testere mi Trend mi?)
-    if len(df_15m) < 20: return False
-    yuksek = df_15m['h'].iloc[-20:].max()
-    dusuk = df_15m['l'].iloc[-20:].min()
-    bant_genisligi = ((yuksek - dusuk) / dusuk) * 100
-    
-    # Fiyat son 5 saatte (20 mum) %1.5'lik dar bir banttaysa, bu testeredir.
-    if bant_genisligi < 1.5:
-        return True
-    return False
+def testere_piyasasi_mi(df_15m): return False
 
 def coin_puan_hesapla(symbol):
     try:
@@ -435,10 +424,9 @@ def coin_puan_hesapla(symbol):
         adx_pos = ta.trend.adx_pos(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
         adx_neg = ta.trend.adx_neg(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
         
-        # Trend modundaysak ve ADX düşükse işlem yapma
         if not testere and adx_1h < ADX_ESIK_DEGERI: return None, {"sebep": f"ADX Yatay ({adx_1h:.0f}) - Trend Yok"}, 0
             
-        detay = {"mod": "TREND" if not testere else "TESTERE", "adx": round(adx_1h, 1), "testere_modu": testere}
+        detay = {"mod": "TREND", "adx": round(adx_1h, 1), "testere_modu": testere}
         formasyon_yon, formasyon_sebep = formasyon_tespit(df_1h)
         destekler, direncler = destek_direnc_seviyeleri(df_1h)
         
@@ -521,9 +509,11 @@ def coin_puan_hesapla(symbol):
 
         gun_basi_fiyat = df_1h['c'].iloc[0] if len(df_1h) >= 24 else anlik_fiyat
         son_24s_degisim = ((anlik_fiyat - gun_basi_fiyat) / gun_basi_fiyat) * 100
-        if son_24s_degisim > 10.0:
+        
+        # ✅ YENİ: Sadece aşırı uçuk (%25 üstü) pump'larda Long cezası ver
+        if son_24s_degisim > 25.0:
             long_puan -= 10
-            long_sebep.append("(24s Aşırı Yükseliş - Long Cezalı)")
+            long_sebep.append("(24s Aşırı Pump - Dikkat)")
 
         if not testere:
             if adx_pos > adx_neg: short_puan -= 5; short_sebep.append("ADX +DI Baskın")
@@ -540,16 +530,7 @@ def coin_puan_hesapla(symbol):
         detay["long_puan"] = long_puan; detay["short_puan"] = short_puan
         anlik_baraj = get_dinamik_min_puan(testere)
         
-        # ✅ REJİME GÖRE KARAR VERME
-        if testere:
-            if long_puan >= anlik_baraj and long_puan > short_puan:
-                detay["sinyal_skoru"] = long_puan; detay["aciklama"] = "TESTERE - Ters (SHORT)"; detay["sebep"] = f"TESTERE SHORT | L:{long_puan} S:{short_puan}"
-                return "SHORT", detay, long_puan
-            if short_puan >= anlik_baraj and short_puan > long_puan:
-                detay["sinyal_skoru"] = short_puan; detay["aciklama"] = "TESTERE - Ters (LONG)"; detay["sebep"] = f"TESTERE LONG | L:{long_puan} S:{short_puan}"
-                return "LONG", detay, short_puan
-            return None, {"sebep": "Testere Modu - Puan Yetersiz"}, 0
-
+        # ✅ ARTIK TERS İŞLEM YOK. SADECE TREND YÖNÜNE GİRİLİR.
         if long_puan >= anlik_baraj and long_puan > short_puan:
             if mum_yesil:
                 detay["sinyal_skoru"] = long_puan; detay["aciklama"] = " + ".join(long_sebep) + " + Mum Onayı"; detay["sebep"] = f"TREND LONG | L:{long_puan} S:{short_puan}"
@@ -644,7 +625,7 @@ def sayaci_artir(basarili_mi):
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI (ADAPTİF MOD - v42.0)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nPiyasa Rejimi: Otomatik (Trend/Testere)")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI (TREND AVCISI - v41.9)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nPiyasa Rejimi: Normal (Trend Takip)")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -698,7 +679,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         atr = ta.volatility.average_true_range(df_15m['h'], df_15m['l'], df_15m['c'], window=14).iloc[-1]
         atr_percent = (atr / anlik_fiyat) * 100
         
-        # ✅ DİNAMİK SL VE ZORUNLU 1:2 ORANI
         base_sl = 1.5  
         
         if atr_percent > 1.5:
@@ -707,7 +687,6 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         if base_sl < 1.0: base_sl = 1.0
         if base_sl > 2.5: base_sl = 2.5 
         
-        # ✅ KUTSAL KURAL: TP HER ZAMAN SL'NİN TAM 2 KATIDIR (1:2)
         base_tp = base_sl * 2.0 
         
         if base_tp > 5.0: base_tp = 5.0
@@ -753,7 +732,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         
         mod_str = "SİMÜLASYON" if SIMULASYON_MODU else "CANLI"
         mesaj = (
-            f"🏆 EN İYİ SİNYAL ({islem_no}. İşlem) [{mod_str} - {detay.get('mod', 'TREND')}]\n"
+            f"🏆 EN İYİ SİNYAL ({islem_no}. İşlem) [{mod_str}]\n"
             f"📌 {symbol} | {yon}\n"
             f"⭐ Puan: {sinyal_skoru}\n"
             f"📋 {aciklama}\n"
@@ -764,7 +743,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
             f"📌 Açık: {islem_no}/{MAKS_POZISYON}"
         )
         telegram_kritik(mesaj)
-        print(f"  🚀 [İŞLEM AÇILDI] {symbol} | {yon} | Mod: {detay.get('mod', 'TREND')}", flush=True)
+        print(f"  🚀 [İŞLEM AÇILDI] {symbol} | {yon} | Giriş: {anlik_fiyat:.6f}", flush=True)
         return True
     except Exception as e:
         print(f"  ⚠️ Pozisyon {symbol}: {e}", flush=True)
@@ -845,7 +824,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
 
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v42.0 (ADAPTİF) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v41.9 (TREND AVCISI) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
     
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     
@@ -946,7 +925,7 @@ def ana_dongu():
                 time.sleep(10)
                 continue
 
-            print(f"\n🔍 1. AŞAMA: TÜM COİNLERİ TARA VE PUANLA (ADAPTİF)", flush=True)
+            print(f"\n🔍 1. AŞAMA: TÜM COİNLERİ TARA VE PUANLA (TREND)", flush=True)
             adaylar = []
             anlik_baraj = get_dinamik_min_puan()
             print(f"  ⚖️  Anlık Puan Barajı: {anlik_baraj}", flush=True)
@@ -966,7 +945,7 @@ def ana_dongu():
                 
                 if karar is not None and puan >= detay.get('baraj', anlik_baraj):
                     adaylar.append((symbol, karar, detay, puan))
-                    print(f"  ✅ {sym_kisa}: {karar} | Puan: {puan} | Mod: {detay.get('mod', 'TREND')}", flush=True)
+                    print(f"  ✅ {sym_kisa}: {karar} | Puan: {puan}", flush=True)
                 else:
                     msg = detay.get('sebep') or detay.get('hata', '')
                     print(f"  ⏭️  {sym_kisa}: Puan {puan}/{anlik_baraj} | {msg[:60]}", flush=True)
@@ -981,7 +960,7 @@ def ana_dongu():
             
             print(f"\n🏆 2. AŞAMA: EN İYİ ADAYLAR", flush=True)
             for i, (sym, karar, detay, puan) in enumerate(en_iyiler, 1):
-                print(f"     {i}. {sym.replace('/USDT:USDT','')}: {karar} | Puan: {puan} | Mod: {detay.get('mod', 'TREND')}", flush=True)
+                print(f"     {i}. {sym.replace('/USDT:USDT','')}: {karar} | Puan: {puan}", flush=True)
             
             if not limit_dolu:
                 for sym, karar, detay, puan in en_iyiler:
@@ -1058,10 +1037,10 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
         anlik_baraj = get_dinamik_min_puan()
         ks_durum = "🛑 AKTİF" if KILL_SWITCH_AKTIF else "🟢 KAPALI"
-        mod_str = "🧪 SİMÜLASYON (ADAPTİF)" if SIMULASYON_MODU else "🔥 CANLI (ADAPTİF)"
+        mod_str = "🧪 SİMÜLASYON (TREND)" if SIMULASYON_MODU else "🔥 CANLI (TREND)"
         
         mesaj = (
-            f"📊 *TREND BOT (v42.0 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v41.9 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
