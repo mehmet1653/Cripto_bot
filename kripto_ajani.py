@@ -93,7 +93,7 @@ state_lock = threading.Lock()
 
 # Risk yönetimi 
 KALDIRAC = 5
-POZISYON_MARJ = 0.20 # ✅ Marj dokunulmadı, %20
+POZISYON_MARJ = 0.20 # ✅ Marj dokunulmadı
 MAKS_POZISYON = 2
 
 SL_YUZDE = 1.5              
@@ -509,8 +509,6 @@ def coin_puan_hesapla(symbol):
 
         gun_basi_fiyat = df_1h['c'].iloc[0] if len(df_1h) >= 24 else anlik_fiyat
         son_24s_degisim = ((anlik_fiyat - gun_basi_fiyat) / gun_basi_fiyat) * 100
-        
-        # ✅ YENİ: Sadece aşırı uçuk (%25 üstü) pump'larda Long cezası ver
         if son_24s_degisim > 25.0:
             long_puan -= 10
             long_sebep.append("(24s Aşırı Pump - Dikkat)")
@@ -530,7 +528,6 @@ def coin_puan_hesapla(symbol):
         detay["long_puan"] = long_puan; detay["short_puan"] = short_puan
         anlik_baraj = get_dinamik_min_puan(testere)
         
-        # ✅ ARTIK TERS İŞLEM YOK. SADECE TREND YÖNÜNE GİRİLİR.
         if long_puan >= anlik_baraj and long_puan > short_puan:
             if mum_yesil:
                 detay["sinyal_skoru"] = long_puan; detay["aciklama"] = " + ".join(long_sebep) + " + Mum Onayı"; detay["sebep"] = f"TREND LONG | L:{long_puan} S:{short_puan}"
@@ -625,7 +622,7 @@ def sayaci_artir(basarili_mi):
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI (TREND AVCISI - v41.9)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nPiyasa Rejimi: Normal (Trend Takip)")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI (TREND AVCISI - v41.9.1)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nPiyasa Rejimi: Normal (Trend Takip)")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -824,7 +821,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
 
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v41.9 (TREND AVCISI) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v41.9.1 (TREND AVCISI) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
     
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     
@@ -1040,7 +1037,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mod_str = "🧪 SİMÜLASYON (TREND)" if SIMULASYON_MODU else "🔥 CANLI (TREND)"
         
         mesaj = (
-            f"📊 *TREND BOT (v41.9 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v41.9.1 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
@@ -1062,48 +1059,57 @@ async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     BOT_CALISIYOR_MU = False
     await update.message.reply_text("⏸️ Durduruldu.")
 
+# ✅ KAPAT KOMUTU GÜNCELLENDİ: Kârı kasaya ekler ve coini geçici olarak kara listeye alır
 async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
-    global AKTIF_SISTEMLER
+    global AKTIF_SISTEMLER, SIMULE_BAKIYE
     
     hedef_coin = context.args[0].upper() if context.args else None
-    mesaj_bekle = await update.message.reply_text("⏳ Pozisyonlar kapatılıyor...")
+    mesaj_bekle = await update.message.edit_text("⏳ Pozisyonlar kapatılıyor ve kârlar kasaya ekleniyor...")
     
     try:
         kapatilan = []
+        toplam_net_kar = 0.0
         
-        if SIMULASYON_MODU:
-            with state_lock:
-                silinecekler = [s for s in AKTIF_SISTEMLER.keys() if not hedef_coin or hedef_coin in s]
-                for s in silinecekler:
-                    del AKTIF_SISTEMLER[s]
-                    kapatilan.append(s.replace('/USDT:USDT', ''))
-            hafizayi_kaydet()
-        else:
-            positions = await asyncio.to_thread(exchange.fetch_positions)
-            aktif = [p for p in positions if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
+        with state_lock:
+            silinecekler = [s for s in AKTIF_SISTEMLER.keys() if not hedef_coin or hedef_coin in s]
             
-            if not aktif:
-                await mesaj_bekle.edit_text("ℹ️ Açık pozisyon yok.")
-                return
+            for s in silinecekler:
+                bilgi = AKTIF_SISTEMLER[s]
+                yon = bilgi.get("yon", "LONG")
+                miktar = float(bilgi.get("miktar", 0))
+                giris = float(bilgi.get("giris_fiyati", 0))
+                cs = float(bilgi.get("contract_size", 1.0))
+                
+                try:
+                    ticker = exchange.fetch_ticker(s)
+                    anlik = float(ticker['last'])
+                except:
+                    anlik = giris
+                
+                if SIMULASYON_MODU:
+                    if yon == "LONG": pnl = (anlik - giris) * miktar * cs
+                    else: pnl = (giris - anlik) * miktar * cs
+                    
+                    cikis_komisyonu = (anlik * miktar * cs) * KOMISYON_ORANI
+                    net_pnl = pnl - cikis_komisyonu
+                    
+                    SIMULE_BAKIYE += net_pnl
+                    toplam_net_kar += net_pnl
+                else:
+                    tum_emirleri_iptal(s)
+                    market_kapat(s, miktar, yon)
+                
+                del AKTIF_SISTEMLER[s]
+                COIN_COOLDOWNLAR[s] = {"zaman": float(time.time() + (30 * 60)), "son_yon": yon}
+                kapatilan.append(s.replace('/USDT:USDT', ''))
 
-            kapatilacaklar = [p for p in aktif if hedef_coin in p['symbol'].upper()] if hedef_coin else aktif
+        hafizayi_kaydet()
             
-            for p in kapatilacaklar:
-                symbol = p['symbol']
-                yon = str(p.get('side', '')).upper()
-                miktar = float(p.get('contracts', 0) or p.get('size', 0) or 0)
-                
-                await asyncio.to_thread(tum_emirleri_iptal, symbol)
-                basarili = await asyncio.to_thread(market_kapat, symbol, miktar, yon)
-                
-                if basarili:
-                    with state_lock:
-                        if symbol in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[symbol]
-                    kapatilan.append(symbol.replace('/USDT:USDT', ''))
-            hafizayi_kaydet()
+        rapor = "✅ *Kapatılanlar:*\n" + "\n".join([f"• `{s}`" for s in kapatilan])
+        if toplam_net_kar != 0:
+            rapor += f"\n\n💵 *Kasaya Eklenen Net Kâr:* +{toplam_net_kar:.4f} USDT\n🏦 *Yeni Kasa:* {SIMULE_BAKIYE:.2f} USDT"
             
-        rapor = "✅ *Kapatılanlar:*\n" + "\n".join([f"• `{s}`" for s in kapatilan]) if kapatilan else "❌ Kapatılacak pozisyon bulunamadı."
         await mesaj_bekle.edit_text(rapor, parse_mode='Markdown')
         
     except Exception as e:
