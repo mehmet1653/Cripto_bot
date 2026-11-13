@@ -1031,7 +1031,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
         else: pos_detay = "\n\n📌 Açık pozisyon yok."
         
-        liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:10]]) if DINAMIK_LISTE else "Boş"
+        liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:15]]) if DINAMIK_LISTE else "Boş"
         anlik_baraj = get_dinamik_min_puan()
         ks_durum = "🛑 AKTİF" if KILL_SWITCH_AKTIF else "🟢 KAPALI"
         mod_str = "🧪 SİMÜLASYON (TREND)" if SIMULASYON_MODU else "🔥 CANLI (TREND)"
