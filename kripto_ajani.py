@@ -75,11 +75,16 @@ SON_LISTE_GUNCELLEME = 0
 LISTE_GUNCELLEME_SURESI = 15 * 60
 LISTE_BOYUT = 15 
 
+# ✅ HİSSE SENEDİ / ETF TOKENLARI KARA LİSTEYE EKLENDİ
 KARA_LISTE = [
     'BTC/USDT:USDT', 'ETH/USDT:USDT', 'AVAX/USDT:USDT',
     'WBTC/USDT:USDT', 'WETH/USDT:USDT',
     'USDC/USDT:USDT', 'USDT/USDT:USDT', 'DAI/USDT:USDT',
-    'FDUSD/USDT:USDT', 'TUSD/USDT:USDT', 'BUSD/USDT:USDT'
+    'FDUSD/USDT:USDT', 'TUSD/USDT:USDT', 'BUSD/USDT:USDT',
+    'QQQ/USDT:USDT', 'NVDA/USDT:USDT', 'SPCX/USDT:USDT', 
+    'SOXL/USDT:USDT', 'SOXS/USDT:USDT', 'SKHYNIX/USDT:USDT',
+    'SNDK/USDT:USDT', 'SNXX/USDT:USDT', 'XAU/USDT:USDT', 'XAG/USDT:USDT',
+    'SPY/USDT:USDT', 'TSLA/USDT:USDT', 'AAPL/USDT:USDT'
 ]
 
 MIN_HACIM_24S = 1_000_000 
@@ -93,7 +98,7 @@ state_lock = threading.Lock()
 
 # Risk yönetimi 
 KALDIRAC = 5
-POZISYON_MARJ = 0.20 # ✅ Marj dokunulmadı
+POZISYON_MARJ = 0.10 # ✅ RİSK YARIYA İNDİRİLDİ (%20 -> %10)
 MAKS_POZISYON = 2
 
 SL_YUZDE = 1.5              
@@ -402,7 +407,21 @@ def mum_yapisi(df):
     return None, ""
 
 def btc_bias(): return "KARISIK"
-def testere_piyasasi_mi(df_15m): return False
+
+# ✅ TESTERE PİYASASI KALKANI AKTİF EDİLDİ
+def testere_piyasasi_mi(df_15m):
+    try:
+        if len(df_15m) < 20: return False
+        yuksek = df_15m['h'].iloc[-20:].max()
+        dusuk = df_15m['l'].iloc[-20:].min()
+        bant_genisligi = ((yuksek - dusuk) / dusuk) * 100
+        
+        # Fiyat son 5 saatte (20 mum) %1.5'lik dar bir banttaysa -> Testere
+        if bant_genisligi < 1.5:
+            return True
+    except:
+        pass
+    return False
 
 def coin_puan_hesapla(symbol):
     try:
@@ -419,12 +438,17 @@ def coin_puan_hesapla(symbol):
         mum_kirmizi = son_kapanan_15m['c'] < son_kapanan_15m['o']
 
         testere = testere_piyasasi_mi(df_15m)
+        
+        # ✅ TESTERE İSE HİÇ UĞRAŞMA (Direkt Ele)
+        if testere:
+            return None, {"sebep": "Testere Piyasası (Yatay) - İşlem Yok"}, 0
+
         adx_1h = ta.trend.adx(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
         ema50_1h = ta.trend.ema_indicator(df_1h['c'], window=min(50, len(df_1h))).iloc[-1]
         adx_pos = ta.trend.adx_pos(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
         adx_neg = ta.trend.adx_neg(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
         
-        if not testere and adx_1h < ADX_ESIK_DEGERI: return None, {"sebep": f"ADX Yatay ({adx_1h:.0f}) - Trend Yok"}, 0
+        if adx_1h < ADX_ESIK_DEGERI: return None, {"sebep": f"ADX Yatay ({adx_1h:.0f}) - Trend Yok"}, 0
             
         detay = {"mod": "TREND", "adx": round(adx_1h, 1), "testere_modu": testere}
         formasyon_yon, formasyon_sebep = formasyon_tespit(df_1h)
@@ -513,17 +537,16 @@ def coin_puan_hesapla(symbol):
             long_puan -= 10
             long_sebep.append("(24s Aşırı Pump - Dikkat)")
 
-        if not testere:
-            if adx_pos > adx_neg: short_puan -= 5; short_sebep.append("ADX +DI Baskın")
-            elif adx_neg > adx_pos: long_puan -= 5; long_sebep.append("ADX -DI Baskın")
+        if adx_pos > adx_neg: short_puan -= 5; short_sebep.append("ADX +DI Baskın")
+        elif adx_neg > adx_pos: long_puan -= 5; long_sebep.append("ADX -DI Baskın")
 
-            fiyat_ema50_ustunde = anlik_fiyat > ema50_1h
-            if fiyat_ema50_ustunde:
-                short_puan -= 3 
-                short_sebep.append("(EMA50 Üstü - Short Zayıf)")
-            else:
-                long_puan -= 3
-                long_sebep.append("(EMA50 Altı - Long Zayıf)")
+        fiyat_ema50_ustunde = anlik_fiyat > ema50_1h
+        if fiyat_ema50_ustunde:
+            short_puan -= 3 
+            short_sebep.append("(EMA50 Üstü - Short Zayıf)")
+        else:
+            long_puan -= 3
+            long_sebep.append("(EMA50 Altı - Long Zayıf)")
 
         detay["long_puan"] = long_puan; detay["short_puan"] = short_puan
         anlik_baraj = get_dinamik_min_puan(testere)
@@ -622,7 +645,7 @@ def sayaci_artir(basarili_mi):
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI (TREND AVCISI - v41.9.1)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nPiyasa Rejimi: Normal (Trend Takip)")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI (TREND AVCISI - v42.0)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nPiyasa Rejimi: Normal (Trend Takip)\nRisk: %10")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -821,7 +844,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
 
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v41.9.1 (TREND AVCISI) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v42.0 (TREND AVCISI) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
     
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     
@@ -1037,7 +1060,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mod_str = "🧪 SİMÜLASYON (TREND)" if SIMULASYON_MODU else "🔥 CANLI (TREND)"
         
         mesaj = (
-            f"📊 *TREND BOT (v41.9.1 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v42.0 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
@@ -1059,7 +1082,7 @@ async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     BOT_CALISIYOR_MU = False
     await update.message.reply_text("⏸️ Durduruldu.")
 
-# ✅ KAPAT KOMUTU GÜNCELLENDİ: Kârı kasaya ekler ve coini geçici olarak kara listeye alır
+# ✅ KAPAT KOMUTU: Kârı kasaya ekler ve coini geçici olarak kara listeye alır
 async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global AKTIF_SISTEMLER, SIMULE_BAKIYE
