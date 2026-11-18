@@ -75,16 +75,21 @@ SON_LISTE_GUNCELLEME = 0
 LISTE_GUNCELLEME_SURESI = 15 * 60
 LISTE_BOYUT = 15 
 
-# ✅ HİSSE SENEDİ / ETF TOKENLARI KARA LİSTEYE EKLENDİ
+# ✅ HİSSE SENEDİ / ETF / EMTİA TOKENLARI TAMAMEN YASAKLI
 KARA_LISTE = [
     'BTC/USDT:USDT', 'ETH/USDT:USDT', 'AVAX/USDT:USDT',
     'WBTC/USDT:USDT', 'WETH/USDT:USDT',
     'USDC/USDT:USDT', 'USDT/USDT:USDT', 'DAI/USDT:USDT',
     'FDUSD/USDT:USDT', 'TUSD/USDT:USDT', 'BUSD/USDT:USDT',
+    # Hisse / ETF / Emtia
     'QQQ/USDT:USDT', 'NVDA/USDT:USDT', 'SPCX/USDT:USDT', 
     'SOXL/USDT:USDT', 'SOXS/USDT:USDT', 'SKHYNIX/USDT:USDT',
     'SNDK/USDT:USDT', 'SNXX/USDT:USDT', 'XAU/USDT:USDT', 'XAG/USDT:USDT',
-    'SPY/USDT:USDT', 'TSLA/USDT:USDT', 'AAPL/USDT:USDT'
+    'SPY/USDT:USDT', 'TSLA/USDT:USDT', 'AAPL/USDT:USDT',
+    'SAMSUNG/USDT:USDT', 'CRCL/USDT:USDT', 'BZ/USDT:USDT', 
+    'NBIS/USDT:USDT', 'MU/USDT:USDT', 'AMD/USDT:USDT', 
+    'INTC/USDT:USDT', 'MSFT/USDT:USDT', 'GOOGL/USDT:USDT', 
+    'AMZN/USDT:USDT', 'META/USDT:USDT', 'NFLX/USDT:USDT'
 ]
 
 MIN_HACIM_24S = 1_000_000 
@@ -98,22 +103,22 @@ state_lock = threading.Lock()
 
 # Risk yönetimi 
 KALDIRAC = 5
-POZISYON_MARJ = 0.10 # ✅ RİSK YARIYA İNDİRİLDİ (%20 -> %10)
+POZISYON_MARJ = 0.10 # ✅ Risk %10'da sabit
 MAKS_POZISYON = 2
 
 SL_YUZDE = 1.5              
 TP_YUZDE = 3.0              
-ADX_ESIK_DEGERI = 18.0 
+ADX_ESIK_DEGERI = 22.0 # ✅ Trend zorunluluğu yüksek
 
 TESTERE_SL_YUZDE = 1.5
 TESTERE_TP_YUZDE = 3.0
 TESTERE_AKTIF = False
 
-MIN_PUAN = 9 
+MIN_PUAN = 10 # ✅ 11'den 10'a düşürüldü (Kaçırmayı önlemek için)
 TESTERE_MIN_PUAN = 9 
-BARAJ_ARTIS_1 = 11          
-BARAJ_ARTIS_2 = 13          
-BARAJ_ARTIS_3 = 15          
+BARAJ_ARTIS_1 = 12          
+BARAJ_ARTIS_2 = 14          
+BARAJ_ARTIS_3 = 16          
 
 ZAMAN_ASIMI_1 = 1800 
 ZAMAN_ASIMI_2 = 3600 
@@ -136,7 +141,7 @@ BTC_15M_TOLERANS = 0.2
 BTC_1H_TOLERANS = 0.5  
 
 COOLDOWN_TP = 15 * 60
-COOLDOWN_SL = 30 * 60
+COOLDOWN_SL = 120 * 60 # ✅ 30 dakikadan 2 saate çıkarıldı (Aynı coine tekrar girmemesi için)
 COOLDOWN_VARSAYILAN = 30 * 60
 
 MFI_ESIK_AL = 52
@@ -408,16 +413,14 @@ def mum_yapisi(df):
 
 def btc_bias(): return "KARISIK"
 
-# ✅ TESTERE PİYASASI KALKANI AKTİF EDİLDİ
+# ✅ TESTERE PİYASASI KALKANI (Bant %2.5)
 def testere_piyasasi_mi(df_15m):
     try:
         if len(df_15m) < 20: return False
         yuksek = df_15m['h'].iloc[-20:].max()
         dusuk = df_15m['l'].iloc[-20:].min()
         bant_genisligi = ((yuksek - dusuk) / dusuk) * 100
-        
-        # Fiyat son 5 saatte (20 mum) %1.5'lik dar bir banttaysa -> Testere
-        if bant_genisligi < 1.5:
+        if bant_genisligi < 2.5:
             return True
     except:
         pass
@@ -439,7 +442,6 @@ def coin_puan_hesapla(symbol):
 
         testere = testere_piyasasi_mi(df_15m)
         
-        # ✅ TESTERE İSE HİÇ UĞRAŞMA (Direkt Ele)
         if testere:
             return None, {"sebep": "Testere Piyasası (Yatay) - İşlem Yok"}, 0
 
@@ -548,6 +550,23 @@ def coin_puan_hesapla(symbol):
             long_puan -= 3
             long_sebep.append("(EMA50 Altı - Long Zayıf)")
 
+        # ✅ AKILLI RSI + EMA50 YÖNLENDİRMESİ (Sert İptal Değil)
+        rsi_15m = ta.momentum.rsi(df_15m['c'], window=14).iloc[-1]
+        
+        # 1. Fiyat EMA50 üzerinde ve RSI Aşırı Alım (>70) ise: Long'u cezalandır, Short'a prim ver
+        if anlik_fiyat > ema50_1h and rsi_15m > 70:
+            long_puan -= 8
+            long_sebep.append("(Aşırı Alım Bölgesi - Long Cezalı)")
+            short_puan += 4
+            short_sebep.append("(Dönüş Beklentisi - Short Primli)")
+            
+        # 2. Fiyat EMA50 altında ve RSI Aşırı Satım (<30) ise: Short'u cezalandır, Long'a prim ver
+        if anlik_fiyat < ema50_1h and rsi_15m < 30:
+            short_puan -= 8
+            short_sebep.append("(Aşırı Satım Bölgesi - Short Cezalı)")
+            long_puan += 4
+            long_sebep.append("(Tepki Beklentisi - Long Primli)")
+
         detay["long_puan"] = long_puan; detay["short_puan"] = short_puan
         anlik_baraj = get_dinamik_min_puan(testere)
         
@@ -645,7 +664,7 @@ def sayaci_artir(basarili_mi):
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI (TREND AVCISI - v42.0)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nPiyasa Rejimi: Normal (Trend Takip)\nRisk: %10")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI (TREND AVCISI - v42.2)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nPiyasa Rejimi: Normal (Trend Takip)\nRisk: %10")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -844,7 +863,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
 
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v42.0 (TREND AVCISI) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v42.2 (TREND AVCISI) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
     
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     
@@ -1060,7 +1079,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mod_str = "🧪 SİMÜLASYON (TREND)" if SIMULASYON_MODU else "🔥 CANLI (TREND)"
         
         mesaj = (
-            f"📊 *TREND BOT (v42.0 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v42.2 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
@@ -1124,7 +1143,7 @@ async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     market_kapat(s, miktar, yon)
                 
                 del AKTIF_SISTEMLER[s]
-                COIN_COOLDOWNLAR[s] = {"zaman": float(time.time() + (30 * 60)), "son_yon": yon}
+                COIN_COOLDOWNLAR[s] = {"zaman": float(time.time() + (120 * 60)), "son_yon": yon} # 2 saat cooldown
                 kapatilan.append(s.replace('/USDT:USDT', ''))
 
         hafizayi_kaydet()
