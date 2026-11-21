@@ -102,7 +102,7 @@ state_lock = threading.Lock()
 
 # Risk yönetimi 
 KALDIRAC = 5
-POZISYON_MARJ = 0.20 # ✅ Marj %20
+POZISYON_MARJ = 0.20 # Marj %20
 MAKS_POZISYON = 2
 
 SL_YUZDE = 1.5              
@@ -133,9 +133,9 @@ YENILGI_SERISI_LIMIT = 2
 YENILGI_SERISI_BEKLEME = 15 * 60 
 
 # ✅ KAYBEDEN COIN KARA LİSTESİ (24 SAAT)
-KAYBEDEN_COINLER = {} # {symbol: {sayi: int, son_zaman: float}}
-KAYBEDEN_LIMIT = 2 # 2 kez kaybederse
-KAYBEDEN_YASAK_SURESI = 24 * 60 * 60 # 24 saat yasakla
+KAYBEDEN_COINLER = {}
+KAYBEDEN_LIMIT = 2 
+KAYBEDEN_YASAK_SURESI = 24 * 60 * 60 
 
 TOPLAM_ZARAR_LIMIT = 2.0
 PIVOT_LOOKBACK = 50
@@ -431,7 +431,6 @@ def testere_piyasasi_mi(df_15m):
         pass
     return False
 
-# ✅ PİYASA YÖNÜ ANALİZİ (BTC ÇÖKÜŞ MODU)
 def piyasa_yonu_analiz():
     try:
         ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=5)
@@ -451,7 +450,6 @@ def piyasa_yonu_analiz():
     except:
         return "SERBEST"
 
-# ✅ BREAKOUT (KIRILIM) STRATEJİSİ
 def breakout_sinyal_tespit(df_15m, anlik_fiyat):
     try:
         if len(df_15m) < 20: return None, 0, []
@@ -478,7 +476,6 @@ def breakout_sinyal_tespit(df_15m, anlik_fiyat):
 
 def coin_puan_hesapla(symbol):
     try:
-        # ✅ SİNYAL KİLİTLEME KONTROLÜ
         global KILITLI_ADAYLAR
         if symbol in KILITLI_ADAYLAR:
             kilit_zamani = KILITLI_ADAYLAR[symbol]
@@ -487,7 +484,6 @@ def coin_puan_hesapla(symbol):
             else:
                 del KILITLI_ADAYLAR[symbol]
 
-        # ✅ KAYBEDEN COIN KONTROLÜ
         if symbol in KAYBEDEN_COINLER:
             kayit = KAYBEDEN_COINLER[symbol]
             if kayit.get("sayi", 0) >= KAYBEDEN_LIMIT:
@@ -632,7 +628,6 @@ def coin_puan_hesapla(symbol):
             long_puan += 4
             long_sebep.append("(Tepki Beklentisi - Long Primli)")
 
-        # ✅ BREAKOUT (KIRILIM) STRATEJİSİ EKLEMESİ
         breakout_yon, breakout_puan, breakout_sebep = breakout_sinyal_tespit(df_15m, anlik_fiyat)
         if breakout_yon == "LONG":
             long_puan += breakout_puan
@@ -641,7 +636,6 @@ def coin_puan_hesapla(symbol):
             short_puan += breakout_puan
             short_sebep.extend(breakout_sebep)
 
-        # ✅ PİYASA YÖNÜ FİLTRESİ (BTC ÇÖKÜŞ MODU)
         piyasa_yon = piyasa_yonu_analiz()
         if piyasa_yon == "SADECE_SHORT":
             long_puan = -99
@@ -752,7 +746,7 @@ def sayaci_artir(basarili_mi):
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI (TREND AVCISI - v44.0)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nPiyasa Rejimi: Breakout + BTC Filtresi\nRisk: %20")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI (TERS İŞLEM - v45.0)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nPiyasa Rejimi: TERS İŞLEM\nRisk: %20")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -859,7 +853,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         
         mod_str = "SİMÜLASYON" if SIMULASYON_MODU else "CANLI"
         mesaj = (
-            f"🏆 EN İYİ SİNYAL ({islem_no}. İşlem) [{mod_str}]\n"
+            f"🏆 EN İYİ SİNYAL ({islem_no}. İşlem) [{mod_str} - TERS]\n"
             f"📌 {symbol} | {yon}\n"
             f"⭐ Puan: {sinyal_skoru}\n"
             f"📋 {aciklama}\n"
@@ -870,7 +864,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
             f"📌 Açık: {islem_no}/{MAKS_POZISYON}"
         )
         telegram_kritik(mesaj)
-        print(f"  🚀 [İŞLEM AÇILDI] {symbol} | {yon} | Giriş: {anlik_fiyat:.6f}", flush=True)
+        print(f"  🚀 [TERS İŞLEM AÇILDI] {symbol} | {yon} | Giriş: {anlik_fiyat:.6f}", flush=True)
         return True
     except Exception as e:
         print(f"  ⚠️ Pozisyon {symbol}: {e}", flush=True)
@@ -894,11 +888,9 @@ def simule_pozisyon_kapat(symbol, bilgi, anlik_fiyat, kapanis_nedeni):
         if symbol in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[symbol]
         if kapanis_nedeni == "TP": 
             COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_TP), "son_yon": yon}
-            # Kâr edince kaybeden sayacını sıfırla
             if symbol in KAYBEDEN_COINLER: del KAYBEDEN_COINLER[symbol]
         else: 
             COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_SL), "son_yon": yon}
-            # ✅ KAYBEDEN COIN SAYACI
             if symbol not in KAYBEDEN_COINLER:
                 KAYBEDEN_COINLER[symbol] = {"sayi": 1, "son_zaman": time.time()}
             else:
@@ -962,7 +954,7 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
 
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v44.0 (BREAKOUT) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v45.0 (TERS İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
     
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     
@@ -1063,7 +1055,7 @@ def ana_dongu():
                 time.sleep(10)
                 continue
 
-            print(f"\n🔍 1. AŞAMA: TÜM COİNLERİ TARA VE PUANLA (BREAKOUT)", flush=True)
+            print(f"\n🔍 1. AŞAMA: TÜM COİNLERİ TARA VE PUANLA (TERS)", flush=True)
             adaylar = []
             anlik_baraj = get_dinamik_min_puan()
             print(f"  ⚖️  Anlık Puan Barajı: {anlik_baraj}", flush=True)
@@ -1107,7 +1099,10 @@ def ana_dongu():
                     ticker = exchange.fetch_ticker(sym)
                     anlik_fiyat = float(ticker['last'])
                     
-                    if pozisyon_ac(sym, karar, anlik_fiyat, detay.get('sebep', ''), puan, detay.get('aciklama', ''), detay):
+                    # ✅ TERS İŞLEM MANTIĞI
+                    ters_karar = "SHORT" if karar == "LONG" else "LONG"
+                    
+                    if pozisyon_ac(sym, ters_karar, anlik_fiyat, detay.get('sebep', '') + " (TERS)", puan, detay.get('aciklama', '') + " (TERS)", detay):
                         aktif_semboller_seti.add(sym)
             
         except Exception as e:
@@ -1175,10 +1170,10 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:15]]) if DINAMIK_LISTE else "Boş"
         anlik_baraj = get_dinamik_min_puan()
         ks_durum = "🛑 AKTİF" if KILL_SWITCH_AKTIF else "🟢 KAPALI"
-        mod_str = "🧪 SİMÜLASYON (BREAKOUT)" if SIMULASYON_MODU else "🔥 CANLI (BREAKOUT)"
+        mod_str = "🧪 SİMÜLASYON (TERS)" if SIMULASYON_MODU else "🔥 CANLI (TERS)"
         
         mesaj = (
-            f"📊 *TREND BOT (v44.0 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v45.0 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
