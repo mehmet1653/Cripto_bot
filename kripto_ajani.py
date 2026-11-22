@@ -79,6 +79,10 @@ DINAMIK_LISTE = []
 SON_LISTE_GUNCELLEME = 0
 LISTE_GUNCELLEME_SURESI = 15 * 60
 LISTE_BOYUT = 15
+LISTE_ON_ELEME = 30        # ön elemeye giren aday sayısı
+HAVUZ_ADX_MIN = 20.0       # tarama eşiğinden (22) biraz gevşek
+HAVUZ_HACIM_MIN = 0.8      # tarama eşiğinden (0.9) biraz gevşek
+HAVUZ_ETIKET = {}          # {symbol: DEVAM_YUKARI / DEVAM_ASAGI / DONUS_YUKARI / DONUS_ASAGI / NOTR}
 
 # ✅ KRİPTO DIŞI TÜM VARLIKLAR KARA LİSTEDE
 KARA_LISTE = [
@@ -278,6 +282,48 @@ def hizli_on_puan(symbol, ticker):
         return puan, {}
     except: return 0, {}
 
+def havuz_degerlendir(symbol, ticker):
+    """Havuza girmeye uygun mu? Döner: (etiket, skor) ya da None. Sadece havuz seçimi içindir, sinyal/puanı etkilemez."""
+    try:
+        o1 = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
+        if len(o1) < 30: return None
+        df1 = pd.DataFrame(o1, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        adx = ta.trend.adx(df1['h'], df1['l'], df1['c'], window=14).iloc[-1]
+        if not adx or adx < HAVUZ_ADX_MIN: return None
+        ort20 = df1['v'].iloc[-20:].mean()
+        hacim_oran = (df1['v'].iloc[-3:].mean() / ort20) if ort20 > 0 else 0
+        if hacim_oran < HAVUZ_HACIM_MIN: return None
+
+        o15 = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
+        if len(o15) < 20: return None
+        df15 = pd.DataFrame(o15, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        if testere_piyasasi_mi(df15): return None
+
+        fiyat = df1['c'].iloc[-1]
+        ema50 = ta.trend.ema_indicator(df1['c'], window=min(50, len(df1))).iloc[-1]
+        ema9 = ta.trend.ema_indicator(df1['c'], window=9).iloc[-1]
+        adx_pos = ta.trend.adx_pos(df1['h'], df1['l'], df1['c'], window=14).iloc[-1]
+        adx_neg = ta.trend.adx_neg(df1['h'], df1['l'], df1['c'], window=14).iloc[-1]
+        rsi = ta.momentum.rsi(df1['c'], window=14).iloc[-1]
+        degisim24 = float(ticker.get('percentage', 0) or 0)
+        son_mum_yesil = df1['c'].iloc[-2] > df1['o'].iloc[-2]   # son kapanan 1s mum
+        ema9_fark = (fiyat - ema9) / ema9 * 100
+
+        etiket = "NOTR"
+        # Yükselmiş + aşırı uzamış + momentum zayıflıyor -> düşüş (dönüş) ihtimali
+        if degisim24 > 8 and (rsi > 72 or ema9_fark > 2) and not son_mum_yesil: etiket = "DONUS_ASAGI"
+        # Düşmüş + aşırı satılmış + momentum toparlıyor -> yükseliş (tepki) ihtimali
+        elif degisim24 < -8 and (rsi < 28 or ema9_fark < -2) and son_mum_yesil: etiket = "DONUS_YUKARI"
+        # Yükselmiş + trend sağlam + henüz aşırı değil -> yükseliş devamı
+        elif degisim24 > 4 and fiyat > ema50 and adx_pos > adx_neg and rsi < 70: etiket = "DEVAM_YUKARI"
+        # Düşmüş + trend sağlam + henüz aşırı değil -> düşüş devamı
+        elif degisim24 < -4 and fiyat < ema50 and adx_neg > adx_pos and rsi > 30: etiket = "DEVAM_ASAGI"
+
+        skor = float(adx) + (10 if etiket != "NOTR" else 0) + min(hacim_oran, 2.0) * 5
+        return etiket, skor
+    except Exception:
+        return None
+
 def dinamik_liste_guncelle(zorla=False):
     global DINAMIK_LISTE, SON_LISTE_GUNCELLEME
     if not zorla and (time.time() - SON_LISTE_GUNCELLEME < LISTE_GUNCELLEME_SURESI): return
@@ -298,8 +344,25 @@ def dinamik_liste_guncelle(zorla=False):
             except: continue
         adaylar.sort(key=lambda x: x['hizli_puan'], reverse=True)
         if adaylar:
-            DINAMIK_LISTE = [a['symbol'] for a in adaylar[:LISTE_BOYUT]]
-            print(f"✅ Liste güncellendi: {len(DINAMIK_LISTE)} coin seçildi", flush=True)
+            degerlendirilen = []
+            for a in adaylar[:LISTE_ON_ELEME]:
+                sonuc = havuz_degerlendir(a['symbol'], tickers[a['symbol']])
+                if sonuc: degerlendirilen.append((a['symbol'], sonuc[0], sonuc[1]))
+            etiketli = sorted([x for x in degerlendirilen if x[1] != "NOTR"], key=lambda x: x[2], reverse=True)
+            notr = sorted([x for x in degerlendirilen if x[1] == "NOTR"], key=lambda x: x[2], reverse=True)
+            secilen = (etiketli + notr)[:LISTE_BOYUT]
+            if secilen:
+                DINAMIK_LISTE = [x[0] for x in secilen]
+                HAVUZ_ETIKET.clear()
+                HAVUZ_ETIKET.update({x[0]: x[1] for x in secilen})
+                print(f"✅ Liste güncellendi: {len(DINAMIK_LISTE)} coin | etiketli: {len(etiketli)} | ön eleme: {len(adaylar[:LISTE_ON_ELEME])} → {len(degerlendirilen)}", flush=True)
+                for sym_, et_, sk_ in secilen:
+                    print(f"     • {sym_.replace('/USDT:USDT','')}: {et_} (skor {sk_:.0f})", flush=True)
+            else:
+                # Ön eleme hiç coin bırakmadıysa (ya da veri alınamadıysa) eski yönteme dön
+                DINAMIK_LISTE = [a['symbol'] for a in adaylar[:LISTE_BOYUT]]
+                HAVUZ_ETIKET.clear()
+                print(f"⚠️ Ön eleme boş döndü, eski yöntemle liste: {len(DINAMIK_LISTE)} coin", flush=True)
     except Exception as e:
         print(f"⚠️ [DİNAMİK] Hata: {e}", flush=True)
 
@@ -809,6 +872,7 @@ def golge_ac(symbol, sinyal_yon, anlik_fiyat, puan):
             "giris": float(anlik_fiyat), "zaman": time.time(),
             "sl_yuzde": round(sl_y, 3), "tp_yuzde": round(tp_y, 3), "puan": puan,
             "btc_trend": rejim["btc_trend"], "btc_24s": rejim["btc_24s"],
+            "havuz_etiket": HAVUZ_ETIKET.get(symbol, "?"),
             "duz": None, "ters": None
         }
         with state_lock:
@@ -910,6 +974,9 @@ def golge_rapor_metni():
     satirlar += ["", "— SİNYAL YÖNÜNE GÖRE —"]
     for y in ("LONG", "SHORT"):
         satirlar.append(blok(f"Sinyal {y}", [k for k in biten if k.get("sinyal_yon") == y]))
+    satirlar += ["", "— HAVUZ ETİKETİNE GÖRE —"]
+    for et in ("DEVAM_YUKARI", "DEVAM_ASAGI", "DONUS_YUKARI", "DONUS_ASAGI", "NOTR"):
+        satirlar.append(blok(et, [k for k in biten if k.get("havuz_etiket") == et]))
     if len(biten) < 30:
         satirlar += ["", "⚠️ n<30: çok erken, sonuca güvenme."]
     return "\n".join(satirlar)
@@ -918,7 +985,7 @@ def golge_rapor_metni():
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI ({MOD_ETIKET} İŞLEM - v45.2)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nİşlem Yönü: {MOD_ETIKET}\nRisk: %20")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI ({MOD_ETIKET} İŞLEM - v45.3)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nİşlem Yönü: {MOD_ETIKET}\nRisk: %20")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -1204,7 +1271,7 @@ def izleyici_worker():
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, GUNLUK_BASLANGIC_ZAMANI, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI, YENILGI_BEKLEME_BITIS
-    print(f"🚀 [BAŞLANGIÇ] v45.2 ({MOD_ETIKET} İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v45.3 ({MOD_ETIKET} İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
 
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     GUNLUK_BASLANGIC_ZAMANI = time.time()
@@ -1439,7 +1506,8 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
         else: pos_detay = "\n\n📌 Açık pozisyon yok."
 
-        liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:15]]) if DINAMIK_LISTE else "Boş"
+        _em = {"DEVAM_YUKARI": "📈 devam↗", "DEVAM_ASAGI": "📉 devam↘", "DONUS_YUKARI": "🔄 dönüş↗", "DONUS_ASAGI": "🔄 dönüş↘", "NOTR": "·"}
+        liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}` {_em.get(HAVUZ_ETIKET.get(s, 'NOTR'), '·')}" for s in DINAMIK_LISTE[:15]]) if DINAMIK_LISTE else "Boş"
         anlik_baraj = get_dinamik_min_puan()
         ks_durum = "🛑 AKTİF" if KILL_SWITCH_AKTIF else "🟢 KAPALI"
         rejim = await asyncio.to_thread(btc_rejim)
@@ -1450,7 +1518,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mod_str = f"🧪 SİMÜLASYON ({MOD_ETIKET})" if SIMULASYON_MODU else f"🔥 CANLI ({MOD_ETIKET})"
 
         mesaj = (
-            f"📊 *TREND BOT (v45.2 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v45.3 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
@@ -1497,6 +1565,7 @@ async def export_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "symbol": g.get("symbol"), "sinyal_yon": g.get("sinyal_yon"), "giris": g.get("giris"),
                     "zaman": g.get("zaman"), "sl_yuzde": g.get("sl_yuzde"), "tp_yuzde": g.get("tp_yuzde"),
                     "puan": g.get("puan"), "btc_trend": g.get("btc_trend"), "btc_24s": g.get("btc_24s"),
+                    "havuz_etiket": g.get("havuz_etiket"),
                     "duz_sonuc": duz.get("sonuc"), "duz_net": duz.get("net"),
                     "ters_sonuc": ters.get("sonuc"), "ters_net": ters.get("net")
                 })
