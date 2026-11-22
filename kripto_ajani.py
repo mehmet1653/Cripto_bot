@@ -49,9 +49,12 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
 GATE_API_KEY = os.environ.get("GATE_API_KEY", "").strip()
 GATE_SECRET = os.environ.get("GATE_SECRET", "").strip()
 
-if not TELEGRAM_TOKEN or not CHAT_ID: sys.exit(1)
-if not SUPABASE_URL or not SUPABASE_KEY: sys.exit(1)
-if not GATE_API_KEY or not GATE_SECRET: sys.exit(1)
+_eksik = [n for n, v in [("TELEGRAM_TOKEN", TELEGRAM_TOKEN), ("CHAT_ID", CHAT_ID),
+                         ("SUPABASE_URL", SUPABASE_URL), ("SUPABASE_KEY", SUPABASE_KEY),
+                         ("GATE_API_KEY", GATE_API_KEY), ("GATE_SECRET", GATE_SECRET)] if not v]
+if _eksik:
+    print(f"❌ Eksik ortam değişkenleri: {', '.join(_eksik)}", flush=True)
+    sys.exit(1)
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -67,77 +70,67 @@ exchange = ccxt.gate({
     'timeout': 30000,
     'options': {'defaultType': 'swap'}
 })
-exchange.set_sandbox_mode(False) 
+exchange.set_sandbox_mode(False)
 
 # ==================== AYARLAR ====================
 DINAMIK_LISTE = []
 SON_LISTE_GUNCELLEME = 0
 LISTE_GUNCELLEME_SURESI = 15 * 60
-LISTE_BOYUT = 15 
+LISTE_BOYUT = 15
 
 # ✅ KRİPTO DIŞI TÜM VARLIKLAR KARA LİSTEDE
 KARA_LISTE = [
     'USDC/USDT:USDT', 'USDT/USDT:USDT', 'DAI/USDT:USDT',
     'FDUSD/USDT:USDT', 'TUSD/USDT:USDT', 'BUSD/USDT:USDT',
-    'QQQ/USDT:USDT', 'NVDA/USDT:USDT', 'SPCX/USDT:USDT', 
+    'QQQ/USDT:USDT', 'NVDA/USDT:USDT', 'SPCX/USDT:USDT',
     'SOXL/USDT:USDT', 'SOXS/USDT:USDT', 'SKHYNIX/USDT:USDT',
     'SNDK/USDT:USDT', 'SNXX/USDT:USDT', 'XAU/USDT:USDT', 'XAG/USDT:USDT',
     'SPY/USDT:USDT', 'TSLA/USDT:USDT', 'AAPL/USDT:USDT',
-    'SAMSUNG/USDT:USDT', 'CRCL/USDT:USDT', 'BZ/USDT:USDT', 
-    'NBIS/USDT:USDT', 'MU/USDT:USDT', 'AMD/USDT:USDT', 
-    'INTC/USDT:USDT', 'MSFT/USDT:USDT', 'GOOGL/USDT:USDT', 
+    'SAMSUNG/USDT:USDT', 'CRCL/USDT:USDT', 'BZ/USDT:USDT',
+    'NBIS/USDT:USDT', 'MU/USDT:USDT', 'AMD/USDT:USDT',
+    'INTC/USDT:USDT', 'MSFT/USDT:USDT', 'GOOGL/USDT:USDT',
     'AMZN/USDT:USDT', 'META/USDT:USDT', 'NFLX/USDT:USDT',
     'XAUT/USDT:USDT', 'OPENAI/USDT:USDT', 'MSTR/USDT:USDT',
     'MUU/USDT:USDT', 'SKHY/USDT:USDT', 'TENCENT/USDT:USDT'
 ]
 
-MIN_HACIM_24S = 1_000_000 
-MIN_DEGISIM_YUZDE = 0.5
-MIN_FIYAT = 0.00000001   
-MAX_FIYAT = 1000000.0    
-MAKS_SPREAD_YUZDE = 0.50 
+MIN_HACIM_24S = 1_000_000
+MIN_FIYAT = 0.00000001
+MAX_FIYAT = 1000000.0
+MAKS_SPREAD_YUZDE = 0.50
 
 BOT_CALISIYOR_MU = True
 state_lock = threading.Lock()
 
-# Risk yönetimi 
+# Risk yönetimi
 KALDIRAC = 5
-POZISYON_MARJ = 0.20 # Marj %20
+POZISYON_MARJ = 0.20  # Marj %20
 MAKS_POZISYON = 2
 
-SL_YUZDE = 1.5              
-TP_YUZDE = 3.0              
-ADX_ESIK_DEGERI = 22.0 
+ADX_ESIK_DEGERI = 22.0
 
-TESTERE_SL_YUZDE = 1.5
-TESTERE_TP_YUZDE = 3.0
-TESTERE_AKTIF = False
-
-# ✅ SİNYAL KİLİTLEME
+# ✅ SİNYAL KİLİTLEME  {symbol: (zaman, yon)}
 ADAY_KILITLEME_SURESI = 15 * 60
 KILITLI_ADAYLAR = {}
 
-MIN_PUAN = 9 
-TESTERE_MIN_PUAN = 9 
-BARAJ_ARTIS_1 = 11          
-BARAJ_ARTIS_2 = 13          
-BARAJ_ARTIS_3 = 15          
+MIN_PUAN = 9
+TESTERE_MIN_PUAN = 9
+BARAJ_ARTIS_1 = 11
+BARAJ_ARTIS_2 = 13
+BARAJ_ARTIS_3 = 15
 
-ZAMAN_ASIMI_1 = 1800 
-ZAMAN_ASIMI_2 = 3600 
+ZAMAN_ASIMI_1 = 1800
+ZAMAN_ASIMI_2 = 3600
 
-ZAMAN_ASIMI_AKTIF = False
-TRAILING_STOP_AKTIF = False
-
-YENILGI_SERISI_LIMIT = 2 
-YENILGI_SERISI_BEKLEME = 15 * 60 
+YENILGI_SERISI_LIMIT = 2
+YENILGI_SERISI_BEKLEME = 15 * 60
+YENILGI_BEKLEME_BITIS = 0
 
 # ✅ KAYBEDEN COIN KARA LİSTESİ (24 SAAT)
 KAYBEDEN_COINLER = {}
-KAYBEDEN_LIMIT = 2 
-KAYBEDEN_YASAK_SURESI = 24 * 60 * 60 
+KAYBEDEN_LIMIT = 2
+KAYBEDEN_YASAK_SURESI = 24 * 60 * 60
 
-TOPLAM_ZARAR_LIMIT = 2.0
 PIVOT_LOOKBACK = 50
 DESTEK_DIRENC_MESAFE = 1.0
 ORDERBOOK_WALL_ORANI = 2.0
@@ -145,31 +138,30 @@ FUNDING_RATE_ASIRI = 0.05
 VOLUME_PROFILE_BINS = 30
 LIKIDITE_AVI_HACIM_ORANI = 0.7
 
-BTC_15M_TOLERANS = 0.2 
-BTC_1H_TOLERANS = 0.5  
-
 COOLDOWN_TP = 15 * 60
 COOLDOWN_SL = 120 * 60
-COOLDOWN_VARSAYILAN = 30 * 60
 
 MFI_ESIK_AL = 52
 MFI_ESIK_SAT = 48
 CMF_ESIK = 0.03
 HACIM_ESIK = 0.9
-MFI_ASIRI_SATIM = 10
-MFI_ASIRI_ALIM = 90
 
-GEREKLI_SINYAL = 6
 TOP_N_ADAY = 3
 
-BTC_DONUS_KALKANI_AKTIF = False  
 GUNLUK_BASLANGIC_BAKIYE = None
-GUNLUK_ZARAR_LIMIT = 0.05 
+GUNLUK_BASLANGIC_ZAMANI = 0
+GUNLUK_ZARAR_LIMIT = 0.05
 
 KILL_SWITCH_AKTIF = False
 KILL_SWITCH_BITIS_ZAMANI = 0
 
+IZLEYICI_ARALIK = 5  # SL/TP kontrol aralığı (sn)
+EGITIM_VERISI_LIMIT = 200
+
 SIMULE_BAKIYE = SIMULE_BASLANGIC_BAKIYE
+
+VARSAYILAN_ANALITIK = {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "ardisik_kazanc": 0,
+                       "ardisik_zarar": 0, "son_islem_zamani": 0, "egitim_verileri": []}
 
 def hafizayi_yukle():
     global SIMULE_BAKIYE
@@ -182,67 +174,67 @@ def hafizayi_yukle():
             SIMULE_BAKIYE = float(veri.get("simule_bakiye", SIMULE_BASLANGIC_BAKIYE))
             return {
                 "aktif_sistemler": veri.get("aktif_sistemler", {}),
-                "analitik": veri.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "ardisik_kazanc": 0, "ardisik_zarar": 0, "son_islem_zamani": 0, "egitim_verileri": []}),
+                "analitik": veri.get("analitik", dict(VARSAYILAN_ANALITIK)),
                 "cooldownlar": veri.get("cooldownlar", {})
             }
     except Exception as e:
         print(f"⚠️ Hafıza: {e}", flush=True)
-    
-    return {"aktif_sistemler": {}, "analitik": {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "ardisik_kazanc": 0, "ardisik_zarar": 0, "son_islem_zamani": 0, "egitim_verileri": []}, "cooldownlar": {}}
+    return {"aktif_sistemler": {}, "analitik": dict(VARSAYILAN_ANALITIK), "cooldownlar": {}}
 
 def hafizayi_kaydet():
-    global SIMULE_BAKIYE
     try:
-        payload = {
-            "basarili_islem_sayisi": int(ANALITIK.get("basarili_islem_sayisi", 0)),
-            "basarisiz_islem_sayisi": int(ANALITIK.get("basarisiz_islem_sayisi", 0)),
-            "ardisik_kazanc": int(ANALITIK.get("ardisik_kazanc", 0)),
-            "ardisik_zarar": int(ANALITIK.get("ardisik_zarar", 0)),
-            "son_islem_zamani": float(ANALITIK.get("son_islem_zamani", 0)),
-            "egitim_verileri": ANALITIK.get("egitim_verileri", [])
-        }
         clean_cd = {}
         with state_lock:
+            payload = {
+                "basarili_islem_sayisi": int(ANALITIK.get("basarili_islem_sayisi", 0)),
+                "basarisiz_islem_sayisi": int(ANALITIK.get("basarisiz_islem_sayisi", 0)),
+                "ardisik_kazanc": int(ANALITIK.get("ardisik_kazanc", 0)),
+                "ardisik_zarar": int(ANALITIK.get("ardisik_zarar", 0)),
+                "son_islem_zamani": float(ANALITIK.get("son_islem_zamani", 0)),
+                "egitim_verileri": list(ANALITIK.get("egitim_verileri", []))
+            }
             for k, v in COIN_COOLDOWNLAR.items():
-                if isinstance(v, dict): clean_cd[k] = {"zaman": float(v.get("zaman", 0)), "son_yon": str(v.get("son_yon", ""))}
-                else: clean_cd[k] = {"zaman": float(v), "son_yon": ""}
+                if isinstance(v, dict):
+                    clean_cd[k] = {"zaman": float(v.get("zaman", 0)), "son_yon": str(v.get("son_yon", ""))}
+                else:
+                    clean_cd[k] = {"zaman": float(v), "son_yon": ""}
             mevcut_sistemler = dict(AKTIF_SISTEMLER)
             guncel_bakiye = float(SIMULE_BAKIYE)
 
         supabase.table("bot_hafiza").upsert({
-            "id": 1, 
-            "aktif_sistemler": mevcut_sistemler, 
-            "analitik": payload, 
+            "id": 1,
+            "aktif_sistemler": mevcut_sistemler,
+            "analitik": payload,
             "cooldownlar": clean_cd,
-            "simule_bakiye": guncel_bakiye 
+            "simule_bakiye": guncel_bakiye
         }).execute()
     except Exception as e:
         print(f"⚠️ Kayıt: {e}", flush=True)
 
 kalici = hafizayi_yukle()
 AKTIF_SISTEMLER = kalici.get("aktif_sistemler", {})
-ANALITIK = kalici.get("analitik", {"basarili_islem_sayisi": 0, "basarisiz_islem_sayisi": 0, "ardisik_kazanc": 0, "ardisik_zarar": 0, "son_islem_zamani": 0, "egitim_verileri": []})
+ANALITIK = kalici.get("analitik", dict(VARSAYILAN_ANALITIK))
 COIN_COOLDOWNLAR = kalici.get("cooldownlar", {})
 
 def get_dinamik_min_puan(testere=False):
     ardisik = ANALITIK.get("ardisik_kazanc", 0)
     son_islem = ANALITIK.get("son_islem_zamani", 0)
-    
+
     if testere: return TESTERE_MIN_PUAN
-    if ardisik == 0: return MIN_PUAN 
+    if ardisik == 0: return MIN_PUAN
 
     if son_islem > 0:
         gecen_sure = time.time() - son_islem
         if ardisik >= 7:
-            if gecen_sure > ZAMAN_ASIMI_2: return BARAJ_ARTIS_1 
-            if gecen_sure > ZAMAN_ASIMI_1: return BARAJ_ARTIS_2 
-            return BARAJ_ARTIS_3 
+            if gecen_sure > ZAMAN_ASIMI_2: return BARAJ_ARTIS_1
+            if gecen_sure > ZAMAN_ASIMI_1: return BARAJ_ARTIS_2
+            return BARAJ_ARTIS_3
         if ardisik >= 5:
-            if gecen_sure > ZAMAN_ASIMI_2: return BARAJ_ARTIS_1 
-            if gecen_sure > ZAMAN_ASIMI_1: return BARAJ_ARTIS_1 
-            return BARAJ_ARTIS_2 
+            if gecen_sure > ZAMAN_ASIMI_2: return BARAJ_ARTIS_1
+            if gecen_sure > ZAMAN_ASIMI_1: return BARAJ_ARTIS_1
+            return BARAJ_ARTIS_2
         if ardisik >= 3:
-            return BARAJ_ARTIS_1 
+            return BARAJ_ARTIS_1
     return MIN_PUAN
 
 def bakiye_al():
@@ -264,7 +256,7 @@ def hizli_on_puan(symbol, ticker):
         elif abs(change_24h) > 15: puan += 20
         elif abs(change_24h) > 8: puan += 15
         elif abs(change_24h) > 4: puan += 10
-        
+
         if hacim > 50_000_000: puan += 20
         elif hacim > 10_000_000: puan += 10
         return puan, {}
@@ -289,7 +281,7 @@ def dinamik_liste_guncelle(zorla=False):
                 if hizli_puan > 0: adaylar.append({"symbol": sym, "hizli_puan": hizli_puan})
             except: continue
         adaylar.sort(key=lambda x: x['hizli_puan'], reverse=True)
-        if adaylar: 
+        if adaylar:
             DINAMIK_LISTE = [a['symbol'] for a in adaylar[:LISTE_BOYUT]]
             print(f"✅ Liste güncellendi: {len(DINAMIK_LISTE)} coin seçildi", flush=True)
     except Exception as e:
@@ -435,54 +427,40 @@ def piyasa_yonu_analiz():
     try:
         ohlcv_btc = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=5)
         if len(ohlcv_btc) < 2: return "SERBEST"
-        
         df_btc = pd.DataFrame(ohlcv_btc, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         btc_son = df_btc['c'].iloc[-1]
         btc_onceki = df_btc['c'].iloc[-2]
         degisim_1h = ((btc_son - btc_onceki) / btc_onceki) * 100
-        
-        if degisim_1h < -2.0:
-            return "SADECE_SHORT"
-        elif degisim_1h > 2.0:
-            return "SADECE_LONG"
-        else:
-            return "SERBEST"
+        if degisim_1h < -2.0: return "SADECE_SHORT"
+        elif degisim_1h > 2.0: return "SADECE_LONG"
+        else: return "SERBEST"
     except:
         return "SERBEST"
 
 def breakout_sinyal_tespit(df_15m, anlik_fiyat):
     try:
         if len(df_15m) < 20: return None, 0, []
-        
         son_20_yuksek = df_15m['h'].iloc[-20:-1].max()
         son_20_dusuk = df_15m['l'].iloc[-20:-1].min()
-        
-        sebep = []
-        puan = 0
-        yon = None
-        
+        sebep = []; puan = 0; yon = None
         if anlik_fiyat > son_20_yuksek:
-            yon = "LONG"
-            puan = 4
-            sebep.append("Kırılım: 20 Mum Zirvesi")
+            yon = "LONG"; puan = 4; sebep.append("Kırılım: 20 Mum Zirvesi")
         elif anlik_fiyat < son_20_dusuk:
-            yon = "SHORT"
-            puan = 4
-            sebep.append("Kırılım: 20 Mum Dibi")
-        
+            yon = "SHORT"; puan = 4; sebep.append("Kırılım: 20 Mum Dibi")
         return yon, puan, sebep
     except:
         return None, 0, []
 
 def coin_puan_hesapla(symbol):
     try:
-        global KILITLI_ADAYLAR
-        if symbol in KILITLI_ADAYLAR:
-            kilit_zamani = KILITLI_ADAYLAR[symbol]
+        # ✅ Kilitli aday: artık yönü de hatırlıyor
+        kilit = KILITLI_ADAYLAR.get(symbol)
+        if kilit:
+            kilit_zamani, kilit_yon = kilit
             if time.time() - kilit_zamani < ADAY_KILITLEME_SURESI:
-                return "LONG", {"sebep": "Kilitli Aday (Onaylandı)", "mod": "TREND"}, 10
+                return kilit_yon, {"sebep": "Kilitli Aday (Onaylandı)", "mod": "TREND"}, 10
             else:
-                del KILITLI_ADAYLAR[symbol]
+                KILITLI_ADAYLAR.pop(symbol, None)
 
         if symbol in KAYBEDEN_COINLER:
             kayit = KAYBEDEN_COINLER[symbol]
@@ -490,13 +468,13 @@ def coin_puan_hesapla(symbol):
                 if time.time() - kayit.get("son_zaman", 0) < KAYBEDEN_YASAK_SURESI:
                     return None, {"sebep": "Kaybeden Coin (24s Yasaklı)"}, 0
                 else:
-                    del KAYBEDEN_COINLER[symbol]
+                    KAYBEDEN_COINLER.pop(symbol, None)
 
         ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=PIVOT_LOOKBACK)
         ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
-        
+
         if len(ohlcv_1h) < 15 or len(ohlcv_15m) < 15: return None, {"sebep": "Veri Yetersiz"}, 0
-        
+
         df_1h = pd.DataFrame(ohlcv_1h, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         df_15m = pd.DataFrame(ohlcv_15m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         anlik_fiyat = df_1h['c'].iloc[-1]
@@ -505,7 +483,6 @@ def coin_puan_hesapla(symbol):
         mum_kirmizi = son_kapanan_15m['c'] < son_kapanan_15m['o']
 
         testere = testere_piyasasi_mi(df_15m)
-        
         if testere:
             return None, {"sebep": "Testere Piyasası (Yatay) - İşlem Yok"}, 0
 
@@ -513,91 +490,93 @@ def coin_puan_hesapla(symbol):
         ema50_1h = ta.trend.ema_indicator(df_1h['c'], window=min(50, len(df_1h))).iloc[-1]
         adx_pos = ta.trend.adx_pos(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
         adx_neg = ta.trend.adx_neg(df_1h['h'], df_1h['l'], df_1h['c'], window=14).iloc[-1]
-        
+
         if adx_1h < ADX_ESIK_DEGERI: return None, {"sebep": f"ADX Yatay ({adx_1h:.0f}) - Trend Yok"}, 0
-            
+
         detay = {"mod": "TREND", "adx": round(adx_1h, 1), "testere_modu": testere}
         formasyon_yon, formasyon_sebep = formasyon_tespit(df_1h)
         destekler, direncler = destek_direnc_seviyeleri(df_1h)
-        
+
         en_yakin_destek = min(destekler, key=lambda x: abs(x - anlik_fiyat)) if destekler else None
         en_yakin_direnc = min(direncler, key=lambda x: abs(x - anlik_fiyat)) if direncler else None
         detay.update({"en_yakin_destek": en_yakin_destek, "en_yakin_direnc": en_yakin_direnc})
 
         destek_mesafe = ((anlik_fiyat - en_yakin_destek) / anlik_fiyat * 100) if en_yakin_destek else 999
         direnc_mesafe = ((en_yakin_direnc - anlik_fiyat) / anlik_fiyat * 100) if en_yakin_direnc else 999
-        
+
         destege_yakin = 0 <= destek_mesafe < DESTEK_DIRENC_MESAFE
         dirence_yakin = 0 <= direnc_mesafe < DESTEK_DIRENC_MESAFE
-        
+
         pivot_highs, pivot_lows = pivot_noktalari_bul(df_1h, lookback=5)
         trend_tip, _ = trend_cizgisi_analiz(pivot_highs, pivot_lows)
-        mum_yon, mum_sebep = mum_yapisi(df_15m)
-        
+        # ✅ Repaint düzeltmesi: sadece kapanmış mumlar
+        mum_yon, mum_sebep = mum_yapisi(df_15m.iloc[:-1])
+
         mfi = ta.volume.money_flow_index(high=df_1h['h'], low=df_1h['l'], close=df_1h['c'], volume=df_1h['v'], window=14).iloc[-1]
         cmf = ta.volume.chaikin_money_flow(high=df_1h['h'], low=df_1h['l'], close=df_1h['c'], volume=df_1h['v'], window=20).iloc[-1]
-        
+
         son3_hacim_1h = df_1h['v'].iloc[-3:].mean()
         ort20_hacim_1h = df_1h['v'].iloc[-20:].mean()
         hacim_oran = son3_hacim_1h / ort20_hacim_1h if ort20_hacim_1h > 0 else 0
         ema9 = ta.trend.ema_indicator(df_1h['c'], window=9).iloc[-1]
         fiyat_ema9_fark = ((anlik_fiyat - ema9) / ema9) * 100
-        
+
         ob_analiz = orderbook_analiz(symbol)
         funding_sonuc = funding_analiz(symbol)
         vp_analiz = volume_profile_analiz(df_1h)
         mtf = mtf_analiz(symbol)
         likidite = likidite_avi_tespit(symbol, df_15m, destekler, direncler)
-        
+
         if hacim_oran < HACIM_ESIK: return None, {"sebep": f"Hacim Zayıf ({hacim_oran:.2f})"}, 0
 
         long_puan = 0; short_puan = 0
         long_sebep = []; short_sebep = []
-        
+
         if formasyon_yon == "LONG": long_puan += 4; long_sebep.append(f"Formasyon: {formasyon_sebep}")
         elif formasyon_yon == "SHORT": short_puan += 4; short_sebep.append(f"Formasyon: {formasyon_sebep}")
-        
+
         if trend_tip == "YUKSELEN": long_puan += 2; long_sebep.append("Yükselen kanal")
         elif trend_tip == "ALCALAN": short_puan += 2; short_sebep.append("Alçalan kanal")
-        
+
         if mum_yon == "LONG": long_puan += 3; long_sebep.append(f"Mum: {mum_sebep}")
         elif mum_yon == "SHORT": short_puan += 3; short_sebep.append(f"Mum: {mum_sebep}")
-        
+
         if destege_yakin and not dirence_yakin: long_puan += 2; long_sebep.append("Destek")
         if dirence_yakin and not destege_yakin: short_puan += 2; short_sebep.append("Direnç")
-        
+
         if mfi > MFI_ESIK_AL: long_puan += 1
         if mfi < MFI_ESIK_SAT: short_puan += 1
         if cmf > CMF_ESIK: long_puan += 1
         if cmf < -CMF_ESIK: short_puan += 1
         if hacim_oran > 1.3: long_puan += 1; short_puan += 1
-        
+
         if ob_analiz:
             if ob_analiz['baski'] == "ALIM": long_puan += 2; long_sebep.append("OB Alım")
             elif ob_analiz['baski'] == "SATIM": short_puan += 2; short_sebep.append("OB Satım")
             if ob_analiz['alim_duvari']: long_puan += 3; long_sebep.append("OB Alım Duvarı")
             if ob_analiz['satim_duvari']: short_puan += 3; short_sebep.append("OB Satım Duvarı")
-        
+
         if funding_sonuc:
             if funding_sonuc['asiri_long']: short_puan += 2; short_sebep.append("Funding aşırı long")
             elif funding_sonuc['asiri_short']: long_puan += 2; long_sebep.append("Funding aşırı short")
-        
+
         if vp_analiz and vp_analiz.get('yakin_hacim_tip'):
             if vp_analiz['yakin_hacim_tip'] == "DESTEK" and vp_analiz['yakin_hacim_mesafe'] < 1.0: long_puan += 2; long_sebep.append("VP destek")
             elif vp_analiz['yakin_hacim_tip'] == "DIRENC" and vp_analiz['yakin_hacim_mesafe'] < 1.0: short_puan += 2; short_sebep.append("VP direnç")
-        
+
         if mtf:
             if mtf['uyum'] == "GUCLU_LONG": long_puan += 3; long_sebep.append("MTF güçlü LONG")
             elif mtf['uyum'] == "GUCLU_SHORT": short_puan += 3; short_sebep.append("MTF güçlü SHORT")
-        
+
         if likidite:
             if likidite['yon'] == "LONG": long_puan += 4; long_sebep.append("🎣 Likidite avı")
             elif likidite['yon'] == "SHORT": short_puan += 4; short_sebep.append("🎣 Likidite avı")
-        
+
         if fiyat_ema9_fark > 2.0: long_puan -= 3
         if fiyat_ema9_fark < -2.0: short_puan -= 3
 
-        gun_basi_fiyat = df_1h['c'].iloc[0] if len(df_1h) >= 24 else anlik_fiyat
+        # ✅ Gerçek 24 saatlik değişim (25 mum önce)
+        gun_basi_fiyat = df_1h['c'].iloc[-25] if len(df_1h) >= 25 else anlik_fiyat
         son_24s_degisim = ((anlik_fiyat - gun_basi_fiyat) / gun_basi_fiyat) * 100
         if son_24s_degisim > 25.0:
             long_puan -= 10
@@ -608,20 +587,20 @@ def coin_puan_hesapla(symbol):
 
         fiyat_ema50_ustunde = anlik_fiyat > ema50_1h
         if fiyat_ema50_ustunde:
-            short_puan -= 3 
+            short_puan -= 3
             short_sebep.append("(EMA50 Üstü - Short Zayıf)")
         else:
             long_puan -= 3
             long_sebep.append("(EMA50 Altı - Long Zayıf)")
 
         rsi_15m = ta.momentum.rsi(df_15m['c'], window=14).iloc[-1]
-        
+
         if anlik_fiyat > ema50_1h and rsi_15m > 70:
             long_puan -= 8
             long_sebep.append("(Aşırı Alım Bölgesi - Long Cezalı)")
             short_puan += 4
             short_sebep.append("(Dönüş Beklentisi - Short Primli)")
-            
+
         if anlik_fiyat < ema50_1h and rsi_15m < 30:
             short_puan -= 8
             short_sebep.append("(Aşırı Satım Bölgesi - Short Cezalı)")
@@ -647,27 +626,29 @@ def coin_puan_hesapla(symbol):
         detay["long_puan"] = long_puan; detay["short_puan"] = short_puan
         detay["piyasa_yon"] = piyasa_yon
         anlik_baraj = get_dinamik_min_puan(testere)
-        
-        if (long_puan >= anlik_baraj and long_puan > short_puan and mum_yesil) or \
-           (short_puan >= anlik_baraj and short_puan > long_puan and mum_kirmizi):
-            KILITLI_ADAYLAR[symbol] = time.time()
-        
+
+        if long_puan >= anlik_baraj and long_puan > short_puan and mum_yesil:
+            KILITLI_ADAYLAR[symbol] = (time.time(), "LONG")
+        elif short_puan >= anlik_baraj and short_puan > long_puan and mum_kirmizi:
+            KILITLI_ADAYLAR[symbol] = (time.time(), "SHORT")
+
         if long_puan >= anlik_baraj and long_puan > short_puan:
             if mum_yesil:
                 detay["sinyal_skoru"] = long_puan; detay["aciklama"] = " + ".join(long_sebep) + " + Mum Onayı"; detay["sebep"] = f"TREND LONG | L:{long_puan} S:{short_puan}"
                 return "LONG", detay, long_puan
             else: return None, {"sebep": "LONG - Mum Onayı Yok"}, 0
-        
+
         if short_puan >= anlik_baraj and short_puan > long_puan:
             if mum_kirmizi:
                 detay["sinyal_skoru"] = short_puan; detay["aciklama"] = " + ".join(short_sebep) + " + Mum Onayı"; detay["sebep"] = f"TREND SHORT | L:{long_puan} S:{short_puan}"
                 return "SHORT", detay, short_puan
             else: return None, {"sebep": "SHORT - Mum Onayı Yok"}, 0
-        
+
         detay["sebep"] = f"L:{long_puan} S:{short_puan} (Baraj:{anlik_baraj})"
         return None, detay, 0
     except Exception as e: return None, {"hata": str(e)}, 0
 
+# ==================== TELEGRAM ====================
 def telegram_direkt_gonder(mesaj, deneme=3):
     if not TELEGRAM_TOKEN or not CHAT_ID: return False
     for i in range(deneme):
@@ -715,6 +696,7 @@ def kuyruk_worker():
         except: pass
         time.sleep(30)
 
+# ==================== EMİR YARDIMCILARI ====================
 def market_kapat(symbol, miktar, yon):
     kapat_yon = 'sell' if yon == 'LONG' else 'buy'
     try:
@@ -732,21 +714,34 @@ def tum_emirleri_iptal(symbol):
 
 def sayaci_artir(basarili_mi):
     with state_lock:
-        if basarili_mi: 
+        if basarili_mi:
             ANALITIK["basarili_islem_sayisi"] = int(ANALITIK.get("basarili_islem_sayisi", 0)) + 1
             ANALITIK["ardisik_kazanc"] = int(ANALITIK.get("ardisik_kazanc", 0)) + 1
-            ANALITIK["ardisik_zarar"] = 0 
-        else: 
+            ANALITIK["ardisik_zarar"] = 0
+        else:
             ANALITIK["basarisiz_islem_sayisi"] = int(ANALITIK.get("basarisiz_islem_sayisi", 0)) + 1
-            ANALITIK["ardisik_kazanc"] = 0 
+            ANALITIK["ardisik_kazanc"] = 0
             ANALITIK["ardisik_zarar"] = int(ANALITIK.get("ardisik_zarar", 0)) + 1
         ANALITIK["son_islem_zamani"] = time.time()
     hafizayi_kaydet()
 
+def islem_kaydi_ekle(symbol, bilgi, cikis_fiyati, net_pnl, neden):
+    """✅ Her kapanan işlemi egitim_verileri içine yazar (son N kayıt)."""
+    with state_lock:
+        liste = ANALITIK.setdefault("egitim_verileri", [])
+        liste.append({
+            "symbol": symbol, "yon": bilgi.get("yon"), "giris": bilgi.get("giris_fiyati"),
+            "cikis": cikis_fiyati, "pnl": round(float(net_pnl), 6), "neden": neden,
+            "puan": bilgi.get("sinyal_skoru", 0), "sebep": str(bilgi.get("sebep", ""))[:120],
+            "giris_zamani": bilgi.get("giris_zamani"), "cikis_zamani": time.time()
+        })
+        if len(liste) > EGITIM_VERISI_LIMIT:
+            del liste[:len(liste) - EGITIM_VERISI_LIMIT]
+
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI (TERS İŞLEM - v45.0)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nPiyasa Rejimi: TERS İŞLEM\nRisk: %20")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI (TERS İŞLEM - v45.1)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nPiyasa Rejimi: TERS İŞLEM\nRisk: %20")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -756,7 +751,7 @@ def baslangic_temizligi():
         except: pass
 
 def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", detay={}):
-    global AKTIF_SISTEMLER, SIMULE_BAKIYE
+    global SIMULE_BAKIYE
     try:
         try:
             ob = exchange.fetch_order_book(symbol, limit=5)
@@ -769,88 +764,111 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         except Exception as e:
             print(f"  ⚠️ Spread kontrol hatası ({symbol}): {e}", flush=True)
             return False
-            
+
         toplam_bakiye = bakiye_al()
         serbest = toplam_bakiye
-        
+
         if not SIMULASYON_MODU:
             bakiye = exchange.fetch_balance()
             serbest = float(bakiye.get('free', {}).get('USDT', 0))
             exchange.set_leverage(KALDIRAC, symbol)
-        
+
         market = exchange.market(symbol)
         contract_size = float(market.get('contractSize', 1.0))
-        
+
         hedef_marj = toplam_bakiye * POZISYON_MARJ
         marj = min(hedef_marj, serbest)
         if marj < 1.0: return False
-        
+
         hesaplanan = (marj * KALDIRAC) / anlik_fiyat / contract_size
         min_miktar = float(market['limits']['amount']['min'] or 1.0)
         if hesaplanan < min_miktar:
             zorlanan = (min_miktar * anlik_fiyat * contract_size) / KALDIRAC
             if zorlanan > hedef_marj * 1.5: return False
-        
+
         miktar = float(exchange.amount_to_precision(symbol, max(hesaplanan, min_miktar)))
         gercek_marj = (miktar * anlik_fiyat * contract_size) / KALDIRAC
         if gercek_marj > hedef_marj * 1.5: return False
-        
+
         ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
         df_15m = pd.DataFrame(ohlcv_15m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         atr = ta.volatility.average_true_range(df_15m['h'], df_15m['l'], df_15m['c'], window=14).iloc[-1]
         atr_percent = (atr / anlik_fiyat) * 100
-        
-        base_sl = 1.5  
-        
+
+        base_sl = 1.5
         if atr_percent > 1.5:
-            base_sl = atr_percent * 0.7 
-            
+            base_sl = atr_percent * 0.7
         if base_sl < 1.0: base_sl = 1.0
-        if base_sl > 2.5: base_sl = 2.5 
-        
-        base_tp = base_sl * 2.0 
-        
+        if base_sl > 2.5: base_sl = 2.5
+
+        base_tp = base_sl * 2.0
         if base_tp > 5.0: base_tp = 5.0
-        
+
         if yon == "LONG":
             tp = anlik_fiyat * (1 + base_tp / 100)
             sl = anlik_fiyat * (1 - base_sl / 100)
         else:
             tp = anlik_fiyat * (1 - base_tp / 100)
             sl = anlik_fiyat * (1 + base_sl / 100)
-        
+
         if not SIMULASYON_MODU:
             islem_y = 'buy' if yon == 'LONG' else 'sell'
-            exchange.create_order(symbol, 'limit', islem_y, miktar, anlik_fiyat)
-            time.sleep(1.0)
-            
             kapat_yon = 'sell' if yon == 'LONG' else 'buy'
+            emir = exchange.create_order(symbol, 'limit', islem_y, miktar, anlik_fiyat)
+
+            # ✅ Giriş emrinin dolmasını bekle
+            dolan = 0.0
+            for _ in range(10):
+                time.sleep(1.0)
+                try:
+                    o = exchange.fetch_order(emir['id'], symbol)
+                    dolan = float(o.get('filled') or 0)
+                    if o.get('status') == 'closed':
+                        break
+                except Exception:
+                    pass
+            else:
+                try: exchange.cancel_order(emir['id'], symbol)
+                except Exception: pass
+                try:
+                    o = exchange.fetch_order(emir['id'], symbol)
+                    dolan = float(o.get('filled') or 0)
+                except Exception:
+                    pass
+            if dolan <= 0:
+                print(f"  ⏭️  {symbol} giriş emri dolmadı, iptal.", flush=True)
+                return False
+            miktar = float(exchange.amount_to_precision(symbol, dolan))
+            gercek_marj = (miktar * anlik_fiyat * contract_size) / KALDIRAC
+
             try: exchange.create_order(symbol, 'limit', kapat_yon, miktar, tp, {'reduceOnly': True})
-            except: pass
-            
-            try: exchange.create_order(symbol, 'market', kapat_yon, miktar, None, {'stopPrice': sl, 'reduceOnly': True})
-            except Exception as e: 
+            except Exception as e: print(f"TP emri hatası: {e}", flush=True)
+
+            try:
+                exchange.create_order(symbol, 'market', kapat_yon, miktar, None, {'stopLossPrice': sl, 'reduceOnly': True})
+            except Exception as e:
                 print(f"Stop emri hatası: {e}", flush=True)
+                tum_emirleri_iptal(symbol)
                 market_kapat(symbol, miktar, yon)
                 return False
         else:
             giris_komisyonu = (anlik_fiyat * miktar * contract_size) * KOMISYON_ORANI
             with state_lock:
                 SIMULE_BAKIYE -= giris_komisyonu
-        
+
         with state_lock:
             AKTIF_SISTEMLER[symbol] = {
                 "giris_fiyati": anlik_fiyat, "yon": yon, "giris_zamani": time.time(),
                 "sebep": sebep, "tp": tp, "sl": sl, "marj": gercek_marj,
-                "miktar": miktar, "contract_size": contract_size, 
+                "miktar": miktar, "contract_size": contract_size,
                 "sinyal_skoru": sinyal_skoru, "onceki_roe": 0.0, "en_yuksek_roe": 0.0
             }
-        
+            islem_no = len(AKTIF_SISTEMLER)
+
         hafizayi_kaydet()
-        islem_no = len(AKTIF_SISTEMLER)
         tp_mesafe_yuzde = abs(tp - anlik_fiyat) / anlik_fiyat * 100
         sl_mesafe_yuzde = abs(sl - anlik_fiyat) / anlik_fiyat * 100
-        
+
         mod_str = "SİMÜLASYON" if SIMULASYON_MODU else "CANLI"
         mesaj = (
             f"🏆 EN İYİ SİNYAL ({islem_no}. İşlem) [{mod_str} - TERS]\n"
@@ -870,38 +888,44 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
         print(f"  ⚠️ Pozisyon {symbol}: {e}", flush=True)
         return False
 
+def kaybeden_coin_kaydet_locked(symbol):
+    """state_lock altında çağrılmalı."""
+    if symbol not in KAYBEDEN_COINLER:
+        KAYBEDEN_COINLER[symbol] = {"sayi": 1, "son_zaman": time.time()}
+    else:
+        KAYBEDEN_COINLER[symbol]["sayi"] = KAYBEDEN_COINLER[symbol].get("sayi", 0) + 1
+        KAYBEDEN_COINLER[symbol]["son_zaman"] = time.time()
+
 def simule_pozisyon_kapat(symbol, bilgi, anlik_fiyat, kapanis_nedeni):
-    global SIMULE_BAKIYE, KAYBEDEN_COINLER
+    global SIMULE_BAKIYE
     yon = bilgi.get("yon", "LONG")
     miktar = float(bilgi.get("miktar", 0))
     giris = float(bilgi.get("giris_fiyati", 0))
     contract_size = float(bilgi.get("contract_size", 1.0))
-    
+
     if yon == "LONG": pnl = (anlik_fiyat - giris) * miktar * contract_size
     else: pnl = (giris - anlik_fiyat) * miktar * contract_size
-    
+
     cikis_komisyonu = (anlik_fiyat * miktar * contract_size) * KOMISYON_ORANI
     net_pnl = pnl - cikis_komisyonu
-    
+
     with state_lock:
+        # ✅ Başka thread (ör. /kapat) zaten kapattıysa çift işlem yapma
+        if symbol not in AKTIF_SISTEMLER:
+            return
+        del AKTIF_SISTEMLER[symbol]
         SIMULE_BAKIYE += net_pnl
-        if symbol in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[symbol]
-        if kapanis_nedeni == "TP": 
+        if kapanis_nedeni == "TP":
             COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_TP), "son_yon": yon}
-            if symbol in KAYBEDEN_COINLER: del KAYBEDEN_COINLER[symbol]
-        else: 
+            KAYBEDEN_COINLER.pop(symbol, None)
+        else:
             COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_SL), "son_yon": yon}
-            if symbol not in KAYBEDEN_COINLER:
-                KAYBEDEN_COINLER[symbol] = {"sayi": 1, "son_zaman": time.time()}
-            else:
-                KAYBEDEN_COINLER[symbol]["sayi"] = KAYBEDEN_COINLER[symbol].get("sayi", 0) + 1
-                KAYBEDEN_COINLER[symbol]["son_zaman"] = time.time()
-                
+            kaybeden_coin_kaydet_locked(symbol)
         guncel_bakiye = SIMULE_BAKIYE
-    
+
+    islem_kaydi_ekle(symbol, bilgi, anlik_fiyat, net_pnl, kapanis_nedeni)
     sayaci_artir(kapanis_nedeni == "TP")
-    hafizayi_kaydet()
-    
+
     if kapanis_nedeni == "TP":
         telegram_kritik(f"💰 SİMÜLASYON TP\n📌 {symbol} {yon}\n💵 Net PnL: +{net_pnl:.4f} USDT\n🏦 Yeni Bakiye: {guncel_bakiye:.2f}")
         print(f"  💰 [SİMÜLASYON TP] {symbol} | Net PnL: {net_pnl:.4f}", flush=True)
@@ -910,24 +934,26 @@ def simule_pozisyon_kapat(symbol, bilgi, anlik_fiyat, kapanis_nedeni):
         print(f"  🛑 [SİMÜLASYON SL] {symbol} | Net PnL: {net_pnl:.4f}", flush=True)
 
 def manuel_sl_tp_kontrol(aktif_borsa_map):
-    global AKTIF_SISTEMLER
     with state_lock: kopya = list(AKTIF_SISTEMLER.items())
-    
+
     for symbol, bilgi in kopya:
         if not SIMULASYON_MODU and symbol not in aktif_borsa_map: continue
-        
+
         try:
             ticker = exchange.fetch_ticker(symbol)
             anlik = float(ticker['last'])
         except: continue
-        
+
+        with state_lock:
+            if symbol not in AKTIF_SISTEMLER: continue
+
         yon = bilgi.get("yon", "LONG")
         sl = float(bilgi.get("sl", 0))
         tp = float(bilgi.get("tp", 0))
-        
+
         sl_tetiklendi = (yon == "LONG" and anlik <= sl) or (yon == "SHORT" and anlik >= sl)
         tp_tetiklendi = (yon == "LONG" and anlik >= tp) or (yon == "SHORT" and anlik <= tp)
-        
+
         if SIMULASYON_MODU:
             if sl_tetiklendi:
                 simule_pozisyon_kapat(symbol, bilgi, anlik, "SL")
@@ -935,62 +961,127 @@ def manuel_sl_tp_kontrol(aktif_borsa_map):
                 simule_pozisyon_kapat(symbol, bilgi, anlik, "TP")
         else:
             miktar = float(bilgi.get("miktar", 0))
-            if sl_tetiklendi:
+            if sl_tetiklendi or tp_tetiklendi:
+                neden = "SL" if sl_tetiklendi else "TP"
                 tum_emirleri_iptal(symbol)
                 if market_kapat(symbol, miktar, yon):
                     with state_lock:
-                        if symbol in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[symbol]
-                        COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_SL), "son_yon": yon}
-                    sayaci_artir(False); hafizayi_kaydet()
-                    telegram_kritik(f"🛑 SL (Borsa)\n📌 {symbol} {yon}")
-            elif tp_tetiklendi:
-                tum_emirleri_iptal(symbol)
-                if market_kapat(symbol, miktar, yon):
-                    with state_lock:
-                        if symbol in AKTIF_SISTEMLER: del AKTIF_SISTEMLER[symbol]
-                        COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + COOLDOWN_TP), "son_yon": yon}
-                    sayaci_artir(True); hafizayi_kaydet()
-                    telegram_kritik(f"💰 TP (Borsa)\n📌 {symbol} {yon}")
+                        if symbol not in AKTIF_SISTEMLER: continue
+                        del AKTIF_SISTEMLER[symbol]
+                        sure = COOLDOWN_SL if neden == "SL" else COOLDOWN_TP
+                        COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + sure), "son_yon": yon}
+                        if neden == "SL": kaybeden_coin_kaydet_locked(symbol)
+                        else: KAYBEDEN_COINLER.pop(symbol, None)
+                    giris = float(bilgi.get("giris_fiyati", 0))
+                    cs = float(bilgi.get("contract_size", 1.0))
+                    pnl = ((anlik - giris) if yon == "LONG" else (giris - anlik)) * miktar * cs
+                    islem_kaydi_ekle(symbol, bilgi, anlik, pnl, neden)
+                    sayaci_artir(neden == "TP")
+                    emoji = "🛑" if neden == "SL" else "💰"
+                    telegram_kritik(f"{emoji} {neden} (Borsa)\n📌 {symbol} {yon}")
 
+def borsa_senkron(aktif_borsa_map):
+    """✅ Canlı mod: borsada kapanmış (TP/SL dolmuş) ama botta açık görünen pozisyonları temizler."""
+    with state_lock: kopya = list(AKTIF_SISTEMLER.items())
+    for symbol, bilgi in kopya:
+        if symbol in aktif_borsa_map: continue
+        if time.time() - float(bilgi.get("giris_zamani", 0)) < 60: continue
+        try:
+            anlik = float(exchange.fetch_ticker(symbol)['last'])
+        except Exception:
+            continue
+        yon = bilgi.get("yon", "LONG")
+        giris = float(bilgi.get("giris_fiyati", 0))
+        miktar = float(bilgi.get("miktar", 0))
+        cs = float(bilgi.get("contract_size", 1.0))
+        pnl = ((anlik - giris) if yon == "LONG" else (giris - anlik)) * miktar * cs
+        neden = "TP" if pnl > 0 else "SL"
+        tum_emirleri_iptal(symbol)
+        with state_lock:
+            if symbol not in AKTIF_SISTEMLER: continue
+            del AKTIF_SISTEMLER[symbol]
+            sure = COOLDOWN_TP if neden == "TP" else COOLDOWN_SL
+            COIN_COOLDOWNLAR[symbol] = {"zaman": float(time.time() + sure), "son_yon": yon}
+            if neden == "SL": kaybeden_coin_kaydet_locked(symbol)
+            else: KAYBEDEN_COINLER.pop(symbol, None)
+        islem_kaydi_ekle(symbol, bilgi, anlik, pnl, neden)
+        sayaci_artir(neden == "TP")
+        telegram_kritik(f"ℹ️ {neden} (Borsada kapanmış, senkronize edildi)\n📌 {symbol} {yon}")
+
+def izleyici_worker():
+    """✅ SL/TP takibi ana döngüden bağımsız: kill-switch, yenilgi freni, /durdur ve tarama süresinden etkilenmez."""
+    while True:
+        try:
+            borsa_map = {}
+            basarili = True
+            if not SIMULASYON_MODU:
+                try:
+                    for p in exchange.fetch_positions():
+                        k = float(p.get('contracts', 0) or p.get('size', 0) or 0)
+                        if k > 0: borsa_map[p['symbol']] = p
+                except Exception as e:
+                    basarili = False
+                    print(f"İzleyici pozisyon hatası: {e}", flush=True)
+            if basarili:
+                if not SIMULASYON_MODU: borsa_senkron(borsa_map)
+                manuel_sl_tp_kontrol(borsa_map)
+        except Exception as e:
+            print(f"⚠️ İzleyici: {e}", flush=True)
+        time.sleep(IZLEYICI_ARALIK)
+
+# ==================== ANA DÖNGÜ ====================
 def ana_dongu():
-    global GUNLUK_BASLANGIC_BAKIYE, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI
-    print(f"🚀 [BAŞLANGIÇ] v45.0 (TERS İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
-    
+    global GUNLUK_BASLANGIC_BAKIYE, GUNLUK_BASLANGIC_ZAMANI, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI, YENILGI_BEKLEME_BITIS
+    print(f"🚀 [BAŞLANGIÇ] v45.1 (TERS İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
-    
+    GUNLUK_BASLANGIC_ZAMANI = time.time()
+
     if not AKTIF_SISTEMLER:
         ANALITIK["ardisik_kazanc"] = 0; ANALITIK["ardisik_zarar"] = 0; ANALITIK["son_islem_zamani"] = time.time()
         hafizayi_kaydet()
-    
+
     baslangic_temizligi()
     dinamik_liste_guncelle(zorla=True)
     dongu = 0
-    
+
     while True:
         try:
             if not BOT_CALISIYOR_MU: time.sleep(5); continue
-            
+
+            # ✅ Günlük bakiye referansı her 24 saatte sıfırlanır
+            if time.time() - GUNLUK_BASLANGIC_ZAMANI > 24 * 3600:
+                GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
+                GUNLUK_BASLANGIC_ZAMANI = time.time()
+
             if KILL_SWITCH_AKTIF:
                 if time.time() > KILL_SWITCH_BITIS_ZAMANI:
                     KILL_SWITCH_AKTIF = False
                     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
+                    GUNLUK_BASLANGIC_ZAMANI = time.time()
                     print(f"  ✅ KILL-SWITCH SÜRESİ DOLDU.", flush=True)
                     telegram_kritik("✅ Kill-Switch süresi doldu.")
                 else:
                     time.sleep(10)
                     continue
-            
+
+            # ✅ Yenilgi freni: bloklamadan, zaman damgası ile
             if ANALITIK.get("ardisik_zarar", 0) >= YENILGI_SERISI_LIMIT:
-                print(f"  🛑 YENİLGİ SERİSİ FRENİ: 15 dk bekleniyor...", flush=True)
-                time.sleep(YENILGI_SERISI_BEKLEME)
-                with state_lock: ANALITIK["ardisik_zarar"] = 0 
+                if YENILGI_BEKLEME_BITIS == 0:
+                    YENILGI_BEKLEME_BITIS = time.time() + YENILGI_SERISI_BEKLEME
+                    print(f"  🛑 YENİLGİ SERİSİ FRENİ: 15 dk bekleniyor...", flush=True)
+                if time.time() < YENILGI_BEKLEME_BITIS:
+                    time.sleep(5)
+                    continue
+                with state_lock: ANALITIK["ardisik_zarar"] = 0
+                YENILGI_BEKLEME_BITIS = 0
                 hafizayi_kaydet()
                 continue
-            
+
             dongu += 1
             print(f"\n🔄 [DÖNGÜ #{dongu}] {datetime.now().strftime('%H:%M:%S')}", flush=True)
             dinamik_liste_guncelle()
-            
+
             su_an = bakiye_al()
             if GUNLUK_BASLANGIC_BAKIYE and GUNLUK_BASLANGIC_BAKIYE > 0:
                 gk = (su_an - GUNLUK_BASLANGIC_BAKIYE) / GUNLUK_BASLANGIC_BAKIYE
@@ -998,53 +1089,46 @@ def ana_dongu():
                 if gk <= -GUNLUK_ZARAR_LIMIT and not KILL_SWITCH_AKTIF:
                     KILL_SWITCH_AKTIF = True; KILL_SWITCH_BITIS_ZAMANI = time.time() + 3600
                     telegram_kritik(f"🛑 KILL-SWITCH TETİKLENDİ (Günlük %5 Zarar)")
-            
-            pozisyon_cekme_basarili = False
-            aktif_borsa_map = {}
+
             aktif_semboller_seti = set()
-            
+
             try:
                 if not SIMULASYON_MODU:
                     raw_pos = exchange.fetch_positions()
                     for p in raw_pos:
                         k = float(p.get('contracts', 0) or p.get('size', 0) or 0)
                         if k > 0:
-                            aktif_borsa_map[p['symbol']] = p
                             aktif_semboller_seti.add(p['symbol'])
                 else:
                     with state_lock:
                         aktif_semboller_seti = set(AKTIF_SISTEMLER.keys())
-                
-                pozisyon_cekme_basarili = True  
-                
+
                 if aktif_semboller_seti:
                     print(f"📌 Açık Pozisyonlar: {list(aktif_semboller_seti)}", flush=True)
                     for sym in list(aktif_semboller_seti):
                         try:
-                            bilgi = AKTIF_SISTEMLER.get(sym, {})
+                            with state_lock:
+                                bilgi = dict(AKTIF_SISTEMLER.get(sym, {}))
                             yon = bilgi.get("yon", "LONG")
                             giris = float(bilgi.get("giris_fiyati", 0))
                             miktar = float(bilgi.get("miktar", 0))
                             cs = float(bilgi.get("contract_size", 1.0))
-                            
+
                             tick = exchange.fetch_ticker(sym)
                             anlik = float(tick['last'])
-                            
+
                             if yon == "LONG": pnl = (anlik - giris) * miktar * cs
                             else: pnl = (giris - anlik) * miktar * cs
-                            
+
                             durum = "🟢" if pnl >= 0 else "🔴"
-                            print(f"     {durum} {sym.replace('/USDT:USDT', '')} | {yon} (5x) | Giriş: {giris:.4f} | Anlık: {anlik:.4f} | PnL: {pnl:+.4f}", flush=True)
+                            print(f"     {durum} {sym.replace('/USDT:USDT', '')} | {yon} ({KALDIRAC}x) | Giriş: {giris:.4f} | Anlık: {anlik:.4f} | PnL: {pnl:+.4f}", flush=True)
                         except: pass
                 else:
                     print(f"📌 Açık: YOK", flush=True)
-                    
+
             except Exception as e:
                 print(f"Pozisyon çekme hatası: {e}", flush=True)
-            
-            if pozisyon_cekme_basarili:
-                manuel_sl_tp_kontrol(aktif_borsa_map)
-            
+
             limit_dolu = len(aktif_semboller_seti) >= MAKS_POZISYON
             if limit_dolu:
                 print(f"  ⛔ Limit dolu ({len(aktif_semboller_seti)}/{MAKS_POZISYON})", flush=True)
@@ -1059,80 +1143,80 @@ def ana_dongu():
             adaylar = []
             anlik_baraj = get_dinamik_min_puan()
             print(f"  ⚖️  Anlık Puan Barajı: {anlik_baraj}", flush=True)
-            
-            for symbol in DINAMIK_LISTE:
+
+            for symbol in list(DINAMIK_LISTE):
                 if not BOT_CALISIYOR_MU: break
                 if symbol in aktif_semboller_seti: continue
-                
+
                 with state_lock:
                     cd = COIN_COOLDOWNLAR.get(symbol)
-                    if cd:
-                        z = cd.get("zaman", 0) if isinstance(cd, dict) else float(cd)
-                        if z > time.time(): continue
-                
+                if cd:
+                    z = cd.get("zaman", 0) if isinstance(cd, dict) else float(cd)
+                    if z > time.time(): continue
+
                 karar, detay, puan = coin_puan_hesapla(symbol)
                 sym_kisa = symbol.replace('/USDT:USDT', '')
-                
+
                 if karar is not None and puan >= detay.get('baraj', anlik_baraj):
                     adaylar.append((symbol, karar, detay, puan))
                     print(f"  ✅ {sym_kisa}: {karar} | Puan: {puan}", flush=True)
                 else:
                     msg = detay.get('sebep') or detay.get('hata', '')
                     print(f"  ⏭️  {sym_kisa}: Puan {puan}/{anlik_baraj} | {msg[:60]}", flush=True)
-            
+
             if not adaylar:
                 print(f"  📭 Uygun aday yok", flush=True)
                 time.sleep(10)
                 continue
-            
+
             adaylar.sort(key=lambda x: x[3], reverse=True)
             en_iyiler = adaylar[:TOP_N_ADAY]
-            
+
             print(f"\n🏆 2. AŞAMA: EN İYİ ADAYLAR", flush=True)
             for i, (sym, karar, detay, puan) in enumerate(en_iyiler, 1):
                 print(f"     {i}. {sym.replace('/USDT:USDT','')}: {karar} | Puan: {puan}", flush=True)
-            
-            if not limit_dolu:
-                for sym, karar, detay, puan in en_iyiler:
-                    if len(aktif_semboller_seti) >= MAKS_POZISYON: break
-                    if sym in aktif_semboller_seti: continue
-                    ticker = exchange.fetch_ticker(sym)
-                    anlik_fiyat = float(ticker['last'])
-                    
-                    # ✅ TERS İŞLEM MANTIĞI
-                    ters_karar = "SHORT" if karar == "LONG" else "LONG"
-                    
-                    if pozisyon_ac(sym, ters_karar, anlik_fiyat, detay.get('sebep', '') + " (TERS)", puan, detay.get('aciklama', '') + " (TERS)", detay):
-                        aktif_semboller_seti.add(sym)
-            
+
+            for sym, karar, detay, puan in en_iyiler:
+                if len(aktif_semboller_seti) >= MAKS_POZISYON: break
+                if sym in aktif_semboller_seti: continue
+                ticker = exchange.fetch_ticker(sym)
+                anlik_fiyat = float(ticker['last'])
+
+                # ✅ TERS İŞLEM MANTIĞI
+                ters_karar = "SHORT" if karar == "LONG" else "LONG"
+
+                if pozisyon_ac(sym, ters_karar, anlik_fiyat, detay.get('sebep', '') + " (TERS)", puan, detay.get('aciklama', '') + " (TERS)", detay):
+                    aktif_semboller_seti.add(sym)
+
         except Exception as e:
             print(f"⚠️ Ana döngü: {e}", flush=True)
             import traceback; traceback.print_exc()
-        
+
         time.sleep(10)
 
+# ==================== TELEGRAM KOMUTLARI ====================
 async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     try:
         total = bakiye_al()
         pos = []
-        
+
         if SIMULASYON_MODU:
             with state_lock:
                 for sym, bilgi in AKTIF_SISTEMLER.items():
                     pos.append({
-                        'symbol': sym, 'side': bilgi['yon'].lower(), 
+                        'symbol': sym, 'side': bilgi['yon'].lower(),
                         'entryPrice': bilgi['giris_fiyati'], 'initialMargin': bilgi['marj'],
                         'leverage': KALDIRAC, 'contracts': bilgi['miktar'], 'cs': bilgi['contract_size'], 'sl': bilgi['sl'], 'tp': bilgi['tp']
                     })
         else:
             pos = [p for p in await asyncio.to_thread(exchange.fetch_positions) if float(p.get('contracts', 0) or p.get('size', 0) or 0) > 0]
-        
+
         bas = int(ANALITIK.get("basarili_islem_sayisi", 0))
         basz = int(ANALITIK.get("basarisiz_islem_sayisi", 0))
         top = bas + basz
         oran = (bas / top * 100) if top > 0 else 0
-        
+
         pos_detay = ""
         toplam_pnl = 0
         if pos:
@@ -1141,43 +1225,45 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 sym = p['symbol'].replace('/USDT:USDT', '')
                 yon = str(p.get('side', '')).upper()
                 giris = float(p.get('entryPrice', 0))
-                
+
                 try:
                     t = await asyncio.to_thread(exchange.fetch_ticker, p['symbol'])
                     guncel = float(t['last'])
                 except: guncel = giris
-                
+
                 miktar = float(p.get('contracts', 0))
                 cs = float(p.get('cs', 1.0)) if SIMULASYON_MODU else 1.0
                 lev = int(p.get('leverage', 1))
-                
+
                 if yon == "LONG": pnl = (guncel - giris) * miktar * cs
                 else: pnl = (giris - guncel) * miktar * cs
                 toplam_pnl += pnl
-                
+
                 roe = (pnl / (giris * miktar * cs)) * 100 * lev if (giris * miktar * cs) > 0 else 0
-                
+
                 emoji = "🟢" if pnl >= 0 else "🔴"
                 sl_tp = f"\n  🛑 SL: `{p.get('sl', 0):.6f}` | 💰 TP: `{p.get('tp', 0):.6f}`" if SIMULASYON_MODU else ""
-                
+
                 pos_detay += (
                     f"\n{emoji} `{sym}` | *{yon}* ({lev}x){sl_tp}\n"
                     f"  Giriş: `{giris}` → Anlık: `{guncel}`\n"
                     f"  Marj: `{float(p.get('initialMargin', 0)):.2f}` | ROE: `%{roe:+.2f}` | PnL: `{pnl:+.3f}`"
                 )
         else: pos_detay = "\n\n📌 Açık pozisyon yok."
-        
+
         liste_str = "\n".join([f"• `{s.replace('/USDT:USDT','')}`" for s in DINAMIK_LISTE[:15]]) if DINAMIK_LISTE else "Boş"
         anlik_baraj = get_dinamik_min_puan()
         ks_durum = "🛑 AKTİF" if KILL_SWITCH_AKTIF else "🟢 KAPALI"
+        calisma = "▶️ ÇALIŞIYOR" if BOT_CALISIYOR_MU else "⏸️ DURDURULDU"
         mod_str = "🧪 SİMÜLASYON (TERS)" if SIMULASYON_MODU else "🔥 CANLI (TERS)"
-        
+
         mesaj = (
-            f"📊 *TREND BOT (v45.0 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v45.1 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
-            f"🛡️ Kill-Switch: `{ks_durum}`"
+            f"🛡️ Kill-Switch: `{ks_durum}`\n"
+            f"⚙️ Durum: `{calisma}`"
             f"{pos_detay}\n\n"
             f"📋 *Coin Havuzu:*\n{liste_str}\n\n"
             f"✅ TP: `{bas}` | ❌ SL: `{basz}`\n"
@@ -1193,89 +1279,110 @@ async def durdur_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     global BOT_CALISIYOR_MU
     BOT_CALISIYOR_MU = False
-    await update.message.reply_text("⏸️ Durduruldu.")
+    await update.message.reply_text("⏸️ Yeni işlem taraması durduruldu (açık pozisyonların SL/TP takibi devam eder). Devam için /baslat")
 
-# ✅ KAPAT KOMUTU: Kârı kasaya ekler ve coini geçici olarak kara listeye alır
+async def baslat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != int(CHAT_ID): return
+    global BOT_CALISIYOR_MU
+    BOT_CALISIYOR_MU = True
+    await update.message.reply_text("▶️ Devam ediyor.")
+
+# ✅ KAPAT KOMUTU: Kârı kasaya ekler ve coini geçici olarak cooldown'a alır
 async def kapat_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
-    global AKTIF_SISTEMLER, SIMULE_BAKIYE
-    
-    hedef_coin = context.args[0].upper() if context.args else None
-    mesaj_bekle = await update.message.edit_text("⏳ Pozisyonlar kapatılıyor ve kârlar kasaya ekleniyor...")
-    
+    global SIMULE_BAKIYE
+
+    hedef_coin = context.args[0].upper().replace('/USDT:USDT', '').replace('/USDT', '') if context.args else None
+    mesaj_bekle = await update.message.reply_text("⏳ Pozisyonlar kapatılıyor ve kârlar kasaya ekleniyor...")
+
     try:
+        with state_lock:
+            hedefler = [(s, dict(b)) for s, b in AKTIF_SISTEMLER.items()
+                        if not hedef_coin or s.replace('/USDT:USDT', '') == hedef_coin]
+
+        if not hedefler:
+            await mesaj_bekle.edit_text("ℹ️ Kapatılacak pozisyon bulunamadı.")
+            return
+
         kapatilan = []
         toplam_net_kar = 0.0
-        
-        with state_lock:
-            silinecekler = [s for s in AKTIF_SISTEMLER.keys() if not hedef_coin or hedef_coin in s]
-            
-            for s in silinecekler:
-                bilgi = AKTIF_SISTEMLER[s]
-                yon = bilgi.get("yon", "LONG")
-                miktar = float(bilgi.get("miktar", 0))
-                giris = float(bilgi.get("giris_fiyati", 0))
-                cs = float(bilgi.get("contract_size", 1.0))
-                
-                try:
-                    ticker = exchange.fetch_ticker(s)
-                    anlik = float(ticker['last'])
-                except:
-                    anlik = giris
-                
+
+        for s, bilgi in hedefler:
+            yon = bilgi.get("yon", "LONG")
+            miktar = float(bilgi.get("miktar", 0))
+            giris = float(bilgi.get("giris_fiyati", 0))
+            cs = float(bilgi.get("contract_size", 1.0))
+
+            try:
+                ticker = await asyncio.to_thread(exchange.fetch_ticker, s)
+                anlik = float(ticker['last'])
+            except Exception:
+                anlik = giris
+
+            if not SIMULASYON_MODU:
+                await asyncio.to_thread(tum_emirleri_iptal, s)
+                ok = await asyncio.to_thread(market_kapat, s, miktar, yon)
+                if not ok:
+                    continue
+
+            net_pnl = 0.0
+            with state_lock:
+                if s not in AKTIF_SISTEMLER:
+                    continue  # izleyici zaten kapatmış
                 if SIMULASYON_MODU:
-                    if yon == "LONG": pnl = (anlik - giris) * miktar * cs
-                    else: pnl = (giris - anlik) * miktar * cs
-                    
-                    cikis_komisyonu = (anlik * miktar * cs) * KOMISYON_ORANI
-                    net_pnl = pnl - cikis_komisyonu
-                    
+                    pnl = ((anlik - giris) if yon == "LONG" else (giris - anlik)) * miktar * cs
+                    net_pnl = pnl - (anlik * miktar * cs) * KOMISYON_ORANI
                     SIMULE_BAKIYE += net_pnl
                     toplam_net_kar += net_pnl
-                else:
-                    tum_emirleri_iptal(s)
-                    market_kapat(s, miktar, yon)
-                
                 del AKTIF_SISTEMLER[s]
-                COIN_COOLDOWNLAR[s] = {"zaman": float(time.time() + (120 * 60)), "son_yon": yon} # 2 saat cooldown
-                kapatilan.append(s.replace('/USDT:USDT', ''))
+                COIN_COOLDOWNLAR[s] = {"zaman": float(time.time() + (120 * 60)), "son_yon": yon}  # 2 saat cooldown
+            islem_kaydi_ekle(s, bilgi, anlik, net_pnl, "MANUEL")
+            kapatilan.append(s.replace('/USDT:USDT', ''))
 
-        hafizayi_kaydet()
-            
+        await asyncio.to_thread(hafizayi_kaydet)
+
+        if not kapatilan:
+            await mesaj_bekle.edit_text("ℹ️ Kapatılan pozisyon yok (zaten kapanmış olabilir veya kapatma başarısız).")
+            return
+
         rapor = "✅ *Kapatılanlar:*\n" + "\n".join([f"• `{s}`" for s in kapatilan])
-        if toplam_net_kar != 0:
-            rapor += f"\n\n💵 *Kasaya Eklenen Net Kâr:* +{toplam_net_kar:.4f} USDT\n🏦 *Yeni Kasa:* {SIMULE_BAKIYE:.2f} USDT"
-            
+        if SIMULASYON_MODU:
+            rapor += f"\n\n💵 *Kasaya Eklenen Net Kâr:* {toplam_net_kar:+.4f} USDT\n🏦 *Yeni Kasa:* {SIMULE_BAKIYE:.2f} USDT"
+
         await mesaj_bekle.edit_text(rapor, parse_mode='Markdown')
-        
+
     except Exception as e:
         await mesaj_bekle.edit_text(f"❌ Kapatma Hatası: {e}")
 
 async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
-    
+
     kuyruk_thread = threading.Thread(target=kuyruk_worker, daemon=True)
     kuyruk_thread.start()
-    
+
     print("⏳ Telegram bağlantısı için 5 saniye bekleniyor...", flush=True)
-    await asyncio.sleep(5) 
-    
+    await asyncio.sleep(5)
+
     app_tg = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     try: requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
     except: pass
-    
+
     app_tg.add_handler(CommandHandler("durum", durum_komutu))
     app_tg.add_handler(CommandHandler("durdur", durdur_komutu))
+    app_tg.add_handler(CommandHandler("baslat", baslat_komutu))
     app_tg.add_handler(CommandHandler("kapat", kapat_komutu))
-    
+
     await app_tg.initialize()
     await app_tg.start()
     await app_tg.updater.start_polling(drop_pending_updates=True)
-    
+
+    izleyici_thread = threading.Thread(target=izleyici_worker, daemon=True)
+    izleyici_thread.start()
+
     t = threading.Thread(target=ana_dongu, daemon=True)
     t.start()
-    
+
     stop = asyncio.Event()
     await stop.wait()
 
