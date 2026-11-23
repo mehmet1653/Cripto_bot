@@ -537,7 +537,12 @@ def coin_puan_hesapla(symbol):
         if kilit:
             kilit_zamani, kilit_yon = kilit
             if time.time() - kilit_zamani < ADAY_KILITLEME_SURESI:
-                return kilit_yon, {"sebep": "Kilitli Aday (Onaylandı)", "mod": "TREND"}, 10
+                # ✅ Kilitli aday da BTC filtresine uyar (önceden tüm filtreleri atlıyordu)
+                piyasa_k = piyasa_yonu_analiz()
+                if (kilit_yon == "LONG" and piyasa_k == "SADECE_SHORT") or (kilit_yon == "SHORT" and piyasa_k == "SADECE_LONG"):
+                    return None, {"sebep": f"Kilitli Aday - BTC filtresi ({piyasa_k})"}, 0
+                return kilit_yon, {"sebep": "Kilitli Aday (Onaylandı)",
+                                   "aciklama": f"Kilitli aday ({kilit_yon}): son 15 dk içinde onaylanmış sinyal", "mod": "TREND"}, 10
             else:
                 KILITLI_ADAYLAR.pop(symbol, None)
 
@@ -873,6 +878,7 @@ def golge_ac(symbol, sinyal_yon, anlik_fiyat, puan):
             "sl_yuzde": round(sl_y, 3), "tp_yuzde": round(tp_y, 3), "puan": puan,
             "btc_trend": rejim["btc_trend"], "btc_24s": rejim["btc_24s"],
             "havuz_etiket": HAVUZ_ETIKET.get(symbol, "?"),
+            "gercek": False,
             "duz": None, "ters": None
         }
         with state_lock:
@@ -881,6 +887,15 @@ def golge_ac(symbol, sinyal_yon, anlik_fiyat, puan):
         print(f"  🔬 [GÖLGE] {symbol} sinyal={sinyal_yon} | BTC24s: {rejim['btc_trend']}", flush=True)
     except Exception as e:
         print(f"  ⚠️ Gölge açma {symbol}: {e}", flush=True)
+
+def golge_gercek_isaretle(symbol):
+    """Bot bu sinyalden gerçekten işlem açtıysa, yeni açılmış gölge kaydını işaretler."""
+    with state_lock:
+        for g in ANALITIK.get("golge_acik", []):
+            if g["symbol"] == symbol and not g.get("gercek") and time.time() - g["zaman"] < 180:
+                g["gercek"] = True
+                return True
+    return False
 
 def golge_kontrol():
     with state_lock:
@@ -959,16 +974,35 @@ def golge_rapor_metni():
     with state_lock:
         biten = list(ANALITIK.get("golge_biten", []))
         acik_sayi = len(ANALITIK.get("golge_acik", []))
+        gercek_liste = [e for e in ANALITIK.get("egitim_verileri", []) if e.get("islem_modu") == MOD_ETIKET]
+
+    def gercek_blok():
+        if not gercek_liste: return "GERÇEK İŞLEMLER: henüz kapanan yok"
+        def ozet(lst):
+            tp = sum(1 for e in lst if e.get("neden") == "TP")
+            sl = sum(1 for e in lst if e.get("neden") == "SL")
+            mn = sum(1 for e in lst if e.get("neden") == "MANUEL")
+            return tp, sl, mn, sum(float(e.get("pnl", 0)) for e in lst)
+        tp, sl, mn, net = ozet(gercek_liste)
+        satir = [f"GERÇEK İŞLEMLER (n={len(gercek_liste)})", f"  TP {tp} | SL {sl} | Manuel {mn} | net {net:+.2f} USDT"]
+        for y in ("LONG", "SHORT"):
+            l = [e for e in gercek_liste if e.get("yon") == y]
+            if l:
+                tp, sl, mn, net = ozet(l)
+                satir.append(f"  {y}: n={len(l)} | TP {tp} SL {sl} | net {net:+.2f} USDT")
+        return "\n".join(satir)
 
     def blok(etiket, kayitlar):
         d = golge_bacak_ozet(kayitlar, "duz"); t = golge_bacak_ozet(kayitlar, "ters")
         if not d or not t: return f"{etiket}: veri yok"
         return (f"{etiket} (n={d['n']})\n"
-                f"  Düz : TP %{d['tp_oran']:.0f} | SL {d['sl']} | ort %{d['ort_net']:+.2f} | kasa/işlem %{d['kasa']:+.2f}\n"
-                f"  Ters: TP %{t['tp_oran']:.0f} | SL {t['sl']} | ort %{t['ort_net']:+.2f} | kasa/işlem %{t['kasa']:+.2f}")
+                f"  Düz : TP %{d['tp_oran']:.0f} | SL {d['sl']} | ort %{d['ort_net']:+.2f} | kasa etkisi %{d['kasa']:+.2f}\n"
+                f"  Ters: TP %{t['tp_oran']:.0f} | SL {t['sl']} | ort %{t['ort_net']:+.2f} | kasa etkisi %{t['kasa']:+.2f}")
 
     satirlar = [f"🔬 GÖLGE TAKİP | biten: {len(biten)} | açık: {acik_sayi}",
-                f"Düz = sinyal yönü, Ters = sinyalin tersi | Bot gerçekte: {MOD_ETIKET} açıyor", "", blok("GENEL", biten), "", "— BTC 24s TRENDİNE GÖRE —"]
+                f"Düz = sinyal yönü, Ters = sinyalin tersi | Bot gerçekte: {MOD_ETIKET} açıyor", "", blok("GÖLGE GENEL (tüm sinyaller)", biten), "", gercek_blok(), "",
+                blok("GÖLGE: sadece botun gerçekte açtığı sinyaller", [k for k in biten if k.get("gercek")]), "",
+                "— BTC 24s TRENDİNE GÖRE —"]
     for tr in ("YUKARI", "ASAGI", "YATAY"):
         satirlar.append(blok(f"BTC {tr}", [k for k in biten if k.get("btc_trend") == tr]))
     satirlar += ["", "— SİNYAL YÖNÜNE GÖRE —"]
@@ -977,6 +1011,7 @@ def golge_rapor_metni():
     satirlar += ["", "— HAVUZ ETİKETİNE GÖRE —"]
     for et in ("DEVAM_YUKARI", "DEVAM_ASAGI", "DONUS_YUKARI", "DONUS_ASAGI", "NOTR"):
         satirlar.append(blok(et, [k for k in biten if k.get("havuz_etiket") == et]))
+    satirlar += ["", "ℹ️ ort = işlem başına net fiyat hareketi (komisyon düşülmüş). Kasa etkisi = bir işlemin tam pozisyonla (5x, %20 marj) kasaya etkisi; aynı anda en fazla 2 işlem açılabildiği için gölgedeki tüm sinyallerin toplamı gerçek kasaya yansımaz."]
     if len(biten) < 30:
         satirlar += ["", "⚠️ n<30: çok erken, sonuca güvenme."]
     return "\n".join(satirlar)
@@ -985,7 +1020,7 @@ def golge_rapor_metni():
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI ({MOD_ETIKET} İŞLEM - v45.3)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nİşlem Yönü: {MOD_ETIKET}\nRisk: %20")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI ({MOD_ETIKET} İŞLEM - v45.4)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nİşlem Yönü: {MOD_ETIKET}\nRisk: %20")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -1271,7 +1306,7 @@ def izleyici_worker():
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, GUNLUK_BASLANGIC_ZAMANI, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI, YENILGI_BEKLEME_BITIS
-    print(f"🚀 [BAŞLANGIÇ] v45.3 ({MOD_ETIKET} İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v45.4 ({MOD_ETIKET} İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
 
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     GUNLUK_BASLANGIC_ZAMANI = time.time()
@@ -1439,6 +1474,7 @@ def ana_dongu():
 
                 if pozisyon_ac(sym, islem_yonu, anlik_fiyat, detay.get('sebep', '') + f" ({MOD_ETIKET})", puan, detay.get('aciklama', '') + f" ({MOD_ETIKET})", detay):
                     aktif_semboller_seti.add(sym)
+                    golge_gercek_isaretle(sym)
 
         except Exception as e:
             print(f"⚠️ Ana döngü: {e}", flush=True)
@@ -1518,7 +1554,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mod_str = f"🧪 SİMÜLASYON ({MOD_ETIKET})" if SIMULASYON_MODU else f"🔥 CANLI ({MOD_ETIKET})"
 
         mesaj = (
-            f"📊 *TREND BOT (v45.3 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v45.4 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
@@ -1565,7 +1601,7 @@ async def export_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "symbol": g.get("symbol"), "sinyal_yon": g.get("sinyal_yon"), "giris": g.get("giris"),
                     "zaman": g.get("zaman"), "sl_yuzde": g.get("sl_yuzde"), "tp_yuzde": g.get("tp_yuzde"),
                     "puan": g.get("puan"), "btc_trend": g.get("btc_trend"), "btc_24s": g.get("btc_24s"),
-                    "havuz_etiket": g.get("havuz_etiket"),
+                    "havuz_etiket": g.get("havuz_etiket"), "gercek_acildi": g.get("gercek", False),
                     "duz_sonuc": duz.get("sonuc"), "duz_net": duz.get("net"),
                     "ters_sonuc": ters.get("sonuc"), "ters_net": ters.get("net")
                 })
