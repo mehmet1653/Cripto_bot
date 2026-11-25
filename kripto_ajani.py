@@ -97,7 +97,8 @@ KARA_LISTE = [
     'INTC/USDT:USDT', 'MSFT/USDT:USDT', 'GOOGL/USDT:USDT',
     'AMZN/USDT:USDT', 'META/USDT:USDT', 'NFLX/USDT:USDT',
     'XAUT/USDT:USDT', 'OPENAI/USDT:USDT', 'MSTR/USDT:USDT',
-    'MUU/USDT:USDT', 'SKHY/USDT:USDT', 'TENCENT/USDT:USDT'
+    'MUU/USDT:USDT', 'SKHY/USDT:USDT', 'TENCENT/USDT:USDT',
+    'CL/USDT:USDT'
 ]
 
 MIN_HACIM_24S = 1_000_000
@@ -1022,7 +1023,7 @@ def golge_rapor_metni():
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI ({MOD_ETIKET} İŞLEM - v45.5)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nİşlem Yönü: {MOD_ETIKET}\nRisk: %20")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI ({MOD_ETIKET} İŞLEM - v45.6)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nİşlem Yönü: {MOD_ETIKET}\nRisk: %20")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -1308,7 +1309,7 @@ def izleyici_worker():
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, GUNLUK_BASLANGIC_ZAMANI, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI, YENILGI_BEKLEME_BITIS
-    print(f"🚀 [BAŞLANGIÇ] v45.5 ({MOD_ETIKET} İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v45.6 ({MOD_ETIKET} İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
 
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     GUNLUK_BASLANGIC_ZAMANI = time.time()
@@ -1556,7 +1557,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mod_str = f"🧪 SİMÜLASYON ({MOD_ETIKET})" if SIMULASYON_MODU else f"🔥 CANLI ({MOD_ETIKET})"
 
         mesaj = (
-            f"📊 *TREND BOT (v45.5 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v45.6 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
