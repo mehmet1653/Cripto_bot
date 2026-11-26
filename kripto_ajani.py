@@ -99,7 +99,7 @@ KARA_LISTE = [
     'XAUT/USDT:USDT', 'OPENAI/USDT:USDT', 'MSTR/USDT:USDT',
     'MUU/USDT:USDT', 'SKHY/USDT:USDT', 'TENCENT/USDT:USDT',
     'CL/USDT:USDT',
-    # Tokenize hisse / ETF / vadeli (kripto dışı) - v45.7
+    # Tokenize hisse / ETF / vadeli (kripto dışı) - v45.8
     'KORU/USDT:USDT', 'MRVL/USDT:USDT', 'TQQQX/USDT:USDT', 'SQQQ/USDT:USDT',
     'UVXY/USDT:USDT', 'ORCL/USDT:USDT', 'COHR/USDT:USDT', 'AXTI/USDT:USDT'
 ]
@@ -1028,7 +1028,7 @@ def golge_rapor_metni():
     satirlar += ["", "— SİNYAL YÖNÜNE GÖRE —"]
     for y in ("LONG", "SHORT"):
         satirlar.append(blok(f"Sinyal {y}", [k for k in biten if k.get("sinyal_yon") == y]))
-    satirlar += ["", "— BTC 4s DEĞİŞİMİNE GÖRE (v45.7 sonrası kayıtlar) —"]
+    satirlar += ["", "— BTC 4s DEĞİŞİMİNE GÖRE (v45.8 sonrası kayıtlar) —"]
     for etiket_, alt_, ust_ in (("BTC 4s < -1%", -999, -1.0), ("BTC 4s -1%..+1%", -1.0, 1.0), ("BTC 4s > +1%", 1.0, 999)):
         satirlar.append(blok(etiket_, [k for k in biten if k.get("btc_4s") is not None and alt_ <= k["btc_4s"] < ust_]))
     satirlar += ["", "— HAVUZ ETİKETİNE GÖRE —"]
@@ -1043,7 +1043,7 @@ def golge_rapor_metni():
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI ({MOD_ETIKET} İŞLEM - v45.7)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nİşlem Yönü: {MOD_ETIKET}\nRisk: %20")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI ({MOD_ETIKET} İŞLEM - v45.8)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nİşlem Yönü: {MOD_ETIKET}\nRisk: %20")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -1135,7 +1135,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
             except Exception as e: print(f"TP emri hatası: {e}", flush=True)
 
             try:
-                exchange.create_order(symbol, 'market', kapat_yon, miktar, None, {'stopLossPrice': sl, 'reduceOnly': True})
+                exchange.create_order(symbol, 'market', kapat_yon, miktar, None, {'stopPrice': sl, 'reduceOnly': True})
             except Exception as e:
                 print(f"Stop emri hatası: {e}", flush=True)
                 tum_emirleri_iptal(symbol)
@@ -1330,7 +1330,7 @@ def izleyici_worker():
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, GUNLUK_BASLANGIC_ZAMANI, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI, YENILGI_BEKLEME_BITIS
-    print(f"🚀 [BAŞLANGIÇ] v45.7 ({MOD_ETIKET} İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v45.8 ({MOD_ETIKET} İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
 
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     GUNLUK_BASLANGIC_ZAMANI = time.time()
@@ -1578,7 +1578,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mod_str = f"🧪 SİMÜLASYON ({MOD_ETIKET})" if SIMULASYON_MODU else f"🔥 CANLI ({MOD_ETIKET})"
 
         mesaj = (
-            f"📊 *TREND BOT (v45.7 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v45.8 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
