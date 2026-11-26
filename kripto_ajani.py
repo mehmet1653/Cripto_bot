@@ -98,7 +98,10 @@ KARA_LISTE = [
     'AMZN/USDT:USDT', 'META/USDT:USDT', 'NFLX/USDT:USDT',
     'XAUT/USDT:USDT', 'OPENAI/USDT:USDT', 'MSTR/USDT:USDT',
     'MUU/USDT:USDT', 'SKHY/USDT:USDT', 'TENCENT/USDT:USDT',
-    'CL/USDT:USDT'
+    'CL/USDT:USDT',
+    # Tokenize hisse / ETF / vadeli (kripto dışı) - v45.7
+    'KORU/USDT:USDT', 'MRVL/USDT:USDT', 'TQQQX/USDT:USDT', 'SQQQ/USDT:USDT',
+    'UVXY/USDT:USDT', 'ORCL/USDT:USDT', 'COHR/USDT:USDT', 'AXTI/USDT:USDT'
 ]
 
 MIN_HACIM_24S = 1_000_000
@@ -821,7 +824,8 @@ def islem_kaydi_ekle(symbol, bilgi, cikis_fiyati, net_pnl, neden):
             "cikis": cikis_fiyati, "pnl": round(float(net_pnl), 6), "neden": neden,
             "puan": bilgi.get("sinyal_skoru", 0), "sebep": str(bilgi.get("sebep", ""))[:120],
             "giris_zamani": bilgi.get("giris_zamani"), "cikis_zamani": time.time(),
-            "btc_trend": bilgi.get("btc_trend"), "islem_modu": bilgi.get("islem_modu", "TERS")
+            "btc_trend": bilgi.get("btc_trend"), "islem_modu": bilgi.get("islem_modu", "TERS"),
+            "btc_1s": bilgi.get("btc_1s"), "btc_4s": bilgi.get("btc_4s")
         })
         if len(liste) > EGITIM_VERISI_LIMIT:
             del liste[:len(liste) - EGITIM_VERISI_LIMIT]
@@ -830,8 +834,11 @@ def islem_kaydi_ekle(symbol, bilgi, cikis_fiyati, net_pnl, neden):
 def ters_yon(yon):
     return "SHORT" if yon == "LONG" else "LONG"
 
+def pct_txt(v):
+    return "?" if v is None else f"{v:+.2f}%"
+
 def btc_rejim():
-    """BTC 24 saatlik değişimine göre piyasa rejimi (5 dk önbellekli)."""
+    """BTC piyasa rejimi: 24s trend etiketi + yaklaşık 4 saatlik ve 1 saatlik değişim (5 dk önbellekli)."""
     simdi = time.time()
     if BTC_REJIM_CACHE["veri"] and simdi - BTC_REJIM_CACHE["zaman"] < 300:
         return BTC_REJIM_CACHE["veri"]
@@ -841,13 +848,22 @@ def btc_rejim():
             son = float(ohlcv[-1][4]); once = float(ohlcv[-25][4])
             d = (son - once) / once * 100
             trend = "YUKARI" if d > BTC_TREND_ESIK else ("ASAGI" if d < -BTC_TREND_ESIK else "YATAY")
-            veri = {"btc_trend": trend, "btc_24s": round(d, 2)}
+            veri = {"btc_trend": trend, "btc_24s": round(d, 2), "btc_4s": None, "btc_1s": None}
+            try:
+                o15 = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=24)
+                if len(o15) >= 18:
+                    simdiki = float(o15[-1][4])
+                    r1 = float(o15[-5][4]); r4 = float(o15[-17][4])
+                    veri["btc_1s"] = round((simdiki - r1) / r1 * 100, 2)
+                    veri["btc_4s"] = round((simdiki - r4) / r4 * 100, 2)
+            except Exception:
+                pass
             BTC_REJIM_CACHE["veri"] = veri
             BTC_REJIM_CACHE["zaman"] = simdi
             return veri
     except Exception:
         pass
-    return BTC_REJIM_CACHE["veri"] or {"btc_trend": "BILINMIYOR", "btc_24s": 0.0}
+    return BTC_REJIM_CACHE["veri"] or {"btc_trend": "BILINMIYOR", "btc_24s": 0.0, "btc_4s": None, "btc_1s": None}
 
 def sl_tp_yuzde_hesapla(symbol, anlik_fiyat):
     ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
@@ -880,6 +896,7 @@ def golge_ac(symbol, sinyal_yon, anlik_fiyat, puan):
             "giris": float(anlik_fiyat), "zaman": time.time(),
             "sl_yuzde": round(sl_y, 3), "tp_yuzde": round(tp_y, 3), "puan": puan,
             "btc_trend": rejim["btc_trend"], "btc_24s": rejim["btc_24s"],
+            "btc_1s": rejim.get("btc_1s"), "btc_4s": rejim.get("btc_4s"),
             "havuz_etiket": HAVUZ_ETIKET.get(symbol, "?"),
             "gercek": False,
             "duz": None, "ters": None
@@ -1011,6 +1028,9 @@ def golge_rapor_metni():
     satirlar += ["", "— SİNYAL YÖNÜNE GÖRE —"]
     for y in ("LONG", "SHORT"):
         satirlar.append(blok(f"Sinyal {y}", [k for k in biten if k.get("sinyal_yon") == y]))
+    satirlar += ["", "— BTC 4s DEĞİŞİMİNE GÖRE (v45.7 sonrası kayıtlar) —"]
+    for etiket_, alt_, ust_ in (("BTC 4s < -1%", -999, -1.0), ("BTC 4s -1%..+1%", -1.0, 1.0), ("BTC 4s > +1%", 1.0, 999)):
+        satirlar.append(blok(etiket_, [k for k in biten if k.get("btc_4s") is not None and alt_ <= k["btc_4s"] < ust_]))
     satirlar += ["", "— HAVUZ ETİKETİNE GÖRE —"]
     for et in ("DEVAM_YUKARI", "DEVAM_ASAGI", "DONUS_YUKARI", "DONUS_ASAGI", "NOTR"):
         satirlar.append(blok(et, [k for k in biten if k.get("havuz_etiket") == et]))
@@ -1023,7 +1043,7 @@ def golge_rapor_metni():
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI ({MOD_ETIKET} İŞLEM - v45.6)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nİşlem Yönü: {MOD_ETIKET}\nRisk: %20")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI ({MOD_ETIKET} İŞLEM - v45.7)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nİşlem Yönü: {MOD_ETIKET}\nRisk: %20")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -1133,7 +1153,8 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
                 "sebep": sebep, "tp": tp, "sl": sl, "marj": gercek_marj,
                 "miktar": miktar, "contract_size": contract_size,
                 "sinyal_skoru": sinyal_skoru, "onceki_roe": 0.0, "en_yuksek_roe": 0.0,
-                "btc_trend": rejim["btc_trend"], "islem_modu": MOD_ETIKET
+                "btc_trend": rejim["btc_trend"], "islem_modu": MOD_ETIKET,
+                "btc_1s": rejim.get("btc_1s"), "btc_4s": rejim.get("btc_4s")
             }
             islem_no = len(AKTIF_SISTEMLER)
 
@@ -1151,7 +1172,7 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
             f"💰 TP: {tp:.6f} (%{tp_mesafe_yuzde:.2f})\n"
             f"🛑 SL: {sl:.6f} (%{sl_mesafe_yuzde:.2f})\n"
             f"💵 Marj: {gercek_marj:.2f} | Kaldıraç: {KALDIRAC}x\n"
-            f"🌍 BTC 24s: {rejim['btc_trend']} ({rejim['btc_24s']:+.2f}%)\n"
+            f"🌍 BTC 24s: {rejim['btc_trend']} ({rejim['btc_24s']:+.2f}%) | 4s: {pct_txt(rejim.get('btc_4s'))} | 1s: {pct_txt(rejim.get('btc_1s'))}\n"
             f"📌 Açık: {islem_no}/{MAKS_POZISYON}"
         )
         telegram_kritik(mesaj)
@@ -1309,7 +1330,7 @@ def izleyici_worker():
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, GUNLUK_BASLANGIC_ZAMANI, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI, YENILGI_BEKLEME_BITIS
-    print(f"🚀 [BAŞLANGIÇ] v45.6 ({MOD_ETIKET} İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v45.7 ({MOD_ETIKET} İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
 
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     GUNLUK_BASLANGIC_ZAMANI = time.time()
@@ -1557,12 +1578,12 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mod_str = f"🧪 SİMÜLASYON ({MOD_ETIKET})" if SIMULASYON_MODU else f"🔥 CANLI ({MOD_ETIKET})"
 
         mesaj = (
-            f"📊 *TREND BOT (v45.6 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v45.7 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
             f"🛡️ Kill-Switch: `{ks_durum}`\n"
-            f"🌍 Piyasa: {trend_emoji} BTC 24s {rejim['btc_trend']} ({rejim['btc_24s']:+.2f}%) | {btc_1s_txt}\n"
+            f"🌍 Piyasa: {trend_emoji} BTC 24s {rejim['btc_trend']} ({rejim['btc_24s']:+.2f}%) | 4s {pct_txt(rejim.get('btc_4s'))} | 1s {pct_txt(rejim.get('btc_1s'))} | {btc_1s_txt}\n"
             f"⚙️ Durum: `{calisma}`\n"
             f"🔬 Gölge: {golge_ozet_satiri()}"
             f"{pos_detay}\n\n"
@@ -1604,6 +1625,7 @@ async def export_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "symbol": g.get("symbol"), "sinyal_yon": g.get("sinyal_yon"), "giris": g.get("giris"),
                     "zaman": g.get("zaman"), "sl_yuzde": g.get("sl_yuzde"), "tp_yuzde": g.get("tp_yuzde"),
                     "puan": g.get("puan"), "btc_trend": g.get("btc_trend"), "btc_24s": g.get("btc_24s"),
+                    "btc_1s": g.get("btc_1s"), "btc_4s": g.get("btc_4s"),
                     "havuz_etiket": g.get("havuz_etiket"), "gercek_acildi": g.get("gercek", False),
                     "duz_sonuc": duz.get("sonuc"), "duz_net": duz.get("net"),
                     "ters_sonuc": ters.get("sonuc"), "ters_net": ters.get("net")
