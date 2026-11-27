@@ -99,9 +99,10 @@ KARA_LISTE = [
     'XAUT/USDT:USDT', 'OPENAI/USDT:USDT', 'MSTR/USDT:USDT',
     'MUU/USDT:USDT', 'SKHY/USDT:USDT', 'TENCENT/USDT:USDT',
     'CL/USDT:USDT',
-    # Tokenize hisse / ETF / vadeli (kripto dışı) - v45.8
+    # Tokenize hisse / ETF / vadeli (kripto dışı) - v45.9
     'KORU/USDT:USDT', 'MRVL/USDT:USDT', 'TQQQX/USDT:USDT', 'SQQQ/USDT:USDT',
-    'UVXY/USDT:USDT', 'ORCL/USDT:USDT', 'COHR/USDT:USDT', 'AXTI/USDT:USDT'
+    'UVXY/USDT:USDT', 'ORCL/USDT:USDT', 'COHR/USDT:USDT', 'AXTI/USDT:USDT',
+    'DELL/USDT:USDT', 'LITE/USDT:USDT'
 ]
 
 MIN_HACIM_24S = 1_000_000
@@ -176,6 +177,8 @@ GOLGE_TEKRAR_BEKLEME = 60 * 60
 GOLGE_KAYIT_LIMIT = 400
 GOLGE_TARAMA_ARALIK = 5 * 60      # limit doluyken sadece gölge için tarama aralığı
 GOLGE_MALIYET_YUZDE = KOMISYON_ORANI * 2 * 100   # gidiş-dönüş komisyon (% fiyat)
+HIZALI_ESIK = 1.3                 # 'BTC ile hizalı giriş' eşiği (BTC 4s değişim %)
+HIZALI_TEST_BASLANGIC = 1795817099   # ileriye dönük test başlangıcı (v45.9)
 BTC_TREND_ESIK = 1.5              # BTC 24s değişim eşiği (%)
 BTC_REJIM_CACHE = {"zaman": 0, "veri": None}
 GOLGE_SON_ACILIS = {}
@@ -825,12 +828,18 @@ def islem_kaydi_ekle(symbol, bilgi, cikis_fiyati, net_pnl, neden):
             "puan": bilgi.get("sinyal_skoru", 0), "sebep": str(bilgi.get("sebep", ""))[:120],
             "giris_zamani": bilgi.get("giris_zamani"), "cikis_zamani": time.time(),
             "btc_trend": bilgi.get("btc_trend"), "islem_modu": bilgi.get("islem_modu", "TERS"),
-            "btc_1s": bilgi.get("btc_1s"), "btc_4s": bilgi.get("btc_4s")
+            "btc_1s": bilgi.get("btc_1s"), "btc_4s": bilgi.get("btc_4s"),
+            "sl": bilgi.get("sl"), "tp": bilgi.get("tp")
         })
         if len(liste) > EGITIM_VERISI_LIMIT:
             del liste[:len(liste) - EGITIM_VERISI_LIMIT]
 
 # ==================== GÖLGE TAKİP (BAŞLA) ====================
+def hizali_mi(yon, btc_4s):
+    """BTC son 4 saatte sert yükselmişken LONG, sert düşmüşken SHORT = hizalı (BTC hareketini kovalayan) giriş."""
+    if btc_4s is None: return False
+    return (yon == "LONG" and btc_4s >= HIZALI_ESIK) or (yon == "SHORT" and btc_4s <= -HIZALI_ESIK)
+
 def ters_yon(yon):
     return "SHORT" if yon == "LONG" else "LONG"
 
@@ -1028,9 +1037,29 @@ def golge_rapor_metni():
     satirlar += ["", "— SİNYAL YÖNÜNE GÖRE —"]
     for y in ("LONG", "SHORT"):
         satirlar.append(blok(f"Sinyal {y}", [k for k in biten if k.get("sinyal_yon") == y]))
-    satirlar += ["", "— BTC 4s DEĞİŞİMİNE GÖRE (v45.8 sonrası kayıtlar) —"]
+    satirlar += ["", "— BTC 4s DEĞİŞİMİNE GÖRE (v45.9 sonrası kayıtlar) —"]
     for etiket_, alt_, ust_ in (("BTC 4s < -1%", -999, -1.0), ("BTC 4s -1%..+1%", -1.0, 1.0), ("BTC 4s > +1%", 1.0, 999)):
         satirlar.append(blok(etiket_, [k for k in biten if k.get("btc_4s") is not None and alt_ <= k["btc_4s"] < ust_]))
+    def gercek_satir(etiket, lst):
+        if not lst: return f"{etiket}: veri yok"
+        tp = sum(1 for e in lst if e.get("neden") == "TP"); sl = sum(1 for e in lst if e.get("neden") == "SL")
+        net = sum(float(e.get("pnl", 0)) for e in lst)
+        return f"{etiket}: n={len(lst)} | TP {tp} SL {sl} | net {net:+.2f} USDT"
+
+    def hizali_blok(baslik, bas_zaman):
+        gr = [e for e in gercek_liste if e.get("btc_4s") is not None and float(e.get("giris_zamani") or 0) >= bas_zaman]
+        gs = [k for k in biten if k.get("btc_4s") is not None and float(k.get("zaman") or 0) >= bas_zaman]
+        gh = [e for e in gr if hizali_mi(e.get("yon"), e["btc_4s"])]
+        gd = [e for e in gr if not hizali_mi(e.get("yon"), e["btc_4s"])]
+        sh = [k for k in gs if hizali_mi(k.get("sinyal_yon"), k["btc_4s"])]
+        sd = [k for k in gs if not hizali_mi(k.get("sinyal_yon"), k["btc_4s"])]
+        return [baslik, gercek_satir("  Gerçek hizalı", gh), gercek_satir("  Gerçek diğer", gd),
+                blok("  Gölge hizalı", sh), blok("  Gölge diğer", sd)]
+
+    satirlar += ["", f"— BTC İLE HİZALI GİRİŞ (LONG & BTC 4s ≥ +{HIZALI_ESIK}% ya da SHORT & BTC 4s ≤ -{HIZALI_ESIK}%) —"]
+    satirlar += hizali_blok("İLERİYE DÖNÜK (v45.9 sonrası):", HIZALI_TEST_BASLANGIC)
+    satirlar += hizali_blok("TÜM KAYITLAR (desen sonradan bulundu, kanıt sayılmaz):", 0)
+    satirlar += ["Karar için en az 30 ileriye dönük hizalı olay gerekir."]
     satirlar += ["", "— HAVUZ ETİKETİNE GÖRE —"]
     for et in ("DEVAM_YUKARI", "DEVAM_ASAGI", "DONUS_YUKARI", "DONUS_ASAGI", "NOTR"):
         satirlar.append(blok(et, [k for k in biten if k.get("havuz_etiket") == et]))
@@ -1043,7 +1072,7 @@ def golge_rapor_metni():
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI ({MOD_ETIKET} İŞLEM - v45.8)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nİşlem Yönü: {MOD_ETIKET}\nRisk: %20")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI ({MOD_ETIKET} İŞLEM - v45.9)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nİşlem Yönü: {MOD_ETIKET}\nRisk: %20")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -1330,7 +1359,7 @@ def izleyici_worker():
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, GUNLUK_BASLANGIC_ZAMANI, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI, YENILGI_BEKLEME_BITIS
-    print(f"🚀 [BAŞLANGIÇ] v45.8 ({MOD_ETIKET} İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v45.9 ({MOD_ETIKET} İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
 
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     GUNLUK_BASLANGIC_ZAMANI = time.time()
@@ -1578,7 +1607,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mod_str = f"🧪 SİMÜLASYON ({MOD_ETIKET})" if SIMULASYON_MODU else f"🔥 CANLI ({MOD_ETIKET})"
 
         mesaj = (
-            f"📊 *TREND BOT (v45.8 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v45.9 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
@@ -1600,7 +1629,15 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def rapor_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != int(CHAT_ID): return
     try:
-        await update.message.reply_text(golge_rapor_metni())
+        metin = golge_rapor_metni()
+        parcalar, cur = [], ""
+        for satir in metin.split("\n"):
+            if len(cur) + len(satir) + 1 > 3800:
+                parcalar.append(cur); cur = ""
+            cur += satir + "\n"
+        if cur.strip(): parcalar.append(cur)
+        for pc in parcalar:
+            await update.message.reply_text(pc)
     except Exception as e:
         await update.message.reply_text(f"Hata: {e}")
 
