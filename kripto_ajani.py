@@ -175,6 +175,11 @@ GOLGE_MAKS_ACIK = 12
 GOLGE_ZAMAN_ASIMI = 12 * 3600
 GOLGE_TEKRAR_BEKLEME = 60 * 60
 GOLGE_KAYIT_LIMIT = 400
+# Çıkış varyantları (yalnızca gölge, düz yön): A=mevcut | B=ATR bazlı | C=A+zaman stopu | D=B+zaman stopu
+GOLGE_ATR_SL_KAT = 1.5     # B/D: SL = 1.5 x ATR(15dk) %
+GOLGE_ATR_SL_MIN = 0.5     # SL alt sınırı (%)
+GOLGE_ATR_SL_MAX = 3.0     # SL üst sınırı (%)
+GOLGE_VARYANT_ZAMAN = 8 * 3600   # C/D zaman stopu
 GOLGE_TARAMA_ARALIK = 5 * 60      # limit doluyken sadece gölge için tarama aralığı
 GOLGE_MALIYET_YUZDE = KOMISYON_ORANI * 2 * 100   # gidiş-dönüş komisyon (% fiyat)
 HIZALI_ESIK = 1.3                 # 'BTC ile hizalı giriş' eşiği (BTC 4s değişim %)
@@ -885,7 +890,7 @@ def btc_rejim():
         pass
     return BTC_REJIM_CACHE["veri"] or {"btc_trend": "BILINMIYOR", "btc_24s": 0.0, "btc_4s": None, "btc_1s": None}
 
-def sl_tp_yuzde_hesapla(symbol, anlik_fiyat):
+def sl_tp_yuzde_hesapla(symbol, anlik_fiyat, atr_dondur=False):
     ohlcv_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=50)
     df_15m = pd.DataFrame(ohlcv_15m, columns=['t', 'o', 'h', 'l', 'c', 'v'])
     atr = ta.volatility.average_true_range(df_15m['h'], df_15m['l'], df_15m['c'], window=14).iloc[-1]
@@ -899,6 +904,7 @@ def sl_tp_yuzde_hesapla(symbol, anlik_fiyat):
 
     base_tp = base_sl * 2.0
     if base_tp > 5.0: base_tp = 5.0
+    if atr_dondur: return base_sl, base_tp, atr_percent
     return base_sl, base_tp
 
 def golge_ac(symbol, sinyal_yon, anlik_fiyat, puan, detay=None):
@@ -909,7 +915,17 @@ def golge_ac(symbol, sinyal_yon, anlik_fiyat, puan, detay=None):
             if len(acik) >= GOLGE_MAKS_ACIK: return
             if any(g["symbol"] == symbol for g in acik): return
             if time.time() - GOLGE_SON_ACILIS.get(symbol, 0) < GOLGE_TEKRAR_BEKLEME: return
-        sl_y, tp_y = sl_tp_yuzde_hesapla(symbol, anlik_fiyat)
+        sl_y, tp_y, atr_p = sl_tp_yuzde_hesapla(symbol, anlik_fiyat, atr_dondur=True)
+        if atr_p != atr_p or atr_p <= 0:
+            b_sl = sl_y
+        else:
+            b_sl = min(max(GOLGE_ATR_SL_KAT * atr_p, GOLGE_ATR_SL_MIN), GOLGE_ATR_SL_MAX)
+        b_tp = 2 * b_sl
+        varyantlar = {
+            "B": {"sl": round(b_sl, 3), "tp": round(b_tp, 3), "sure": GOLGE_ZAMAN_ASIMI, "sonuc": None, "net": None},
+            "C": {"sl": round(sl_y, 3), "tp": round(tp_y, 3), "sure": GOLGE_VARYANT_ZAMAN, "sonuc": None, "net": None},
+            "D": {"sl": round(b_sl, 3), "tp": round(b_tp, 3), "sure": GOLGE_VARYANT_ZAMAN, "sonuc": None, "net": None},
+        }
         rejim = btc_rejim()
         kayit = {
             "id": f"{symbol}-{int(time.time())}", "symbol": symbol, "sinyal_yon": sinyal_yon,
@@ -919,6 +935,8 @@ def golge_ac(symbol, sinyal_yon, anlik_fiyat, puan, detay=None):
             "btc_1s": rejim.get("btc_1s"), "btc_4s": rejim.get("btc_4s"),
             "havuz_etiket": HAVUZ_ETIKET.get(symbol, "?"),
             "gercek": False,
+            "atr15": (round(atr_p, 3) if atr_p == atr_p else None),
+            "var": varyantlar,
             "metrik": (detay or {}).get("giris_metrikleri"),
             "duz": None, "ters": None
         }
@@ -968,7 +986,19 @@ def golge_kontrol():
             elif degisim <= -g["sl_yuzde"]: sonuc = ("SL", -g["sl_yuzde"])
             elif zaman_asimi: sonuc = ("ZAMAN", degisim)
             if sonuc:
-                yeni[anahtar] = {"sonuc": sonuc[0], "net": round(sonuc[1] - GOLGE_MALIYET_YUZDE, 4)}
+                yeni[anahtar] = {"sonuc": sonuc[0], "net": round(sonuc[1] - GOLGE_MALIYET_YUZDE, 4), "sure_s": int(yas)}
+        vyeni = {}
+        for vad, v in (g.get("var") or {}).items():
+            if v.get("sonuc") is not None: continue
+            degisim_v = (f - g["giris"]) / g["giris"] * 100
+            if g["sinyal_yon"] == "SHORT": degisim_v = -degisim_v
+            sonuc_v = None
+            if degisim_v >= v["tp"]: sonuc_v = ("TP", v["tp"])
+            elif degisim_v <= -v["sl"]: sonuc_v = ("SL", -v["sl"])
+            elif yas > v["sure"]: sonuc_v = ("ZAMAN", degisim_v)
+            if sonuc_v:
+                vyeni[vad] = {"sonuc": sonuc_v[0], "net": round(sonuc_v[1] - GOLGE_MALIYET_YUZDE, 4), "sure_s": int(yas)}
+        if vyeni: yeni["var"] = vyeni
         if yeni: guncellemeler[g["id"]] = yeni
 
     if not guncellemeler and not atilacaklar: return
@@ -979,8 +1009,12 @@ def golge_kontrol():
         for g in ANALITIK.get("golge_acik", []):
             if g["id"] in atilacaklar: continue
             for k, v in guncellemeler.get(g["id"], {}).items():
-                g[k] = v
-            if g.get("duz") is not None and g.get("ters") is not None:
+                if k == "var":
+                    for vad, vv in v.items(): g["var"][vad].update(vv)
+                else:
+                    g[k] = v
+            if (g.get("duz") is not None and g.get("ters") is not None
+                    and all(vv.get("sonuc") is not None for vv in (g.get("var") or {}).values())):
                 biten.append(g)
             else:
                 kalan.append(g)
@@ -1072,6 +1106,18 @@ def golge_rapor_metni():
     satirlar += hizali_blok("İLERİYE DÖNÜK (v45.9 sonrası):", HIZALI_TEST_BASLANGIC)
     satirlar += hizali_blok("TÜM KAYITLAR (desen sonradan bulundu, kanıt sayılmaz):", 0)
     satirlar += ["Karar için en az 30 ileriye dönük hizalı olay gerekir."]
+    def varyant_ozet(ad, kay, al):
+        n = tp = sl = zm = 0; net = 0.0; sure = 0.0
+        for k in kay:
+            b = al(k)
+            if not b or b.get("sonuc") is None: continue
+            n += 1; net += float(b["net"]); sure += float(b.get("sure_s") or 0)
+            if b["sonuc"] == "TP": tp += 1
+            elif b["sonuc"] == "SL": sl += 1
+            else: zm += 1
+        if n == 0: return f"  {ad}: veri yok"
+        return f"  {ad}: n={n} | TP %{tp/n*100:.0f} SL {sl} ZAMAN {zm} | ort %{net/n:+.2f} | ort tutma {sure/n/3600:.1f}s"
+
     def metrik_blok(baslik, anahtar, dilimler):
         out = [baslik]
         for etiket_, alt_, ust_ in dilimler:
@@ -1079,6 +1125,12 @@ def golge_rapor_metni():
             out.append(blok("  Gölge " + etiket_, lst))
         return out
 
+    vk = [k for k in biten if k.get("var")]
+    satirlar += ["", f"— ÇIKIŞ VARYANTLARI, düz yön (v45.11 sonrası, n={len(vk)}) —",
+                 "A=mevcut %1.5/%3 | B=ATR (SL 1.5xATR15, TP 2xSL) | C=A+8s stop | D=B+8s stop"]
+    for ad_, al_ in (("A", lambda k: k.get("duz")), ("B", lambda k: k["var"].get("B")),
+                     ("C", lambda k: k["var"].get("C")), ("D", lambda k: k["var"].get("D"))):
+        satirlar.append(varyant_ozet(ad_, vk, al_))
     adx_d = (("ADX <25", 0, 25), ("ADX 25-30", 25, 30), ("ADX 30+", 30, 999))
     satirlar += [""] + metrik_blok("— COİN ADX (1s) SEVİYESİNE GÖRE (v45.10 sonrası) —", "adx", adx_d)
     for etiket_, alt_, ust_ in adx_d:
@@ -1097,7 +1149,7 @@ def golge_rapor_metni():
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI ({MOD_ETIKET} İŞLEM - v45.10)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nİşlem Yönü: {MOD_ETIKET}\nRisk: %20")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI ({MOD_ETIKET} İŞLEM - v45.11)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nİşlem Yönü: {MOD_ETIKET}\nRisk: %20")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -1385,7 +1437,7 @@ def izleyici_worker():
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, GUNLUK_BASLANGIC_ZAMANI, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI, YENILGI_BEKLEME_BITIS
-    print(f"🚀 [BAŞLANGIÇ] v45.10 ({MOD_ETIKET} İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v45.11 ({MOD_ETIKET} İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
 
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     GUNLUK_BASLANGIC_ZAMANI = time.time()
@@ -1633,7 +1685,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mod_str = f"🧪 SİMÜLASYON ({MOD_ETIKET})" if SIMULASYON_MODU else f"🔥 CANLI ({MOD_ETIKET})"
 
         mesaj = (
-            f"📊 *TREND BOT (v45.10 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v45.11 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
@@ -1689,8 +1741,15 @@ async def export_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for g in golge:
                 duz = g.get("duz") or {}; ters = g.get("ters") or {}
                 _mm = g.get("metrik") or {}
+                _var = g.get("var") or {}
+                _ek = {"atr15": g.get("atr15"), "duz_sure_s": duz.get("sure_s"), "ters_sure_s": ters.get("sure_s")}
+                for _vad in ("B", "C", "D"):
+                    _vv = _var.get(_vad) or {}
+                    _ek.update({f"{_vad}_sl": _vv.get("sl"), f"{_vad}_tp": _vv.get("tp"), f"{_vad}_sonuc": _vv.get("sonuc"),
+                                f"{_vad}_net": _vv.get("net"), f"{_vad}_sure_s": _vv.get("sure_s")})
                 satirlar.append({
                     **{f"m_{k}": v for k, v in _mm.items()},
+                    **_ek,
                     "symbol": g.get("symbol"), "sinyal_yon": g.get("sinyal_yon"), "giris": g.get("giris"),
                     "zaman": g.get("zaman"), "sl_yuzde": g.get("sl_yuzde"), "tp_yuzde": g.get("tp_yuzde"),
                     "puan": g.get("puan"), "btc_trend": g.get("btc_trend"), "btc_24s": g.get("btc_24s"),
