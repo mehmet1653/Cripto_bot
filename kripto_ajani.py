@@ -716,6 +716,16 @@ def coin_puan_hesapla(symbol):
             short_puan = -99
             short_sebep.append("(BTC Uçuyor - Short İptal)")
 
+        # 📊 Giriş metrikleri: sadece kayıt amaçlı, karar mantığına etki etmez
+        try:
+            _bant = (df_15m['h'].iloc[-20:].max() - df_15m['l'].iloc[-20:].min()) / df_15m['l'].iloc[-20:].min() * 100
+            _atr = ta.volatility.average_true_range(df_15m['h'], df_15m['l'], df_15m['c'], window=14).iloc[-1] / anlik_fiyat * 100
+            _m = {"adx": adx_1h, "adx_pos": adx_pos, "adx_neg": adx_neg, "bant15": _bant, "atr15": _atr,
+                  "rsi15": rsi_15m, "ema50_fark": (anlik_fiyat - ema50_1h) / ema50_1h * 100,
+                  "ema9_fark": fiyat_ema9_fark, "hacim_oran": hacim_oran, "mfi": mfi, "cmf": cmf, "d24": son_24s_degisim}
+            detay["giris_metrikleri"] = {k: (None if (v is None or v != v) else round(float(v), 3)) for k, v in _m.items()}
+        except Exception:
+            detay["giris_metrikleri"] = None
         detay["long_puan"] = long_puan; detay["short_puan"] = short_puan
         detay["piyasa_yon"] = piyasa_yon
         anlik_baraj = get_dinamik_min_puan(testere)
@@ -829,7 +839,8 @@ def islem_kaydi_ekle(symbol, bilgi, cikis_fiyati, net_pnl, neden):
             "giris_zamani": bilgi.get("giris_zamani"), "cikis_zamani": time.time(),
             "btc_trend": bilgi.get("btc_trend"), "islem_modu": bilgi.get("islem_modu", "TERS"),
             "btc_1s": bilgi.get("btc_1s"), "btc_4s": bilgi.get("btc_4s"),
-            "sl": bilgi.get("sl"), "tp": bilgi.get("tp")
+            "sl": bilgi.get("sl"), "tp": bilgi.get("tp"),
+            "metrik": bilgi.get("metrik")
         })
         if len(liste) > EGITIM_VERISI_LIMIT:
             del liste[:len(liste) - EGITIM_VERISI_LIMIT]
@@ -890,7 +901,7 @@ def sl_tp_yuzde_hesapla(symbol, anlik_fiyat):
     if base_tp > 5.0: base_tp = 5.0
     return base_sl, base_tp
 
-def golge_ac(symbol, sinyal_yon, anlik_fiyat, puan):
+def golge_ac(symbol, sinyal_yon, anlik_fiyat, puan, detay=None):
     """Aynı sinyal için hem düz hem ters yönü sanal olarak takibe alır (bakiyeye etkisi yok)."""
     try:
         with state_lock:
@@ -908,6 +919,7 @@ def golge_ac(symbol, sinyal_yon, anlik_fiyat, puan):
             "btc_1s": rejim.get("btc_1s"), "btc_4s": rejim.get("btc_4s"),
             "havuz_etiket": HAVUZ_ETIKET.get(symbol, "?"),
             "gercek": False,
+            "metrik": (detay or {}).get("giris_metrikleri"),
             "duz": None, "ters": None
         }
         with state_lock:
@@ -1037,7 +1049,7 @@ def golge_rapor_metni():
     satirlar += ["", "— SİNYAL YÖNÜNE GÖRE —"]
     for y in ("LONG", "SHORT"):
         satirlar.append(blok(f"Sinyal {y}", [k for k in biten if k.get("sinyal_yon") == y]))
-    satirlar += ["", "— BTC 4s DEĞİŞİMİNE GÖRE (v45.9 sonrası kayıtlar) —"]
+    satirlar += ["", "— BTC 4s DEĞİŞİMİNE GÖRE (4s verisi olan kayıtlar) —"]
     for etiket_, alt_, ust_ in (("BTC 4s < -1%", -999, -1.0), ("BTC 4s -1%..+1%", -1.0, 1.0), ("BTC 4s > +1%", 1.0, 999)):
         satirlar.append(blok(etiket_, [k for k in biten if k.get("btc_4s") is not None and alt_ <= k["btc_4s"] < ust_]))
     def gercek_satir(etiket, lst):
@@ -1060,6 +1072,19 @@ def golge_rapor_metni():
     satirlar += hizali_blok("İLERİYE DÖNÜK (v45.9 sonrası):", HIZALI_TEST_BASLANGIC)
     satirlar += hizali_blok("TÜM KAYITLAR (desen sonradan bulundu, kanıt sayılmaz):", 0)
     satirlar += ["Karar için en az 30 ileriye dönük hizalı olay gerekir."]
+    def metrik_blok(baslik, anahtar, dilimler):
+        out = [baslik]
+        for etiket_, alt_, ust_ in dilimler:
+            lst = [k for k in biten if k.get("metrik") and k["metrik"].get(anahtar) is not None and alt_ <= k["metrik"][anahtar] < ust_]
+            out.append(blok("  Gölge " + etiket_, lst))
+        return out
+
+    adx_d = (("ADX <25", 0, 25), ("ADX 25-30", 25, 30), ("ADX 30+", 30, 999))
+    satirlar += [""] + metrik_blok("— COİN ADX (1s) SEVİYESİNE GÖRE (v45.10 sonrası) —", "adx", adx_d)
+    for etiket_, alt_, ust_ in adx_d:
+        lst = [e for e in gercek_liste if e.get("metrik") and e["metrik"].get("adx") is not None and alt_ <= e["metrik"]["adx"] < ust_]
+        satirlar.append(gercek_satir("  Gerçek " + etiket_, lst))
+    satirlar += [""] + metrik_blok("— COİN 15dk BANT GENİŞLİĞİNE GÖRE —", "bant15", (("bant <4%", 0, 4), ("bant 4-8%", 4, 8), ("bant 8%+", 8, 999)))
     satirlar += ["", "— HAVUZ ETİKETİNE GÖRE —"]
     for et in ("DEVAM_YUKARI", "DEVAM_ASAGI", "DONUS_YUKARI", "DONUS_ASAGI", "NOTR"):
         satirlar.append(blok(et, [k for k in biten if k.get("havuz_etiket") == et]))
@@ -1072,7 +1097,7 @@ def golge_rapor_metni():
 def baslangic_temizligi():
     print("\n🧹 [BAŞLANGIÇ] Mevcut pozisyonlar korunuyor...", flush=True)
     if SIMULASYON_MODU:
-        telegram_kritik(f"🟢 BOT BAŞLATILDI ({MOD_ETIKET} İŞLEM - v45.9)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nİşlem Yönü: {MOD_ETIKET}\nRisk: %20")
+        telegram_kritik(f"🟢 BOT BAŞLATILDI ({MOD_ETIKET} İŞLEM - v45.10)\n\nBaşlangıç Kasası: {SIMULE_BAKIYE:.2f} USDT\nİşlem Yönü: {MOD_ETIKET}\nRisk: %20")
     else:
         try:
             raw_pos = exchange.fetch_positions()
@@ -1183,7 +1208,8 @@ def pozisyon_ac(symbol, yon, anlik_fiyat, sebep, sinyal_skoru=0, aciklama="", de
                 "miktar": miktar, "contract_size": contract_size,
                 "sinyal_skoru": sinyal_skoru, "onceki_roe": 0.0, "en_yuksek_roe": 0.0,
                 "btc_trend": rejim["btc_trend"], "islem_modu": MOD_ETIKET,
-                "btc_1s": rejim.get("btc_1s"), "btc_4s": rejim.get("btc_4s")
+                "btc_1s": rejim.get("btc_1s"), "btc_4s": rejim.get("btc_4s"),
+                "metrik": (detay or {}).get("giris_metrikleri")
             }
             islem_no = len(AKTIF_SISTEMLER)
 
@@ -1359,7 +1385,7 @@ def izleyici_worker():
 # ==================== ANA DÖNGÜ ====================
 def ana_dongu():
     global GUNLUK_BASLANGIC_BAKIYE, GUNLUK_BASLANGIC_ZAMANI, KILL_SWITCH_AKTIF, KILL_SWITCH_BITIS_ZAMANI, YENILGI_BEKLEME_BITIS
-    print(f"🚀 [BAŞLANGIÇ] v45.9 ({MOD_ETIKET} İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
+    print(f"🚀 [BAŞLANGIÇ] v45.10 ({MOD_ETIKET} İŞLEM) - {('SİMÜLASYON' if SIMULASYON_MODU else 'CANLI')}", flush=True)
 
     GUNLUK_BASLANGIC_BAKIYE = bakiye_al()
     GUNLUK_BASLANGIC_ZAMANI = time.time()
@@ -1512,7 +1538,7 @@ def ana_dongu():
             for sym, karar, detay, puan in adaylar:
                 try:
                     fiyat_g = float(exchange.fetch_ticker(sym)['last'])
-                    golge_ac(sym, karar, fiyat_g, puan)
+                    golge_ac(sym, karar, fiyat_g, puan, detay)
                 except Exception as e:
                     print(f"  ⚠️ Gölge {sym}: {e}", flush=True)
 
@@ -1607,7 +1633,7 @@ async def durum_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mod_str = f"🧪 SİMÜLASYON ({MOD_ETIKET})" if SIMULASYON_MODU else f"🔥 CANLI ({MOD_ETIKET})"
 
         mesaj = (
-            f"📊 *TREND BOT (v45.9 - {mod_str})*\n\n"
+            f"📊 *TREND BOT (v45.10 - {mod_str})*\n\n"
             f"💰 Kasa: `{total:.2f} USDT`\n"
             f"💵 Toplam PnL: `{toplam_pnl:+.2f} USDT`\n"
             f"📌 Açık: `{len(pos)}` / `{MAKS_POZISYON}`\n"
@@ -1651,14 +1677,20 @@ async def export_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             golge = list(ANALITIK.get("golge_biten", []))
         gonderildi = 0
         if gercek:
-            csv_b = pd.DataFrame(gercek).to_csv(index=False).encode('utf-8-sig')
+            gsat = []
+            for e in gercek:
+                d = dict(e); m = d.pop("metrik", None) or {}
+                d.update({f"m_{k}": v for k, v in m.items()}); gsat.append(d)
+            csv_b = pd.DataFrame(gsat).to_csv(index=False).encode('utf-8-sig')
             await update.message.reply_document(document=io.BytesIO(csv_b), filename="gercek_islemler.csv")
             gonderildi += 1
         if golge:
             satirlar = []
             for g in golge:
                 duz = g.get("duz") or {}; ters = g.get("ters") or {}
+                _mm = g.get("metrik") or {}
                 satirlar.append({
+                    **{f"m_{k}": v for k, v in _mm.items()},
                     "symbol": g.get("symbol"), "sinyal_yon": g.get("sinyal_yon"), "giris": g.get("giris"),
                     "zaman": g.get("zaman"), "sl_yuzde": g.get("sl_yuzde"), "tp_yuzde": g.get("tp_yuzde"),
                     "puan": g.get("puan"), "btc_trend": g.get("btc_trend"), "btc_24s": g.get("btc_24s"),
